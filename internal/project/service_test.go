@@ -30,4 +30,10 @@ func TestServiceOpenSyncsConfigToDB(t *testing.T) {
 	if result.DBPath != filepath.Join(repoRoot, ".aom", "sessions.db") {
 		t.Fatalf("db path = %q, want %q", result.DBPath, filepath.Join(repoRoot, ".aom", "sessions.db"))
 	}
+	if result.TerminalDriver != "tmux" {
+		t.Fatalf("terminal driver = %q, want %q", result.TerminalDriver, "tmux")
+	}
+	if result.SessionPrefix != "my-app" {
+		t.Fatalf("session prefix = %q, want %q", result.SessionPrefix, "my-app")
+	}
 }

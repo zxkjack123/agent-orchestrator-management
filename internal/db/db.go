@@ -12,6 +12,7 @@ import (
 
 const (
 	migrationSchemaV1 = "schema-v1"
+	migrationSchemaV2 = "schema-v2"
 )
 
 // Open opens the SQLite database at the provided path and applies known migrations.
@@ -57,6 +58,32 @@ func Migrate(db *sql.DB) error {
 		return fmt.Errorf("check migration %q: %w", migrationSchemaV1, err)
 	}
 	if applied {
+	} else {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration transaction: %w", err)
+		}
+
+		if err := applySchemaV1(tx); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("apply schema v1: %w", err)
+		}
+
+		if _, err := tx.Exec(`INSERT INTO migrations (id) VALUES (?)`, migrationSchemaV1); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("record migration %q: %w", migrationSchemaV1, err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration transaction: %w", err)
+		}
+	}
+
+	applied, err = hasMigration(db, migrationSchemaV2)
+	if err != nil {
+		return fmt.Errorf("check migration %q: %w", migrationSchemaV2, err)
+	}
+	if applied {
 		return nil
 	}
 
@@ -65,14 +92,14 @@ func Migrate(db *sql.DB) error {
 		return fmt.Errorf("begin migration transaction: %w", err)
 	}
 
-	if err := applySchemaV1(tx); err != nil {
+	if err := applySchemaV2(tx); err != nil {
 		_ = tx.Rollback()
-		return fmt.Errorf("apply schema v1: %w", err)
+		return fmt.Errorf("apply schema v2: %w", err)
 	}
 
-	if _, err := tx.Exec(`INSERT INTO migrations (id) VALUES (?)`, migrationSchemaV1); err != nil {
+	if _, err := tx.Exec(`INSERT INTO migrations (id) VALUES (?)`, migrationSchemaV2); err != nil {
 		_ = tx.Rollback()
-		return fmt.Errorf("record migration %q: %w", migrationSchemaV1, err)
+		return fmt.Errorf("record migration %q: %w", migrationSchemaV2, err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -155,6 +182,23 @@ CREATE TABLE sessions (
 	FOREIGN KEY(task_id) REFERENCES tasks(id)
 );
 `,
+	}
+
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func applySchemaV2(tx *sql.Tx) error {
+	stmts := []string{
+		`ALTER TABLE sessions ADD COLUMN agent_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN role_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN repo_path TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`,
 	}
 
 	for _, stmt := range stmts {

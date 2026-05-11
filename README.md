@@ -1,9 +1,15 @@
 # Agents-Orchestfator-Management
 
-This repository currently holds the planning document for AOM.
+This repository now contains both planning documents and the current implementation foundation for AOM.
 
+Key documents:
+- Current status and handoff: [docs/current-status.md](docs/current-status.md)
 - Main planning document: [docs/AOM-planning.md](docs/AOM-planning.md)
 - Milestone plan: [docs/AOM-milestones.md](docs/AOM-milestones.md)
+- Milestone 1 implementation plan: [docs/milestone-1-implementation-plan.md](docs/milestone-1-implementation-plan.md)
+- Milestone 2 implementation plan: [docs/milestone-2-implementation-plan.md](docs/milestone-2-implementation-plan.md)
+- Project structure: [docs/project-structure.md](docs/project-structure.md)
+- Engineering guidelines: [docs/engineering-guidelines.md](docs/engineering-guidelines.md)
 
 AOM is intended to be a project-level control plane for specialist CLI agents, focused on:
 
@@ -13,4 +19,8 @@ AOM is intended to be a project-level control plane for specialist CLI agents, f
 - project-scoped resources
 - workflow handoff
 
-The current document captures the agreed product goal model, interaction model, workflow model, and operational memory model before implementation begins.
+Current progress:
+- Milestone 0: completed
+- Milestone 1: completed
+- Milestone 2: completed in code and tests
+- Next recommended milestone: Milestone 3

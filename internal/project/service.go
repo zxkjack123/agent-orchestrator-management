@@ -34,9 +34,11 @@ type InitResult struct {
 
 // OpenResult describes a reconciled project state for Milestone 1.
 type OpenResult struct {
-	Project Record
-	Agents  []agent.Record
-	DBPath  string
+	Project        Record
+	Agents         []agent.Record
+	DBPath         string
+	TerminalDriver string
+	SessionPrefix  string
 }
 
 // NewService creates a project service.
@@ -158,9 +160,11 @@ func (s *Service) Open(repoPath string) (*OpenResult, error) {
 	}
 
 	return &OpenResult{
-		Project: record,
-		Agents:  agents,
-		DBPath:  dbPath,
+		Project:        record,
+		Agents:         agents,
+		DBPath:         dbPath,
+		TerminalDriver: cfg.Project.Runtime.Terminal,
+		SessionPrefix:  cfg.Project.Runtime.SessionPrefix,
 	}, nil
 }
 
