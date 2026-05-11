@@ -3,6 +3,7 @@
 This repository currently holds the planning document for AOM.
 
 - Main planning document: [docs/AOM-planning.md](docs/AOM-planning.md)
+- Milestone plan: [docs/AOM-milestones.md](docs/AOM-milestones.md)
 
 AOM is intended to be a project-level control plane for specialist CLI agents, focused on:
 
