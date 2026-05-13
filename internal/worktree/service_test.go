@@ -88,6 +88,52 @@ func TestServiceEnsureProvisionedSkipsNonGitRepo(t *testing.T) {
 	}
 }
 
+func TestServiceValidateProvisioningPreconditionsSkipsNonGitRepo(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	sqlDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open failed: %v", err)
+	}
+	defer sqlDB.Close()
+
+	service := NewService(sqlDB)
+	service.lookPath = func(string) (string, error) { return "git", nil }
+	service.runGit = func(string, ...string) ([]byte, error) { return nil, fmt.Errorf("not a git repo") }
+
+	if err := service.ValidateProvisioningPreconditions("C:/repo", "main"); err != nil {
+		t.Fatalf("ValidateProvisioningPreconditions failed: %v", err)
+	}
+}
+
+func TestServiceValidateProvisioningPreconditionsRejectsUnbornDefaultBranch(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	sqlDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open failed: %v", err)
+	}
+	defer sqlDB.Close()
+
+	service := NewService(sqlDB)
+	service.lookPath = func(string) (string, error) { return "git", nil }
+	service.runGit = func(repoPath string, args ...string) ([]byte, error) {
+		if len(args) >= 2 && args[0] == "rev-parse" && args[1] == "--is-inside-work-tree" {
+			return []byte("true\n"), nil
+		}
+		if len(args) >= 3 && args[0] == "rev-parse" && args[1] == "--verify" && args[2] == "main" {
+			return []byte("fatal: invalid reference: main"), fmt.Errorf("exit status 128")
+		}
+		return nil, nil
+	}
+
+	err = service.ValidateProvisioningPreconditions("/repo", "main")
+	if err == nil {
+		t.Fatal("ValidateProvisioningPreconditions returned nil error, want unborn branch failure")
+	}
+	if !strings.Contains(err.Error(), "create an initial commit first") {
+		t.Fatalf("error = %q, want initial commit hint", err)
+	}
+}
+
 func TestServiceEnsureProvisionedMarksReadyAfterGitWorktreeAdd(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "sessions.db")
 	sqlDB, err := db.Open(dbPath)

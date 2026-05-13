@@ -43,6 +43,7 @@ func TestOpenCreatesSchemaV1(t *testing.T) {
 	assertColumnExists(t, db, "tasks", "updated_at")
 	assertTableExists(t, db, "steps")
 	assertTableExists(t, db, "worktrees")
+	assertBusyTimeout(t, db, defaultBusyTimeoutMS)
 }
 
 func TestOpenIsIdempotent(t *testing.T) {
@@ -72,6 +73,7 @@ func TestOpenIsIdempotent(t *testing.T) {
 	if count := migrationCount(t, db, migrationSchemaV4); count != 1 {
 		t.Fatalf("migration count after reopen = %d, want 1", count)
 	}
+	assertBusyTimeout(t, db, defaultBusyTimeoutMS)
 }
 
 func TestMigrateUpgradesSchemaV1DatabaseToLatest(t *testing.T) {
@@ -188,4 +190,16 @@ func assertColumnExists(t *testing.T, db *sql.DB, table, column string) {
 	}
 
 	t.Fatalf("column %q not found in table %q", column, table)
+}
+
+func assertBusyTimeout(t *testing.T, db *sql.DB, want int) {
+	t.Helper()
+
+	var got int
+	if err := db.QueryRow(`PRAGMA busy_timeout`).Scan(&got); err != nil {
+		t.Fatalf("PRAGMA busy_timeout failed: %v", err)
+	}
+	if got != want {
+		t.Fatalf("busy_timeout = %d, want %d", got, want)
+	}
 }

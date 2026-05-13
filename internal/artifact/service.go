@@ -287,6 +287,7 @@ func (s *Service) renderIndexMarkdown(params SyncParams) string {
 	if params.Worktree != nil {
 		worktreeStatus = params.Worktree.Status
 	}
+	checkpointID, checkpointAt := s.latestCheckpointInfo(params)
 
 	return fmt.Sprintf(`# Task Index
 
@@ -309,8 +310,8 @@ func (s *Service) renderIndexMarkdown(params SyncParams) string {
 %s
 
 ## Checkpoint
-- Latest Checkpoint: -
-- Last Checkpoint At: -
+- Latest Checkpoint: %s
+- Last Checkpoint At: %s
 
 ## Attention
 - Unresolved Review Items: 0
@@ -330,22 +331,25 @@ func (s *Service) renderIndexMarkdown(params SyncParams) string {
 		activeSession,
 		runtime,
 		worktreeStatus,
-		s.renderArtifactInventory(params.Task.Mode),
+		s.renderArtifactInventory(params),
+		checkpointID,
+		checkpointAt,
 		recoveryStatus,
 		emptyFallback(params.RecommendedNextAction),
 	)
 }
 
-func (s *Service) renderArtifactInventory(mode string) string {
+func (s *Service) renderArtifactInventory(params SyncParams) string {
+	dir := s.taskDir(params)
 	lines := []string{
 		"- task.md: present",
 		"- state.md: present",
 		"- log.md: present",
-		"- handoff.md: absent",
-		"- review-notes.md: absent",
+		fmt.Sprintf("- handoff.md: %s", s.artifactPresence(dir, "handoff.md")),
+		fmt.Sprintf("- review-notes.md: %s", s.artifactPresence(dir, "review-notes.md")),
 	}
 
-	switch mode {
+	switch params.Task.Mode {
 	case "Requirements-first":
 		lines = append(lines, "- requirements.md: present", "- design.md: n/a", "- tasks.md: present")
 	case "Design-first":
@@ -355,6 +359,53 @@ func (s *Service) renderArtifactInventory(mode string) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func (s *Service) artifactPresence(dir, name string) string {
+	if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+		return "present"
+	}
+	return "absent"
+}
+
+func (s *Service) latestCheckpointInfo(params SyncParams) (string, string) {
+	data, err := os.ReadFile(filepath.Join(s.taskDir(params), "log.md"))
+	if err != nil {
+		return "-", "-"
+	}
+
+	lines := strings.Split(string(data), "\n")
+	latestID := "-"
+	latestAt := "-"
+	currentTimestamp := ""
+	inCheckpointEvent := false
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "### "):
+			inCheckpointEvent = strings.Contains(line, "| checkpoint.created")
+			if !inCheckpointEvent {
+				continue
+			}
+			parts := strings.SplitN(strings.TrimPrefix(line, "### "), " | ", 2)
+			if len(parts) > 0 {
+				currentTimestamp = strings.TrimSpace(parts[0])
+			}
+		case inCheckpointEvent && strings.Contains(line, "Checkpoint CHK-"):
+			if idx := strings.Index(line, "CHK-"); idx >= 0 {
+				checkpointID := strings.TrimSpace(line[idx:])
+				if space := strings.IndexAny(checkpointID, " )"); space >= 0 {
+					checkpointID = checkpointID[:space]
+				}
+				latestID = checkpointID
+				if currentTimestamp != "" {
+					latestAt = currentTimestamp
+				}
+			}
+			inCheckpointEvent = false
+		}
+	}
+
+	return latestID, latestAt
 }
 
 func (s *Service) modeArtifacts(params SyncParams) map[string]string {

@@ -114,6 +114,38 @@ func (s *Service) ListByProject(projectID string) ([]Record, error) {
 	return s.repo.ListByProjectID(projectID)
 }
 
+// ValidateProvisioningPreconditions checks whether git-backed worktree creation
+// can proceed without mutating persisted task state.
+func (s *Service) ValidateProvisioningPreconditions(repoPath, defaultBranch string) error {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return fmt.Errorf("repo path is required")
+	}
+	defaultBranch = strings.TrimSpace(defaultBranch)
+	if defaultBranch == "" {
+		return fmt.Errorf("default branch is required")
+	}
+
+	if _, err := s.lookPath("git"); err != nil {
+		return nil
+	}
+	if _, err := s.runGit(repoPath, "rev-parse", "--is-inside-work-tree"); err != nil {
+		return nil
+	}
+
+	output, err := s.runGit(repoPath, "rev-parse", "--verify", defaultBranch)
+	if err == nil {
+		return nil
+	}
+
+	return fmt.Errorf(
+		"project repo %q cannot provision task worktrees from default branch %q yet: %s; create an initial commit first",
+		repoPath,
+		defaultBranch,
+		strings.TrimSpace(string(output)),
+	)
+}
+
 // EnsureProvisioned upgrades a planned mapping to Ready when the repo supports git worktrees.
 func (s *Service) EnsureProvisioned(taskID, repoPath string) (*Record, error) {
 	taskID = strings.TrimSpace(taskID)

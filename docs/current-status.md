@@ -16,14 +16,14 @@ It should be enough for a developer or agent to:
 Completed.
 
 Foundation specs are in place:
-- [AOM planning](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\AOM-planning.md)
-- [Milestone plan](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\AOM-milestones.md)
-- [State machine](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\state-machine.md)
-- [Artifact schemas](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\artifact-schemas.md)
-- [Project config](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\project-config.md)
-- [CLI spec](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\cli-spec.md)
-- [Project structure](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\project-structure.md)
-- [Engineering guidelines](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\engineering-guidelines.md)
+- [AOM planning](AOM-planning.md)
+- [Milestone plan](AOM-milestones.md)
+- [State machine](state-machine.md)
+- [Artifact schemas](artifact-schemas.md)
+- [Project config](project-config.md)
+- [CLI spec](cli-spec.md)
+- [Project structure](project-structure.md)
+- [Engineering guidelines](engineering-guidelines.md)
 
 ### Milestone 1
 
@@ -38,7 +38,7 @@ Implemented:
 - `aom status`
 
 Main reference:
-- [Milestone 1 plan](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\milestone-1-implementation-plan.md)
+- [Milestone 1 plan](milestone-1-implementation-plan.md)
 
 ### Milestone 2
 
@@ -59,7 +59,7 @@ Implemented:
 - session-aware `aom status`
 
 Main reference:
-- [Milestone 2 plan](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\milestone-2-implementation-plan.md)
+- [Milestone 2 plan](milestone-2-implementation-plan.md)
 
 ### Milestone 3
 
@@ -121,6 +121,33 @@ Implemented in the first slice:
 - canonical task artifacts now continue to use `<worktree>/.agent/` while worktrees are `Active`, not only when they are merely `Ready`
 - session views now reconcile persisted tmux pane bindings against live tmux state and downgrade missing panes to `Detached`
 - worktree summaries now fall back from `Active` to `Ready` when no live task-bound session remains after reconciliation
+- `task create` and `plan --create` now fail fast on git repos without an initial commit instead of persisting partial task state
+- `status` and `task show` now surface canonical artifact root and task log paths so operators do not need to guess between repo-root and worktree artifacts
+- `session spawn --real` and `session replace --real` now launch `codex` for supported runtime roles and reject unsupported runtimes before pane creation
+- the SQLite bootstrap now applies a `busy_timeout` so single-operator CLI bursts are less likely to fail with immediate `SQLITE_BUSY`
+
+### Milestone 5
+
+Started.
+
+Implemented in the current slice:
+- dedicated task-to-worktree continuity is live for task-bound sessions
+- `worktree repair` restores missing or unregistered safe worktrees and logs canonical repair events
+- `session replace` preserves task and worktree continuity across session turnover
+- task-bound session lifecycle now reconciles `Ready`, `Active`, `Detached`, `Stopped`, and `Archived` state more explicitly
+- one-writer-per-worktree guardrails now block a second `dedicated-writer` session on the same task while still allowing read-only roles
+
+### Milestone 6
+
+Started.
+
+Implemented in the first slice:
+- `aom checkpoint`
+- `aom handoff`
+- `checkpoint.created` and `handoff.prepared` canonical log events
+- `handoff.md` generation in the canonical task artifact root
+- task artifact refresh now surfaces latest checkpoint and handoff presence in `index.md`
+- handoff flow now marks the source session `WaitingHandoff`
 
 ## Current CLI Surface
 
@@ -144,6 +171,8 @@ Implemented commands:
 - `aom session archive`
 - `aom attach`
 - `aom capture`
+- `aom checkpoint`
+- `aom handoff`
 
 Current behavior notes:
 - `open` ensures tmux workspace and fails clearly when tmux is unavailable
@@ -178,50 +207,62 @@ Current behavior notes:
 - `session replace` now spawns a replacement session in the same task/worktree context, preserves continuity through task artifacts, records a canonical `session.replaced` event, and prints explicit operator action hints when the old session is intentionally left running
 - `session replace` now auto-archives superseded sessions that have already reconciled to `Detached`, while still stopping replaceable idle sessions and leaving active `Working` sessions for explicit operator intervention
 - `session spawn --mock` launches a mock runtime transcript for live local flow verification
-- `session spawn` otherwise uses a placeholder shell command, not a real provider CLI yet
+- `session spawn --real` launches the `codex` CLI for supported runtime roles and fails before pane creation when the role runtime is unsupported or `codex` is unavailable
+- `session replace --real` uses the same runtime validation and launch path as `session spawn --real`
+- `task create` and `plan --create` fail before persisting task state when the repo is git-backed but still has an unborn default branch
+- SQLite connections now apply a `busy_timeout` to reduce transient `SQLITE_BUSY` failures during short command bursts
+- `task show` now prints canonical `Artifact root` and `Task log` paths
+- `status` now prints canonical `artifacts=... | log=...` lines for each task
+- task-bound `session spawn` now blocks a second `dedicated-writer` from occupying the same task worktree while still allowing read-only roles such as reviewers
+- `checkpoint` appends a canonical checkpoint event, refreshes task artifacts, and reports the latest checkpoint summary
+- `handoff` writes `handoff.md`, records `handoff.prepared`, refreshes task artifacts, and moves the current session to `WaitingHandoff`
 - `attach` and `capture` operate through the tmux manager abstraction
 
 ## Current Packages
 
 ### Working packages
 
-- [cmd/aom/main.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\cmd\aom\main.go)
-- [internal/app/app.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\app\app.go)
-- [internal/app/sessions.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\app\sessions.go)
-- [internal/cli/root.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\cli\root.go)
-- [internal/config/config.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\config\config.go)
-- [internal/db/db.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\db\db.go)
-- [internal/project/service.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\project\service.go)
-- [internal/project/repository.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\project\repository.go)
-- [internal/artifact/service.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\artifact\service.go)
-- [internal/project/templates/project-init/agents.yaml.tmpl](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\project\templates\project-init\agents.yaml.tmpl)
-- [templates/project-init/default/agents.yaml.tmpl](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\templates\project-init\default\agents.yaml.tmpl)
-- [templates/project-init/minimal/agents.yaml.tmpl](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\templates\project-init\minimal\agents.yaml.tmpl)
-- [internal/plan/service.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\plan\service.go)
-- [internal/agent/repository.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\agent\repository.go)
-- [internal/session/repository.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\session\repository.go)
-- [internal/session/service.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\session\service.go)
-- [internal/step/repository.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\step\repository.go)
-- [internal/task/repository.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\task\repository.go)
-- [internal/task/service.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\task\service.go)
-- [internal/tmux/manager.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\tmux\manager.go)
+- [cmd/aom/main.go](../cmd/aom/main.go)
+- [internal/app/app.go](../internal/app/app.go)
+- [internal/app/sessions.go](../internal/app/sessions.go)
+- [internal/cli/root.go](../internal/cli/root.go)
+- [internal/config/config.go](../internal/config/config.go)
+- [internal/db/db.go](../internal/db/db.go)
+- [internal/project/service.go](../internal/project/service.go)
+- [internal/project/repository.go](../internal/project/repository.go)
+- [internal/artifact/service.go](../internal/artifact/service.go)
+- [internal/project/templates/project-init/agents.yaml.tmpl](../internal/project/templates/project-init/agents.yaml.tmpl)
+- [templates/project-init/default/agents.yaml.tmpl](../templates/project-init/default/agents.yaml.tmpl)
+- [templates/project-init/minimal/agents.yaml.tmpl](../templates/project-init/minimal/agents.yaml.tmpl)
+- [internal/plan/service.go](../internal/plan/service.go)
+- [internal/agent/repository.go](../internal/agent/repository.go)
+- [internal/session/repository.go](../internal/session/repository.go)
+- [internal/session/service.go](../internal/session/service.go)
+- [internal/step/repository.go](../internal/step/repository.go)
+- [internal/task/repository.go](../internal/task/repository.go)
+- [internal/task/service.go](../internal/task/service.go)
+- [internal/tmux/manager.go](../internal/tmux/manager.go)
+- [internal/worktree/service.go](../internal/worktree/service.go)
+- [internal/runtime/launch.go](../internal/runtime/launch.go)
 
 ### Tests
 
-- [internal/config/config_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\config\config_test.go)
-- [internal/db/db_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\db\db_test.go)
-- [internal/project/repository_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\project\repository_test.go)
-- [internal/project/service_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\project\service_test.go)
-- [internal/artifact/service_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\artifact\service_test.go)
-- [internal/plan/service_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\plan\service_test.go)
-- [internal/agent/repository_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\agent\repository_test.go)
-- [internal/session/repository_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\session\repository_test.go)
-- [internal/session/service_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\session\service_test.go)
-- [internal/step/repository_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\step\repository_test.go)
-- [internal/task/repository_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\task\repository_test.go)
-- [internal/task/service_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\task\service_test.go)
-- [internal/tmux/manager_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\tmux\manager_test.go)
-- [internal/cli/root_test.go](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\internal\cli\root_test.go)
+- [internal/config/config_test.go](../internal/config/config_test.go)
+- [internal/db/db_test.go](../internal/db/db_test.go)
+- [internal/project/repository_test.go](../internal/project/repository_test.go)
+- [internal/project/service_test.go](../internal/project/service_test.go)
+- [internal/artifact/service_test.go](../internal/artifact/service_test.go)
+- [internal/plan/service_test.go](../internal/plan/service_test.go)
+- [internal/agent/repository_test.go](../internal/agent/repository_test.go)
+- [internal/session/repository_test.go](../internal/session/repository_test.go)
+- [internal/session/service_test.go](../internal/session/service_test.go)
+- [internal/step/repository_test.go](../internal/step/repository_test.go)
+- [internal/task/repository_test.go](../internal/task/repository_test.go)
+- [internal/task/service_test.go](../internal/task/service_test.go)
+- [internal/tmux/manager_test.go](../internal/tmux/manager_test.go)
+- [internal/cli/root_test.go](../internal/cli/root_test.go)
+- [internal/worktree/service_test.go](../internal/worktree/service_test.go)
+- [internal/runtime/launch_test.go](../internal/runtime/launch_test.go)
 
 ## Verified State
 
@@ -263,6 +304,8 @@ Last verified state before this handoff:
   - inspect `.aom/tasks/TASK-1778509474319106000/{index,log}.md`
 - current repo verification on macOS:
   - `go test ./...`
+  - focused unborn-branch preflight coverage:
+    - `task create` and `plan --create` reject git repos without an initial commit before task persistence
   - focused worktree repair coverage in `internal/worktree` and `internal/cli`
   - live local `worktree repair` smoke flow on macOS:
     - `aom task create "Repair flow live check" --role backend --agent backend-main`
@@ -285,16 +328,29 @@ Last verified state before this handoff:
     - `session replace <old> --agent <new-agent> --reason ...` creates a new session in the same task/worktree, keeps the worktree `Active`, and stops the superseded session when possible
     - if the old session has already reconciled to `Detached`, replacement now archives it automatically after the replacement session is created
     - when the old session is still `Working`, replacement output now leaves it running intentionally and prints a concrete `aom session stop <old-session-id>` hint for the operator
+  - focused real-runtime launch coverage:
+    - `session spawn backend-main --task <task-id> --step <step-id> --real` launches `codex` in a real tmux pane on macOS
+    - unsupported runtime roles fail before pane creation
+    - `session replace <session-id> --agent backend-main --real` reuses the same runtime validation path
+  - focused canonical artifact-path reporting coverage:
+    - `task show <task-id>` prints canonical `Artifact root` and `Task log` paths
+    - `status` prints `artifacts=... | log=...` under each task
+  - focused one-writer-per-worktree coverage:
+    - a second `dedicated-writer` on the same task is rejected while read-only roles can still attach to the task context
+  - focused checkpoint and handoff coverage:
+    - `checkpoint <session-id>` appends `checkpoint.created`, refreshes `index.md`, and prints checkpoint metadata
+    - `handoff <session-id> --to <role-or-agent>` writes `handoff.md`, appends `handoff.prepared`, and moves the source session to `WaitingHandoff`
 
 Suggested verification commands on a new machine:
 
-```powershell
-$env:GOTOOLCHAIN='local'
-$env:GOCACHE="$PWD\.cache\gocache"
-$env:GOMODCACHE="$PWD\.cache\gomodcache"
-$env:GOTELEMETRY='off'
-$env:GOTELEMETRYDIR="$PWD\.cache\gotelemetry"
-& 'C:\Program Files\Go\bin\go.exe' test ./...
+```bash
+env \
+  GOTOOLCHAIN=local \
+  GOCACHE=$PWD/.cache/gocache \
+  GOMODCACHE=$PWD/.cache/gomodcache \
+  GOTELEMETRY=off \
+  GOTELEMETRYDIR=$PWD/.cache/gotelemetry \
+  go test ./...
 ```
 
 ## Environment Notes
@@ -319,7 +375,8 @@ Current state:
 What this means:
 - code and tests for tmux logic pass
 - live local tmux behavior is verified on macOS
-- provider runtime launch is still placeholder-only and not yet provider-native E2E
+- narrow real-runtime launch is verified for `codex` via `session spawn --real` on macOS
+- broader multi-runtime provider-native E2E is still not complete beyond the current `codex` slice
 
 Recommended path for live E2E:
 - Linux or macOS should work best for continued live runtime validation
@@ -329,43 +386,44 @@ Recommended path for live E2E:
 ## What Is Intentionally Not Done Yet
 
 Still out of scope at the current handoff point:
-- real provider runtime launch for Codex, Claude, or Kiro
-- handoff and checkpoint logic
-- provider-native resume and replacement flows
+- first-class real-runtime launch for runtimes beyond the current `codex` slice
+- provider-native resume flows
+- richer review and unresolved review-item handling under Milestone 6
 
 ## Immediate Next Step
 
 Next milestone to continue:
-- `Milestone 4: Operational Memory Layer`
+- `Milestone 6: Handoff and Checkpoint Flow`
 
 Recommended first implementation slice:
-1. append richer canonical log events around session lifecycle
-2. move artifact root from repo fallback to task worktree when Milestone 5 begins
-3. start task-to-worktree mapping so task-bound sessions launch in isolated paths
+1. add `aom review` for structured `review-notes.md`
+2. decide how owner transition should be recorded after `handoff`
+3. surface unresolved review state in `index.md` and `status`
 
 Current next recommended slice:
-1. decide whether repair and replacement outcomes should append richer canonical detail such as classified drift kind or supersession policy reason in `log.md`
-2. decide whether additional replacement end states beyond `Detached -> Archived` are worth automating, or whether other cases should remain explicitly operator-driven
-3. decide whether dirty unregistered worktree paths need a dedicated inspect/report command instead of relying on `status`, `task show`, and repair hints alone
+1. decide whether checkpoint output should capture richer changed-file summaries from git state inside the task worktree
+2. decide whether `handoff` should update task ownership directly or remain session-scoped until the receiving session starts
+3. decide whether repair and replacement outcomes need richer canonical detail such as drift-kind or supersession policy reason in `log.md`
 
 Planned validation-oriented slice after that:
-1. use [docs/experimental-agent-e2e-plan.md](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\experimental-agent-e2e-plan.md) to add an opt-in experimental real-agent launch path for one runtime
-2. verify that slice on macOS or Linux before treating it as a stable workflow
-3. use findings from that smoke path to inform Milestone 5 and later Milestone 10 work
+1. extend the real-runtime validation path beyond `codex` only if a concrete next runtime is agreed
+2. verify follow-up runtime slices on macOS or Linux before treating them as stable workflows
+3. use findings from those smoke paths to inform later Milestone 6 and Milestone 10 work
 
 ## Suggested First Checks On Another Machine
 
 1. Clone the repo and open the root directory.
 2. Read:
-   - [AGENTS.md](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\AGENTS.md)
-   - [docs/project-structure.md](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\project-structure.md)
-   - [docs/engineering-guidelines.md](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\engineering-guidelines.md)
+   - [AGENTS.md](../AGENTS.md)
+   - [docs/project-structure.md](project-structure.md)
+   - [docs/engineering-guidelines.md](engineering-guidelines.md)
    - this file
 3. Run `go test ./...`
 4. If tmux is available, manually test:
    - `aom project init`
    - `aom open`
-   - `aom session spawn backend-main`
+   - `aom plan "smoke test" --create`
+   - `aom session spawn backend-main --real`
    - `aom session list`
    - `aom capture <session-id>`
-5. If tmux is not available, continue with Milestone 3 and keep tmux E2E deferred.
+5. If tmux is not available, continue with non-live verification and keep runtime E2E deferred.

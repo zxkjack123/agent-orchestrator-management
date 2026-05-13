@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	migrationSchemaV1 = "schema-v1"
-	migrationSchemaV2 = "schema-v2"
-	migrationSchemaV3 = "schema-v3"
-	migrationSchemaV4 = "schema-v4"
+	migrationSchemaV1    = "schema-v1"
+	migrationSchemaV2    = "schema-v2"
+	migrationSchemaV3    = "schema-v3"
+	migrationSchemaV4    = "schema-v4"
+	defaultBusyTimeoutMS = 5000
 )
 
 // Open opens the SQLite database at the provided path and applies known migrations.
@@ -41,12 +42,29 @@ func openAndMigrate(db *sql.DB) (*sql.DB, error) {
 		return nil, fmt.Errorf("ping sqlite database: %w", err)
 	}
 
+	if err := configureConnection(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
 	if err := Migrate(db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 
 	return db, nil
+}
+
+func configureConnection(db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("configure sqlite connection: db is required")
+	}
+
+	if _, err := db.Exec(fmt.Sprintf(`PRAGMA busy_timeout = %d`, defaultBusyTimeoutMS)); err != nil {
+		return fmt.Errorf("configure sqlite busy timeout: %w", err)
+	}
+
+	return nil
 }
 
 // Migrate applies known schema migrations to the database.

@@ -23,5 +23,8 @@ AOM is intended to be a project-level control plane for specialist CLI agents, f
 Current progress:
 - Milestone 0: completed
 - Milestone 1: completed
-- Milestone 2: completed in code and tests
-- Next recommended milestone: Milestone 3
+- Milestone 2: completed in code, tests, and live local E2E
+- Milestone 3: implemented core task and step workflow, plan generation, and `plan --create`
+- Milestone 4: in progress with canonical task artifacts, task-bound lifecycle logging, and artifact-path reporting
+- Milestone 5: in progress with task worktree continuity, repair, replacement, and one-writer-per-worktree guardrails
+- Milestone 6: first slice implemented with `checkpoint` and `handoff`

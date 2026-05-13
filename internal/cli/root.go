@@ -3,14 +3,18 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/agent"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/app"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/artifact"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/plan"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
+	aomruntime "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/runtime"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/session"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
@@ -19,6 +23,7 @@ import (
 )
 
 var newApp = app.New
+var newLaunchBuilder = aomruntime.NewBuilder
 
 // Runner executes top-level CLI behavior.
 type Runner struct {
@@ -55,6 +60,10 @@ func (r Runner) Execute(args []string) error {
 		return r.executeAttach(args[1:])
 	case "capture":
 		return r.executeCapture(args[1:])
+	case "checkpoint":
+		return r.executeCheckpoint(args[1:])
+	case "handoff":
+		return r.executeHandoff(args[1:])
 	case "open":
 		return r.executeOpen(args[1:])
 	case "plan":
@@ -166,6 +175,10 @@ func (r Runner) executePlan(args []string) error {
 
 	if !params.createTask {
 		return nil
+	}
+
+	if err := r.validateTaskProvisioning(result); err != nil {
+		return err
 	}
 
 	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
@@ -515,6 +528,10 @@ func (r Runner) executeTaskCreate(args []string) error {
 		return err
 	}
 
+	if err := r.validateTaskProvisioning(result); err != nil {
+		return err
+	}
+
 	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
 	if err != nil {
 		return err
@@ -582,75 +599,34 @@ func (r Runner) executeTaskShow(args []string) error {
 		return err
 	}
 
-	taskService, taskDB, err := r.app.OpenTaskService(result.DBPath)
+	view, err := r.loadTaskView(result, strings.TrimSpace(args[0]))
 	if err != nil {
 		return err
 	}
-	defer taskDB.Close()
-
-	taskRecord, err := taskService.Get(strings.TrimSpace(args[0]))
-	if err != nil {
-		return err
-	}
-	if taskRecord == nil {
+	if view == nil {
 		return fmt.Errorf("task %q not found", strings.TrimSpace(args[0]))
-	}
-
-	stepService, stepDB, err := r.app.OpenStepService(result.DBPath)
-	if err != nil {
-		return err
-	}
-	defer stepDB.Close()
-
-	steps, err := stepService.ListByTask(taskRecord.ID)
-	if err != nil {
-		return err
 	}
 
 	fmt.Fprintln(r.stdout, "Task")
 	fmt.Fprintln(r.stdout, "")
-	fmt.Fprintf(r.stdout, "ID: %s\n", taskRecord.ID)
-	fmt.Fprintf(r.stdout, "Title: %s\n", taskRecord.Title)
-	fmt.Fprintf(r.stdout, "Mode: %s\n", taskRecord.Mode)
-	fmt.Fprintf(r.stdout, "Status: %s\n", taskRecord.Status)
-	fmt.Fprintf(r.stdout, "Preferred role: %s\n", emptyFallback(taskRecord.PreferredRole))
-	fmt.Fprintf(r.stdout, "Preferred agent: %s\n", emptyFallback(taskRecord.PreferredAgent))
-	worktreeService, worktreeDB, err := r.app.OpenWorktreeService(result.DBPath)
-	if err != nil {
-		return err
-	}
-	defer worktreeDB.Close()
-
-	sessions, err := r.loadProjectSessions(result)
-	if err != nil {
-		return err
-	}
-
-	mapping, err := worktreeService.Reconcile(taskRecord.ID, result.Project.RepoPath, hasActiveTaskSession(sessions, taskRecord.ID))
-	if err != nil {
-		return err
-	}
-	if mapping == nil {
-		mapping, err = worktreeService.GetByTask(taskRecord.ID)
-		if err != nil {
-			return err
-		}
-	}
-	driftKind := worktree.DriftNone
-	if mapping != nil {
-		driftKind, err = worktreeService.DriftKind(taskRecord.ID, result.Project.RepoPath)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(r.stdout, "Worktree status: %s\n", mapping.Status)
-		fmt.Fprintf(r.stdout, "Worktree branch: %s\n", mapping.BranchName)
-		fmt.Fprintf(r.stdout, "Worktree path: %s\n", mapping.WorktreePath)
-		if hint := worktreeHint(taskRecord.ID, mapping, driftKind); hint != "" {
+	fmt.Fprintf(r.stdout, "ID: %s\n", view.Task.ID)
+	fmt.Fprintf(r.stdout, "Title: %s\n", view.Task.Title)
+	fmt.Fprintf(r.stdout, "Mode: %s\n", view.Task.Mode)
+	fmt.Fprintf(r.stdout, "Status: %s\n", view.Task.Status)
+	fmt.Fprintf(r.stdout, "Preferred role: %s\n", emptyFallback(view.Task.PreferredRole))
+	fmt.Fprintf(r.stdout, "Preferred agent: %s\n", emptyFallback(view.Task.PreferredAgent))
+	if view.Worktree != nil {
+		fmt.Fprintf(r.stdout, "Worktree status: %s\n", view.Worktree.Status)
+		fmt.Fprintf(r.stdout, "Worktree branch: %s\n", view.Worktree.BranchName)
+		fmt.Fprintf(r.stdout, "Worktree path: %s\n", view.Worktree.WorktreePath)
+		if hint := worktreeHint(view.Task.ID, view.Worktree, view.WorktreeDrift); hint != "" {
 			fmt.Fprintf(r.stdout, "Worktree hint: %s\n", hint)
 		}
 	}
-	fmt.Fprintf(r.stdout, "Steps: %d\n", len(steps))
-	fmt.Fprintf(r.stdout, "Recommended next action: %s\n", recommendTaskAction(taskRecord.Status, steps, mapping, driftKind))
+	fmt.Fprintf(r.stdout, "Artifact root: %s\n", taskArtifactRoot(result.Project.RepoPath, result.StateDir, view.Task.ID, view.Worktree))
+	fmt.Fprintf(r.stdout, "Task log: %s\n", taskArtifactLogPath(result.Project.RepoPath, result.StateDir, view.Task.ID, view.Worktree))
+	fmt.Fprintf(r.stdout, "Steps: %d\n", len(view.Steps))
+	fmt.Fprintf(r.stdout, "Recommended next action: %s\n", recommendTaskAction(view.Task.Status, view.Steps, view.Worktree, view.WorktreeDrift))
 
 	return nil
 }
@@ -928,7 +904,8 @@ func (r Runner) executeSessionSpawn(args []string) error {
 	}
 
 	params := sessionSpawnParams{
-		agentName: strings.TrimSpace(args[0]),
+		agentName:  strings.TrimSpace(args[0]),
+		launchMode: aomruntime.LaunchModePlaceholder,
 	}
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
@@ -945,7 +922,13 @@ func (r Runner) executeSessionSpawn(args []string) error {
 			}
 			params.stepID = strings.TrimSpace(args[i])
 		case "--mock":
-			params.mockRuntime = true
+			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeMock); err != nil {
+				return err
+			}
+		case "--real":
+			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeReal); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
@@ -1003,6 +986,19 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		}
 	}
 
+	if err := r.enforceWriterWorktreeBoundary(result, agentRecord, params); err != nil {
+		return nil, err
+	}
+
+	if _, err := newLaunchBuilder().Build(aomruntime.SessionSpec{
+		SessionID: "",
+		AgentName: agentRecord.Name,
+		RoleName:  agentRecord.Role,
+		Runtime:   agentRecord.Runtime,
+	}, params.launchMode); err != nil {
+		return nil, err
+	}
+
 	workspace, err := r.app.Tmux.EnsureWorkspace(result.SessionPrefix, result.Project.RepoPath)
 	if err != nil {
 		return nil, fmt.Errorf("ensure tmux workspace: %w", err)
@@ -1036,14 +1032,24 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 			Actor:       "aom",
 			StepID:      params.stepID,
 			SessionID:   record.ID,
-			Summary:     fmt.Sprintf("Session record created for %s using %s launch mode", agentRecord.Name, launchModeLabel(params.mockRuntime)),
+			Summary:     fmt.Sprintf("Session record created for %s using %s launch mode", agentRecord.Name, params.launchMode),
 			StateEffect: "Session Booting",
 		}); err != nil {
 			return nil, err
 		}
 	}
 
-	paneBinding, err := r.app.Tmux.CreatePane(workspace.Target, executionPath, sessionLaunchCommand(*record, params.mockRuntime))
+	launchCommand, err := newLaunchBuilder().Build(aomruntime.SessionSpec{
+		SessionID: record.ID,
+		AgentName: record.AgentName,
+		RoleName:  record.RoleName,
+		Runtime:   record.Runtime,
+	}, params.launchMode)
+	if err != nil {
+		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "session launch validation failed before session became interactive", err)
+	}
+
+	paneBinding, err := r.app.Tmux.CreatePane(workspace.Target, executionPath, launchCommand)
 	if err != nil {
 		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "pane creation failed before session became interactive", err)
 	}
@@ -1103,7 +1109,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		fmt.Fprintf(r.stdout, "Step: %s\n", stepRecord.ID)
 	}
 	fmt.Fprintf(r.stdout, "Runtime: %s\n", record.Runtime)
-	fmt.Fprintf(r.stdout, "Launch mode: %s\n", launchModeLabel(params.mockRuntime))
+	fmt.Fprintf(r.stdout, "Launch mode: %s\n", params.launchMode)
 	if taskWorktree != nil {
 		fmt.Fprintf(r.stdout, "Worktree status: %s\n", taskWorktree.Status)
 	}
@@ -1120,7 +1126,10 @@ func (r Runner) executeSessionReplace(args []string) error {
 		return fmt.Errorf("session identifier is required")
 	}
 
-	params := sessionReplaceParams{id: strings.TrimSpace(args[0])}
+	params := sessionReplaceParams{
+		id:         strings.TrimSpace(args[0]),
+		launchMode: aomruntime.LaunchModePlaceholder,
+	}
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--agent":
@@ -1136,7 +1145,13 @@ func (r Runner) executeSessionReplace(args []string) error {
 			}
 			params.reason = strings.TrimSpace(args[i])
 		case "--mock":
-			params.mockRuntime = true
+			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeMock); err != nil {
+				return err
+			}
+		case "--real":
+			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeReal); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
@@ -1202,17 +1217,18 @@ func (r Runner) failTaskBoundSessionSpawn(
 }
 
 type sessionSpawnParams struct {
-	agentName   string
-	taskID      string
-	stepID      string
-	mockRuntime bool
+	agentName       string
+	taskID          string
+	stepID          string
+	ignoreSessionID string
+	launchMode      aomruntime.LaunchMode
 }
 
 type sessionReplaceParams struct {
-	id          string
-	agentName   string
-	reason      string
-	mockRuntime bool
+	id         string
+	agentName  string
+	reason     string
+	launchMode aomruntime.LaunchMode
 }
 
 func (r Runner) executeSessionList(args []string) error {
@@ -1292,9 +1308,10 @@ func (r Runner) replaceSession(result *project.OpenResult, oldRecord session.Rec
 	}
 
 	spawnParams := sessionSpawnParams{
-		agentName:   agentRecord.Name,
-		taskID:      oldRecord.TaskID,
-		mockRuntime: params.mockRuntime,
+		agentName:       agentRecord.Name,
+		taskID:          oldRecord.TaskID,
+		ignoreSessionID: oldRecord.ID,
+		launchMode:      params.launchMode,
 	}
 
 	taskRecord, err := r.loadTaskByID(result, oldRecord.TaskID)
@@ -1599,6 +1616,177 @@ func (r Runner) executeCapture(args []string) error {
 	return nil
 }
 
+type checkpointParams struct {
+	sessionID string
+}
+
+type handoffParams struct {
+	sessionID string
+	target    string
+	reason    string
+}
+
+func (r Runner) executeCheckpoint(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+	if len(args) > 1 {
+		return fmt.Errorf("checkpoint does not accept extra positional arguments in the current milestone")
+	}
+
+	sessionRecord, err := r.loadSessionByIdentifier(strings.TrimSpace(args[0]))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(sessionRecord.TaskID) == "" {
+		return fmt.Errorf("session %q is not bound to a task", sessionRecord.ID)
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	view, err := r.loadTaskView(result, sessionRecord.TaskID)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("task %q not found", sessionRecord.TaskID)
+	}
+
+	checkpointID := newCheckpointID()
+	summary := fmt.Sprintf("Checkpoint %s created for session %s", checkpointID, sessionRecord.ID)
+	if err := r.syncTaskArtifactsWithSession(result, sessionRecord.TaskID, artifact.Event{
+		Type:        "checkpoint.created",
+		Actor:       "operator",
+		StepID:      activeStepID(view.Steps),
+		SessionID:   sessionRecord.ID,
+		Summary:     summary,
+		StateEffect: "Checkpoint Ready",
+	}, false, sessionRecord); err != nil {
+		return err
+	}
+	if err := r.refreshTaskArtifacts(result, sessionRecord.TaskID, sessionRecord); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Checkpoint created")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Checkpoint: %s\n", checkpointID)
+	fmt.Fprintf(r.stdout, "Task: %s\n", sessionRecord.TaskID)
+	fmt.Fprintf(r.stdout, "Step: %s\n", emptyFallback(activeStepID(view.Steps)))
+	fmt.Fprintf(r.stdout, "Owner: %s\n", sessionRecord.AgentName)
+	fmt.Fprintf(r.stdout, "Changed files: %s\n", changedFilesSummary(sessionRecord.WorktreePath, sessionRecord.RepoPath))
+	fmt.Fprintf(r.stdout, "Next action: %s\n", recommendTaskAction(view.Task.Status, view.Steps, view.Worktree, view.WorktreeDrift))
+
+	return nil
+}
+
+func (r Runner) executeHandoff(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+
+	params := handoffParams{sessionID: strings.TrimSpace(args[0])}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--to":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--to requires a value")
+			}
+			params.target = strings.TrimSpace(args[i])
+		case "--reason":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--reason requires a value")
+			}
+			params.reason = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+	if params.target == "" {
+		return fmt.Errorf("--to is required")
+	}
+
+	sessionRecord, err := r.loadSessionByIdentifier(params.sessionID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(sessionRecord.TaskID) == "" {
+		return fmt.Errorf("session %q is not bound to a task", sessionRecord.ID)
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	view, err := r.loadTaskView(result, sessionRecord.TaskID)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("task %q not found", sessionRecord.TaskID)
+	}
+
+	targetRole, targetAgent, suggestedRuntime, err := resolveHandoffTarget(result, params.target)
+	if err != nil {
+		return err
+	}
+	reason := params.reason
+	if reason == "" {
+		reason = "Operator requested ownership transfer"
+	}
+
+	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	if sessionRecord.Status != "WaitingHandoff" {
+		sessionRecord.Status = "WaitingHandoff"
+		updated, err := sessionService.Save(*sessionRecord)
+		if err != nil {
+			return err
+		}
+		sessionRecord = updated
+	}
+
+	if err := r.writeHandoffArtifact(result, view, *sessionRecord, targetRole, targetAgent, suggestedRuntime, reason); err != nil {
+		return err
+	}
+
+	if err := r.syncTaskArtifactsWithSession(result, sessionRecord.TaskID, artifact.Event{
+		Type:        "handoff.prepared",
+		Actor:       "operator",
+		StepID:      activeStepID(view.Steps),
+		SessionID:   sessionRecord.ID,
+		Summary:     fmt.Sprintf("Handoff prepared from %s to %s", sessionRecord.AgentName, targetRole),
+		StateEffect: "Handoff Ready",
+	}, false, sessionRecord); err != nil {
+		return err
+	}
+	if err := r.refreshTaskArtifacts(result, sessionRecord.TaskID, sessionRecord); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Handoff prepared")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Task: %s\n", sessionRecord.TaskID)
+	fmt.Fprintf(r.stdout, "From session: %s\n", sessionRecord.ID)
+	fmt.Fprintf(r.stdout, "To role: %s\n", targetRole)
+	fmt.Fprintf(r.stdout, "To agent: %s\n", emptyFallback(targetAgent))
+	fmt.Fprintf(r.stdout, "Suggested runtime: %s\n", emptyFallback(suggestedRuntime))
+	fmt.Fprintf(r.stdout, "Readiness: ready\n")
+	fmt.Fprintf(r.stdout, "Next action: %s\n", handoffNextAction(sessionRecord.TaskID, targetRole, targetAgent))
+
+	return nil
+}
+
 type taskView struct {
 	Task          task.Record
 	Steps         []step.Record
@@ -1691,6 +1879,12 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 					fmt.Fprintf(r.stdout, "    %s=%s\n", label, hint)
 				}
 			}
+			fmt.Fprintf(
+				r.stdout,
+				"    artifacts=%s | log=%s\n",
+				taskArtifactRoot(result.Project.RepoPath, result.StateDir, item.Task.ID, item.Worktree),
+				taskArtifactLogPath(result.Project.RepoPath, result.StateDir, item.Task.ID, item.Worktree),
+			)
 			fmt.Fprintf(r.stdout, "    next=%s\n", recommendTaskAction(item.Task.Status, item.Steps, item.Worktree, item.WorktreeDrift))
 			for _, taskStep := range item.Steps {
 				fmt.Fprintf(
@@ -1722,6 +1916,8 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "  aom project init")
 	fmt.Fprintln(r.stdout, "  aom attach")
 	fmt.Fprintln(r.stdout, "  aom capture")
+	fmt.Fprintln(r.stdout, "  aom checkpoint")
+	fmt.Fprintln(r.stdout, "  aom handoff")
 	fmt.Fprintln(r.stdout, "  aom open")
 	fmt.Fprintln(r.stdout, "  aom plan")
 	fmt.Fprintln(r.stdout, "  aom step list")
@@ -1755,48 +1951,46 @@ func findAgent(agents []agent.Record, name string) (*agent.Record, error) {
 	return nil, fmt.Errorf("agent %q not found", name)
 }
 
-func sessionLaunchCommand(record session.Record, mockRuntime bool) string {
-	if mockRuntime {
-		return mockRuntimeShellCommand(record)
-	}
-
-	return placeholderShellCommand(record)
-}
-
-func placeholderShellCommand(record session.Record) string {
-	return fmt.Sprintf(
-		"sh -lc 'printf \"AOM session %s\\nagent=%s\\nrole=%s\\nruntime=%s\\n\"; exec ${SHELL:-sh}'",
-		record.ID,
-		record.AgentName,
-		record.RoleName,
-		record.Runtime,
-	)
-}
-
-func mockRuntimeShellCommand(record session.Record) string {
-	return fmt.Sprintf(
-		"sh -lc 'printf \"AOM mock runtime boot\\nsession=%s\\nagent=%s\\nrole=%s\\nruntime=%s\\nstate=ready-for-operator\\n\"; exec ${SHELL:-sh}'",
-		record.ID,
-		record.AgentName,
-		record.RoleName,
-		record.Runtime,
-	)
-}
-
-func launchModeLabel(mockRuntime bool) string {
-	if mockRuntime {
-		return "mock"
-	}
-
-	return "placeholder"
-}
-
 func emptyFallback(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "-"
 	}
 
 	return value
+}
+
+func taskArtifactRoot(repoPath, stateDir, taskID string, mapping *worktree.Record) string {
+	if mapping != nil && strings.TrimSpace(mapping.WorktreePath) != "" {
+		switch mapping.Status {
+		case worktree.StatusReady, worktree.StatusActive:
+			return filepath.Join(mapping.WorktreePath, ".agent")
+		}
+	}
+
+	return filepath.Join(repoPath, ".aom", stateDir, taskID)
+}
+
+func taskArtifactLogPath(repoPath, stateDir, taskID string, mapping *worktree.Record) string {
+	return filepath.Join(taskArtifactRoot(repoPath, stateDir, taskID, mapping), "log.md")
+}
+
+func taskHandoffPath(repoPath, stateDir, taskID string, mapping *worktree.Record) string {
+	return filepath.Join(taskArtifactRoot(repoPath, stateDir, taskID, mapping), "handoff.md")
+}
+
+func setLaunchMode(current *aomruntime.LaunchMode, next aomruntime.LaunchMode) error {
+	if current == nil {
+		return fmt.Errorf("launch mode target is required")
+	}
+	if *current == "" || *current == aomruntime.LaunchModePlaceholder {
+		*current = next
+		return nil
+	}
+	if *current == next {
+		return nil
+	}
+
+	return fmt.Errorf("--mock and --real cannot be used together")
 }
 
 func formatDependencies(values []string) string {
@@ -1825,6 +2019,82 @@ func buildPlanStepSeeds(steps []plan.StepProposal) []task.StepSeed {
 	return seeds
 }
 
+func activeStepID(steps []step.Record) string {
+	for _, item := range steps {
+		switch item.Status {
+		case "InProgress", "Ready", "Confirmed", "Blocked", "NeedsAttention", "Proposed":
+			return item.ID
+		}
+	}
+	return ""
+}
+
+func activeStepTitle(steps []step.Record) string {
+	for _, item := range steps {
+		switch item.Status {
+		case "InProgress", "Ready", "Confirmed", "Blocked", "NeedsAttention", "Proposed":
+			return item.Title
+		}
+	}
+	return ""
+}
+
+func changedFilesSummary(worktreePath, repoPath string) string {
+	target := strings.TrimSpace(worktreePath)
+	if target == "" {
+		target = strings.TrimSpace(repoPath)
+	}
+	if target == "" {
+		return "unavailable in current milestone"
+	}
+
+	if _, err := exec.LookPath("git"); err != nil {
+		return "unavailable in current milestone"
+	}
+
+	output, err := exec.Command("git", "-C", target, "status", "--short").CombinedOutput()
+	if err != nil {
+		return "unavailable in current milestone"
+	}
+	lines := strings.FieldsFunc(strings.TrimSpace(string(output)), func(r rune) bool { return r == '\n' })
+	if len(lines) == 0 || strings.TrimSpace(string(output)) == "" {
+		return "no local changes detected"
+	}
+	if len(lines) == 1 {
+		return strings.TrimSpace(lines[0])
+	}
+	return fmt.Sprintf("%d changed paths", len(lines))
+}
+
+func newCheckpointID() string {
+	return "CHK-" + fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+func resolveHandoffTarget(result *project.OpenResult, target string) (role string, agentName string, suggestedRuntime string, err error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", "", "", fmt.Errorf("handoff target is required")
+	}
+
+	for _, agentRecord := range result.Agents {
+		if agentRecord.Name == target {
+			return agentRecord.Role, agentRecord.Name, agentRecord.Runtime, nil
+		}
+	}
+	if _, ok := result.RoleConfigs[target]; ok {
+		return target, "", "", nil
+	}
+
+	return "", "", "", fmt.Errorf("handoff target %q did not match a known agent or role", target)
+}
+
+func handoffNextAction(taskID, role, agentName string) string {
+	if strings.TrimSpace(agentName) != "" {
+		return fmt.Sprintf("run \"aom session spawn %s --task %s\" to continue from the prepared handoff", agentName, taskID)
+	}
+	return fmt.Sprintf("choose an agent for role %s and spawn it against task %s", role, taskID)
+}
+
 func (r Runner) ensurePlannedWorktree(result *project.OpenResult, taskRecord task.Record) (*worktree.Record, error) {
 	worktreeService, worktreeDB, err := r.app.OpenWorktreeService(result.DBPath)
 	if err != nil {
@@ -1844,6 +2114,80 @@ func (r Runner) ensurePlannedWorktree(result *project.OpenResult, taskRecord tas
 	}
 
 	return worktreeService.EnsureProvisioned(record.TaskID, result.Project.RepoPath)
+}
+
+func (r Runner) validateTaskProvisioning(result *project.OpenResult) error {
+	worktreeService, worktreeDB, err := r.app.OpenWorktreeService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer worktreeDB.Close()
+
+	return worktreeService.ValidateProvisioningPreconditions(
+		result.Project.RepoPath,
+		result.Project.DefaultBranch,
+	)
+}
+
+func (r Runner) enforceWriterWorktreeBoundary(result *project.OpenResult, agentRecord *agent.Record, params sessionSpawnParams) error {
+	if result == nil || agentRecord == nil {
+		return nil
+	}
+	if strings.TrimSpace(params.taskID) == "" {
+		return nil
+	}
+	if roleWorktreeMode(result, agentRecord.Role) != "dedicated-writer" {
+		return nil
+	}
+
+	sessions, err := r.loadProjectSessions(result)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range sessions {
+		if item.TaskID != params.taskID {
+			continue
+		}
+		if strings.TrimSpace(params.ignoreSessionID) != "" && item.ID == params.ignoreSessionID {
+			continue
+		}
+		if roleWorktreeMode(result, item.RoleName) != "dedicated-writer" {
+			continue
+		}
+		if !writerSessionOccupiesWorktree(item.Status) {
+			continue
+		}
+		return fmt.Errorf(
+			"task %q already has active writer session %q (%s, status=%s); stop or replace it before starting another dedicated writer",
+			params.taskID,
+			item.ID,
+			item.AgentName,
+			item.Status,
+		)
+	}
+
+	return nil
+}
+
+func roleWorktreeMode(result *project.OpenResult, roleName string) string {
+	if result == nil {
+		return ""
+	}
+	role, ok := result.RoleConfigs[strings.TrimSpace(roleName)]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(role.WorktreeMode)
+}
+
+func writerSessionOccupiesWorktree(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "Created", "Booting", "Idle", "Working", "WaitingApproval", "WaitingHandoff", "Blocked", "Detached":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r Runner) resolveTaskExecutionPath(result *project.OpenResult, taskRecord task.Record) (*worktree.Record, string, error) {
@@ -2035,6 +2379,28 @@ func (r Runner) syncTaskArtifactsWithSession(result *project.OpenResult, taskID 
 	return r.syncTaskArtifactsWithSessionEvents(result, taskID, seed, activeSession, event)
 }
 
+func (r Runner) refreshTaskArtifacts(result *project.OpenResult, taskID string, activeSession *session.Record) error {
+	view, err := r.loadTaskView(result, taskID)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("task %q not found for artifact refresh", taskID)
+	}
+
+	service := artifact.NewService(result.Project.RepoPath, result.StateDir)
+	params := artifact.SyncParams{
+		Task:                  view.Task,
+		Steps:                 view.Steps,
+		ActiveSession:         activeSession,
+		Worktree:              view.Worktree,
+		CreatedBy:             "operator",
+		UpdatedBy:             "aom",
+		RecommendedNextAction: recommendTaskAction(view.Task.Status, view.Steps, view.Worktree, view.WorktreeDrift),
+	}
+	return service.RefreshTaskArtifacts(params)
+}
+
 func (r Runner) syncTaskArtifactsWithSessionEvents(result *project.OpenResult, taskID string, seed bool, activeSession *session.Record, events ...artifact.Event) error {
 	view, err := r.loadTaskView(result, taskID)
 	if err != nil {
@@ -2065,6 +2431,74 @@ func (r Runner) syncTaskArtifactsWithSessionEvents(result *project.OpenResult, t
 		return err
 	}
 	return service.AppendEvents(params, events)
+}
+
+func (r Runner) writeHandoffArtifact(result *project.OpenResult, view *taskView, sessionRecord session.Record, targetRole, targetAgent, suggestedRuntime, reason string) error {
+	if result == nil || view == nil {
+		return fmt.Errorf("handoff artifact context is required")
+	}
+
+	path := taskHandoffPath(result.Project.RepoPath, result.StateDir, view.Task.ID, view.Worktree)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create handoff dir: %w", err)
+	}
+
+	content := fmt.Sprintf(`# Handoff
+
+## Transfer
+- From Role: %s
+- From Agent: %s
+- From Session: %s
+- From Runtime: %s
+- To Role: %s
+- Suggested Runtime: %s
+- Task: %s
+- Step: %s
+- Reason: %s
+
+## Completed
+- Review current state in state.md before continuing
+- Continue from the current worktree and latest task log
+
+## Remaining
+- Continue the assigned step from the latest task context
+- Validate the current diff and task state before making new changes
+
+## Touched Files
+- %s
+
+## Constraints
+- Preserve the current task scope and worktree continuity
+- Start from AOM artifacts rather than transcript memory alone
+
+## Warnings
+- Review unresolved notes in log.md and state.md before continuing
+
+## Exact Next Action
+%s
+
+## Do Not Redo
+- Do not restart the task from scratch
+- Do not ignore the existing worktree and artifact context
+`,
+		sessionRecord.RoleName,
+		sessionRecord.AgentName,
+		sessionRecord.ID,
+		sessionRecord.Runtime,
+		targetRole,
+		emptyFallback(suggestedRuntime),
+		view.Task.ID,
+		emptyFallback(activeStepID(view.Steps)),
+		reason,
+		changedFilesSummary(sessionRecord.WorktreePath, sessionRecord.RepoPath),
+		handoffNextAction(view.Task.ID, targetRole, targetAgent),
+	)
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write handoff.md: %w", err)
+	}
+
+	return nil
 }
 
 func (r Runner) loadTaskByID(result *project.OpenResult, taskID string) (*task.Record, error) {
