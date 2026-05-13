@@ -4,6 +4,7 @@ This repository now contains both planning documents and the current implementat
 
 Key documents:
 - Current status and handoff: [docs/current-status.md](docs/current-status.md)
+- Experimental real-agent E2E plan: [docs/experimental-agent-e2e-plan.md](docs/experimental-agent-e2e-plan.md)
 - Main planning document: [docs/AOM-planning.md](docs/AOM-planning.md)
 - Milestone plan: [docs/AOM-milestones.md](docs/AOM-milestones.md)
 - Milestone 1 implementation plan: [docs/milestone-1-implementation-plan.md](docs/milestone-1-implementation-plan.md)

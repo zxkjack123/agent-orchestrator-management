@@ -314,6 +314,7 @@ Current state:
 - live tmux E2E is verified on macOS with working `tmux`
 - the earlier Windows environment did not successfully run live tmux E2E
 - the earlier Windows execution context did not have a working `tmux` path or usable `wsl.exe`
+- the current Windows handoff environment is still not suitable for meaningful live tmux plus real-agent E2E validation
 
 What this means:
 - code and tests for tmux logic pass
@@ -323,6 +324,7 @@ What this means:
 Recommended path for live E2E:
 - Linux or macOS should work best for continued live runtime validation
 - Windows still needs a working WSL + tmux path if it is used again for live checks
+- the next real-agent smoke work should be executed on a machine with verified `tmux`, `git`, and target runtime availability
 
 ## What Is Intentionally Not Done Yet
 
@@ -345,6 +347,11 @@ Current next recommended slice:
 1. decide whether repair and replacement outcomes should append richer canonical detail such as classified drift kind or supersession policy reason in `log.md`
 2. decide whether additional replacement end states beyond `Detached -> Archived` are worth automating, or whether other cases should remain explicitly operator-driven
 3. decide whether dirty unregistered worktree paths need a dedicated inspect/report command instead of relying on `status`, `task show`, and repair hints alone
+
+Planned validation-oriented slice after that:
+1. use [docs/experimental-agent-e2e-plan.md](C:\Users\lattapon.kea\Desktop\Agents-Orchestfator-Management\docs\experimental-agent-e2e-plan.md) to add an opt-in experimental real-agent launch path for one runtime
+2. verify that slice on macOS or Linux before treating it as a stable workflow
+3. use findings from that smoke path to inform Milestone 5 and later Milestone 10 work
 
 ## Suggested First Checks On Another Machine
 
