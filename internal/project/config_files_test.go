@@ -8,12 +8,13 @@ import (
 )
 
 func TestWriteConfigFilesRendersTemplates(t *testing.T) {
-	aomPath := filepath.Join(t.TempDir(), ".aom")
+	root := t.TempDir()
+	aomPath := filepath.Join(root, ".aom")
 	if err := os.MkdirAll(aomPath, 0o755); err != nil {
 		t.Fatalf("MkdirAll failed: %v", err)
 	}
 
-	err := writeConfigFiles(aomPath, "my-app", "/repos/my-app", "main", "my-app", "")
+	err := writeConfigFiles(aomPath, "my-app", root, "main", "my-app", "")
 	if err != nil {
 		t.Fatalf("writeConfigFiles failed: %v", err)
 	}
@@ -32,6 +33,14 @@ func TestWriteConfigFilesRendersTemplates(t *testing.T) {
 	}
 	if !strings.Contains(string(agentsData), "backend-main:") {
 		t.Fatalf("agents.yaml = %q, want baseline agent template", string(agentsData))
+	}
+
+	gitignoreData, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatalf("ReadFile(.gitignore) failed: %v", err)
+	}
+	if !strings.Contains(string(gitignoreData), ".agent/") {
+		t.Fatalf(".gitignore = %q, want .agent entry", string(gitignoreData))
 	}
 }
 
@@ -58,7 +67,7 @@ func TestWriteConfigFilesUsesCustomTemplateDir(t *testing.T) {
 		}
 	}
 
-	err := writeConfigFiles(aomPath, "my-app", "/repos/my-app", "main", "my-app", templateDir)
+	err := writeConfigFiles(aomPath, "my-app", root, "main", "my-app", templateDir)
 	if err != nil {
 		t.Fatalf("writeConfigFiles failed: %v", err)
 	}
@@ -69,6 +78,36 @@ func TestWriteConfigFilesUsesCustomTemplateDir(t *testing.T) {
 	}
 	if !strings.Contains(string(agentsData), "custom-main:") {
 		t.Fatalf("agents.yaml = %q, want custom template content", string(agentsData))
+	}
+}
+
+func TestWriteConfigFilesAppendsAgentIgnoreWithoutOverwritingExistingGitignore(t *testing.T) {
+	root := t.TempDir()
+	aomPath := filepath.Join(root, ".aom")
+	if err := os.MkdirAll(aomPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.gitignore) failed: %v", err)
+	}
+
+	if err := writeConfigFiles(aomPath, "my-app", root, "main", "my-app", ""); err != nil {
+		t.Fatalf("writeConfigFiles failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatalf("ReadFile(.gitignore) failed: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "node_modules/") {
+		t.Fatalf(".gitignore = %q, want existing content preserved", content)
+	}
+	if !strings.Contains(content, ".agent/") {
+		t.Fatalf(".gitignore = %q, want .agent entry", content)
+	}
+	if strings.Count(content, ".agent/") != 1 {
+		t.Fatalf(".gitignore = %q, want one .agent entry", content)
 	}
 }
 

@@ -141,6 +141,25 @@ func (m *Manager) CreatePane(sessionTarget, repoPath, command string) (*PaneBind
 
 	output, err := m.exec(
 		availability.BinaryPath,
+		"new-window",
+		"-d",
+		"-P",
+		"-F",
+		"#{window_id} #{pane_id}",
+		"-t",
+		sessionTarget,
+		"-c",
+		repoPath,
+		command,
+	)
+	if err == nil {
+		if binding, parseErr := parsePaneBindingOutput(output); parseErr == nil {
+			return binding, nil
+		}
+	}
+
+	output, err = m.exec(
+		availability.BinaryPath,
 		"split-window",
 		"-d",
 		"-P",
@@ -156,15 +175,7 @@ func (m *Manager) CreatePane(sessionTarget, repoPath, command string) (*PaneBind
 		return nil, fmt.Errorf("create tmux pane in %q: %w", sessionTarget, err)
 	}
 
-	fields := strings.Fields(strings.TrimSpace(string(output)))
-	if len(fields) != 2 {
-		return nil, fmt.Errorf("parse tmux pane binding output %q", strings.TrimSpace(string(output)))
-	}
-
-	return &PaneBinding{
-		WindowID: fields[0],
-		PaneID:   fields[1],
-	}, nil
+	return parsePaneBindingOutput(output)
 }
 
 // AnnotatePane stores AOM metadata on a pane using tmux user options.
@@ -363,4 +374,16 @@ func sanitizeName(value string) string {
 	}
 
 	return result
+}
+
+func parsePaneBindingOutput(output []byte) (*PaneBinding, error) {
+	fields := strings.Fields(strings.TrimSpace(string(output)))
+	if len(fields) != 2 {
+		return nil, fmt.Errorf("parse tmux pane binding output %q", strings.TrimSpace(string(output)))
+	}
+
+	return &PaneBinding{
+		WindowID: fields[0],
+		PaneID:   fields[1],
+	}, nil
 }

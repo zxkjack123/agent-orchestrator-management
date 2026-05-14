@@ -2884,7 +2884,7 @@ func roleWorktreeMode(result *project.OpenResult, roleName string) string {
 
 func writerSessionOccupiesWorktree(status string) bool {
 	switch strings.TrimSpace(status) {
-	case "Created", "Booting", "Idle", "Working", "WaitingApproval", "WaitingHandoff", "Blocked", "Detached":
+	case "Created", "Booting", "Idle", "Working", "WaitingApproval", "WaitingHandoff", "Blocked":
 		return true
 	default:
 		return false

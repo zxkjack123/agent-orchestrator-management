@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"text/template"
 )
 
@@ -47,6 +48,39 @@ func writeConfigFiles(aomPath, name, repoPath, defaultBranch, sessionPrefix, tem
 		}
 	}
 
+	if err := ensureRootGitignore(repoPath); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ensureRootGitignore(repoPath string) error {
+	path := filepath.Join(repoPath, ".gitignore")
+	const entry = ".agent/"
+
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read .gitignore: %w", err)
+	}
+	if strings.Contains(string(data), entry) {
+		return nil
+	}
+
+	var content string
+	if len(data) == 0 {
+		content = entry + "\n"
+	} else {
+		content = string(data)
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		content += entry + "\n"
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write .gitignore: %w", err)
+	}
 	return nil
 }
 

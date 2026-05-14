@@ -474,7 +474,7 @@ func TestExecuteSessionSpawnWithRealClaudeRuntime(t *testing.T) {
 	if len(splitCommands) != 1 {
 		t.Fatalf("len(splitCommands) = %d, want 1", len(splitCommands))
 	}
-	if splitCommands[0] != "sh -lc 'exec claude'" {
+	if splitCommands[0] != "sh -lc 'exec claude --dangerously-skip-permissions'" {
 		t.Fatalf("split command = %q, want claude exec launch", splitCommands[0])
 	}
 }
@@ -1137,6 +1137,111 @@ func TestExecuteSessionSpawnAllowsReadOnlyRoleAlongsideDedicatedWriter(t *testin
 	}
 	if splitCount != 2 {
 		t.Fatalf("splitCount = %d, want both sessions launched", splitCount)
+	}
+}
+
+func TestExecuteSessionSpawnAllowsReplacementAfterDetachedWriter(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for detached writer integration test")
+	}
+
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repoRoot}, args...)...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(output))
+		}
+	}
+
+	runGit("init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	runGit("add", "README.md")
+	runGit("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+
+	firstHasSession := true
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(name string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
+			case "set-option":
+				return nil, nil
+			case "display-message":
+				return nil, errors.New("pane not found")
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"task", "create", "Detached writer should not block respawn", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+	if taskID == "" {
+		t.Fatalf("could not extract task id from %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("first session spawn failed: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"status"}, &stdout, &stderr); err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "status=Detached") {
+		t.Fatalf("stdout = %q, want detached status after reconciliation", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("second session spawn failed after detached reconciliation: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Session spawned") {
+		t.Fatalf("stdout = %q, want spawn success", out)
 	}
 }
 

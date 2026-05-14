@@ -75,6 +75,9 @@ func (b *Builder) execRuntimeCommand(runtimeName string) (string, error) {
 	if _, err := b.lookPath(runtimeName); err != nil {
 		return "", fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", runtimeName, runtimeName)
 	}
+	if runtimeName == "claude" {
+		return "sh -lc 'exec claude --dangerously-skip-permissions'", nil
+	}
 	return fmt.Sprintf("sh -lc 'exec %s'", runtimeName), nil
 }
 

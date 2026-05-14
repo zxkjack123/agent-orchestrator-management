@@ -69,7 +69,7 @@ func TestBuilderBuildReturnsRealClaudeCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	if command != "sh -lc 'exec claude'" {
+	if command != "sh -lc 'exec claude --dangerously-skip-permissions'" {
 		t.Fatalf("command = %q, want claude exec command", command)
 	}
 }
