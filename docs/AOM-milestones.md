@@ -473,6 +473,58 @@ Polish the control experience after the workflow and continuity model are stable
 
 - a functional but clumsy operator experience
 
+## Milestone 12: Agent Team Collaboration
+
+### Goal
+
+Enable agents to communicate directly with each other through shared artifacts and
+broadcast messaging, moving beyond the orchestrator-relay model toward a genuine
+multi-agent team where agents can read each other's contributions and respond
+without the operator acting as a message intermediary.
+
+### Context
+
+Live multi-agent E2E testing (2026-05-14) confirmed that the current model works
+as orchestrator-mediated relay: the orchestrator reads one agent's output via
+`aom capture` then forwards it manually to the next agent via `aom session send`.
+This works but is not a team — it is a pipeline. For discussion-style collaboration
+(design reviews, consensus building, parallel analysis) agents need shared state
+they can all read and write.
+
+### Scope
+
+- shared channel artifact at `.aom/channel.md` readable and appendable by all agents
+- `aom broadcast <message> --sessions <id,id,id>` to deliver the same prompt to multiple sessions at once
+- `aom watch [--task <task-id>] [--event <type>] [--timeout <duration>]` to poll `log.md` and block until a target event appears, enabling scripted and AI-driven orchestrator loops without busy-polling
+
+### Deliverables
+
+- channel artifact schema and append/read semantics in `docs/artifact-schemas.md`
+- `aom channel append <message> --agent <name>` writes a timestamped entry to `.aom/channel.md`
+- `aom channel read` prints the current channel contents
+- `aom broadcast` command
+- `aom watch` command with configurable event filter and timeout
+
+### Suggested commands
+
+- `aom channel append`
+- `aom channel read`
+- `aom broadcast`
+- `aom watch`
+
+### Acceptance criteria
+
+- three agents can each read and append to `.aom/channel.md` without conflicts
+- orchestrator can broadcast a brief to all agents in one command
+- orchestrator loop can block on `aom watch --event handoff.prepared` and proceed automatically when triggered
+- the pattern supports a "meeting" flow: broadcast → agents write to channel → orchestrator reads channel → synthesizes result
+
+### Risks addressed
+
+- orchestrator context bloat from manually relaying all inter-agent communication
+- inability to run unattended multi-agent workflows without a human in the loop
+- agents producing isolated outputs with no awareness of peers
+
 ## Recommended Order
 
 The recommended working order is:
@@ -487,6 +539,9 @@ The recommended working order is:
 8. Milestone 7
 9. Milestone 8
 10. Milestone 9
+11. Milestone 10
+12. Milestone 11
+13. Milestone 12
 11. Milestone 10
 12. Milestone 11
 

@@ -182,6 +182,19 @@ Implemented in the fifth slice:
 - task-bound `session spawn` now seeds a non-destructive `handoff.md` template in the canonical artifact root
 - seeded handoff templates now include current session, runtime, task, step, and a default next-action reminder for the assigned worker
 
+### Post-Milestone-6 Fixes and Improvements
+
+Implemented after live multi-agent E2E testing on macOS (2026-05-14/15):
+
+- `CreatePane` now uses `new-window` instead of `split-window` so each agent session gets its own full-size tmux window; previously all sessions shared one window and panes shrank until Codex TUI crashed
+- `SendKeys` now inserts a 50ms pause between literal text delivery and Enter so TUI apps (codex, claude) finish buffering before submission
+- macOS symlink path fix in `internal/worktree/service.go`: `filepath.EvalSymlinks` resolves `/tmp` → `/private/tmp` before worktree path comparison to prevent false `NeedsRepair` status
+- `--dangerously-skip-permissions` is now passed to `claude` on `--real` spawn so Claude Code does not block unattended orchestration with interactive approval prompts
+- stale `Detached` sessions no longer block `session spawn` for the same task; they are auto-transitioned to `Stopped` before the new session is created
+- `project init` now adds `.agent/` to `.gitignore` so worktree-local artifacts are not committed to main and do not cause merge conflicts
+- `project init --agents` now accepts inline agent definitions in `name:role:runtime` form (e.g. `frontend-main:builder:claude`) allowing custom agents not in the default template
+- `aom help` output rewritten to be agent-readable: includes operator workflow sequence, grouped command reference, and key rules in under 60 lines
+
 ## Current CLI Surface
 
 Implemented commands:
@@ -446,9 +459,10 @@ Recommended path for live E2E:
 ## What Is Intentionally Not Done Yet
 
 Still out of scope at the current handoff point:
-- first-class real-runtime launch for runtimes beyond the current `codex` and `claude` slice
+- first-class real-runtime launch for runtimes beyond the current `codex` and `claude` slice (gemini, kiro)
 - provider-native resume flows
 - richer review and unresolved review-item handling under Milestone 6
+- agent-to-agent communication (shared channel, broadcast, event-driven dispatch) — tracked as Milestone 12
 
 ## AI Orchestrator Path
 
@@ -514,23 +528,17 @@ replace.
 
 ## Immediate Next Step
 
-Next milestone to continue:
-- `Milestone 6: Handoff and Checkpoint Flow`
+Milestone 6 is substantially complete. The current work boundary is:
 
-Recommended first implementation slice:
-1. decide whether reused reviewer sessions should eventually receive an explicit prompt delivery flow once `session send` exists
-2. decide whether mixed-owner review findings should also be reflected in a dedicated event type or artifact field instead of only output wording
-3. decide whether follow-up step owner hint updates from review findings should ever create a new fix step instead of reusing the latest non-review step
+- Milestone 7 (Manual Intervention and Re-analysis) is the next unstarted milestone
+- Milestone 12 (Agent Team Collaboration) is the newly identified next major capability
 
-Current next recommended slice:
-1. decide whether checkpoint output should capture richer changed-file summaries from git state inside the task worktree
-2. decide whether `handoff` should update task ownership directly or remain session-scoped until the receiving session starts
-3. decide whether repair and replacement outcomes need richer canonical detail such as drift-kind or supersession policy reason in `log.md`
+Recommended next slices in priority order:
 
-Planned validation-oriented slice after that:
-1. extend the real-runtime validation path beyond `codex` only if a concrete next runtime is agreed
-2. verify follow-up runtime slices on macOS or Linux before treating them as stable workflows
-3. use findings from those smoke paths to inform later Milestone 6 and Milestone 10 work
+1. **Milestone 7 — `aom task reanalyze`**: refresh index.md and recommend next action after manual operator intervention; record `operator.intervention` events more richly
+2. **Milestone 12 — Shared channel artifact**: add `.aom/channel.md` as a shared read/write space for multi-agent discussion; all agents can append and read without going through the orchestrator
+3. **Milestone 12 — `aom broadcast`**: send the same prompt to multiple sessions in one command
+4. **Milestone 12 — Event-driven dispatch**: `aom watch` monitors `log.md` for `handoff.prepared` or `task.completed` events and triggers next-agent routing automatically
 
 ## System Diagrams
 
