@@ -390,19 +390,30 @@ func (s *Service) isRegistered(repoPath, worktreePath string) (bool, error) {
 		return false, fmt.Errorf("inspect git worktree registration: %s", strings.TrimSpace(string(output)))
 	}
 
-	expected := filepath.Clean(worktreePath)
+	expected := normalizePath(worktreePath)
 	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "worktree ") {
 			continue
 		}
 		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-		if filepath.Clean(path) == expected {
+		if normalizePath(path) == expected {
 			return true, nil
 		}
 	}
 
 	return false, nil
+}
+
+// normalizePath resolves symlinks and cleans a path for comparison.
+// On macOS /tmp is a symlink to /private/tmp; without this git worktree
+// list returns /private/... while stored paths use /tmp/..., causing false
+// NeedsRepair classifications.
+func normalizePath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
 }
 
 func (s *Service) addWorktree(repoPath string, record *Record) error {
