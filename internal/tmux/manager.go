@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 const defaultProjectSessionPrefix = "aom"
@@ -241,6 +242,48 @@ func (m *Manager) CapturePane(paneID string) (string, error) {
 	}
 
 	return string(output), nil
+}
+
+// SendKeys sends a literal message followed by Enter into a live tmux pane.
+func (m *Manager) SendKeys(paneID, message string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available in the current environment")
+	}
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if strings.TrimSpace(message) == "" {
+		return fmt.Errorf("message is required")
+	}
+
+	if _, err := m.exec(
+		availability.BinaryPath,
+		"send-keys",
+		"-t",
+		paneID,
+		"-l",
+		message,
+	); err != nil {
+		return fmt.Errorf("send literal keys to tmux pane %q: %w", paneID, err)
+	}
+
+	// Brief pause so interactive TUI apps (codex, claude) finish buffering
+	// the literal text before the Enter key arrives. Without this, complex
+	// TUI input widgets may drop the submission on fast machines.
+	time.Sleep(50 * time.Millisecond)
+
+	if _, err := m.exec(
+		availability.BinaryPath,
+		"send-keys",
+		"-t",
+		paneID,
+		"Enter",
+	); err != nil {
+		return fmt.Errorf("send enter to tmux pane %q: %w", paneID, err)
+	}
+
+	return nil
 }
 
 // PaneExists reports whether the given pane target is still live in tmux.
