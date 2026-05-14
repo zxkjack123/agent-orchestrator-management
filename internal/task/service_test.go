@@ -203,3 +203,39 @@ func TestDefaultTaskIDGeneratorProducesDistinctIDs(t *testing.T) {
 		t.Fatalf("second id = %q, want STEP- prefix", second)
 	}
 }
+
+func TestServiceAssignOwnerAllowsClearingPreferredAgent(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "sessions.db")
+	sqlDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open failed: %v", err)
+	}
+	defer sqlDB.Close()
+
+	service := NewServiceWithGenerators(
+		sqlDB,
+		func() string { return "TASK-001" },
+		func() string { return "STEP-001" },
+	)
+
+	result, err := service.Create(CreateParams{
+		ProjectID:      "proj-1",
+		Title:          "Implement task flow",
+		PreferredRole:  "backend",
+		PreferredAgent: "backend-main",
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	record, err := service.AssignOwner(result.Task.ID, "reviewer", "")
+	if err != nil {
+		t.Fatalf("AssignOwner failed: %v", err)
+	}
+	if record.PreferredRole != "reviewer" {
+		t.Fatalf("PreferredRole = %q, want reviewer", record.PreferredRole)
+	}
+	if record.PreferredAgent != "" {
+		t.Fatalf("PreferredAgent = %q, want empty", record.PreferredAgent)
+	}
+}

@@ -254,6 +254,18 @@ For any non-trivial implementation task:
 
 If verification is not possible, say so explicitly.
 
+### Test Workflow
+
+When a task requires running tests, use this workflow by default:
+
+- spawn a dedicated sub-agent for test work
+- keep the main agent focused on implementation changes
+- have the test sub-agent run tests, inspect failures, and report feedback
+- have the test sub-agent own test-case maintenance needed to keep verification aligned with the current system behavior
+- use the feedback from the test sub-agent to drive the next implementation or fix step
+
+This is the default working process for this repository unless the operator explicitly asks to do otherwise.
+
 ## Document Priority
 
 When instructions conflict, use this order:

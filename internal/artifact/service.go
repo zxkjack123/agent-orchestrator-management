@@ -29,6 +29,8 @@ type SyncParams struct {
 	Steps                 []step.Record
 	ActiveSession         *session.Record
 	Worktree              *worktree.Record
+	ReviewOwnerHint       string
+	ReviewOwnerAmbiguous  bool
 	CreatedBy             string
 	UpdatedBy             string
 	RecommendedNextAction string
@@ -85,6 +87,27 @@ func (s *Service) SeedTaskArtifacts(params SyncParams) error {
 // RefreshTaskArtifacts rewrites the current task state artifacts without changing the timeline.
 func (s *Service) RefreshTaskArtifacts(params SyncParams) error {
 	return s.writeArtifacts(params)
+}
+
+// EnsureReviewNotesTemplate creates or refreshes a structured review-notes.md template.
+func (s *Service) EnsureReviewNotesTemplate(params SyncParams, reviewer, sessionID string) error {
+	dir := s.taskDir(params)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create artifact dir %q: %w", dir, err)
+	}
+
+	path := filepath.Join(dir, "review-notes.md")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat review-notes.md: %w", err)
+	}
+
+	content := s.renderReviewNotesMarkdown(params, reviewer, sessionID)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write review-notes.md: %w", err)
+	}
+	return nil
 }
 
 // AppendEvent records one canonical task log event.
@@ -288,6 +311,8 @@ func (s *Service) renderIndexMarkdown(params SyncParams) string {
 		worktreeStatus = params.Worktree.Status
 	}
 	checkpointID, checkpointAt := s.latestCheckpointInfo(params)
+	reviewCount := CountUnresolvedReviewItems(filepath.Join(s.taskDir(params), "review-notes.md"))
+	reviewOwnerHint := s.reviewOwnerHintLine(params)
 
 	return fmt.Sprintf(`# Task Index
 
@@ -314,7 +339,8 @@ func (s *Service) renderIndexMarkdown(params SyncParams) string {
 - Last Checkpoint At: %s
 
 ## Attention
-- Unresolved Review Items: 0
+- Unresolved Review Items: %d
+- Review Owner Hint: %s
 - Pending Approvals: 0
 - Session Recovery Status: %s
 
@@ -334,8 +360,44 @@ func (s *Service) renderIndexMarkdown(params SyncParams) string {
 		s.renderArtifactInventory(params),
 		checkpointID,
 		checkpointAt,
+		reviewCount,
+		reviewOwnerHint,
 		recoveryStatus,
 		emptyFallback(params.RecommendedNextAction),
+	)
+}
+
+func (s *Service) reviewOwnerHintLine(params SyncParams) string {
+	if params.ReviewOwnerAmbiguous {
+		return "mixed owners - operator must choose"
+	}
+	if strings.TrimSpace(params.ReviewOwnerHint) != "" {
+		return params.ReviewOwnerHint
+	}
+	return "-"
+}
+
+func (s *Service) renderReviewNotesMarkdown(params SyncParams, reviewer, sessionID string) string {
+	activeStep := selectActiveStep(params.Steps)
+	reviewStepID := "-"
+	if activeStep != nil {
+		reviewStepID = activeStep.ID
+	}
+
+	return fmt.Sprintf(`# Review Notes
+
+## Summary
+- Review Step: %s
+- Reviewer: %s
+- Session: %s
+- Status: Pending review
+
+## Items
+- No findings recorded yet
+`,
+		reviewStepID,
+		emptyFallback(reviewer),
+		emptyFallback(sessionID),
 	)
 }
 
@@ -596,6 +658,107 @@ func defaultActor(value string) string {
 		return "aom"
 	}
 	return strings.TrimSpace(value)
+}
+
+// CountUnresolvedReviewItems returns the number of review note items whose status is not resolved.
+func CountUnresolvedReviewItems(path string) int {
+	items := parseReviewItems(path)
+	count := 0
+	for _, item := range items {
+		if !isResolvedReviewStatus(item.Status) {
+			count++
+		}
+	}
+	return count
+}
+
+// SuggestedReviewOwner returns the shared unresolved owner when all open review items point to one owner.
+func SuggestedReviewOwner(path string) string {
+	owner, ambiguous := ReviewOwnerHint(path)
+	if ambiguous {
+		return ""
+	}
+	return owner
+}
+
+// ReviewOwnerHint returns the shared unresolved owner and whether the unresolved owner signals are ambiguous.
+func ReviewOwnerHint(path string) (string, bool) {
+	items := parseReviewItems(path)
+	owner := ""
+	for _, item := range items {
+		if isResolvedReviewStatus(item.Status) {
+			continue
+		}
+		currentOwner := strings.TrimSpace(item.Owner)
+		if currentOwner == "" {
+			return "", true
+		}
+		if owner == "" {
+			owner = currentOwner
+			continue
+		}
+		if !strings.EqualFold(owner, currentOwner) {
+			return "", true
+		}
+	}
+	return owner, false
+}
+
+type reviewItem struct {
+	Status string
+	Owner  string
+}
+
+func parseReviewItems(path string) []reviewItem {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	lines := strings.Split(string(data), "\n")
+	items := make([]reviewItem, 0)
+	inItem := false
+	current := reviewItem{}
+	flush := func() {
+		if !inItem {
+			return
+		}
+		current.Status = strings.ToLower(strings.TrimSpace(current.Status))
+		current.Owner = strings.TrimSpace(current.Owner)
+		items = append(items, current)
+		inItem = false
+		current = reviewItem{}
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "### ") {
+			flush()
+			inItem = true
+			continue
+		}
+		if !inItem {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- Status:") {
+			current.Status = strings.TrimSpace(strings.TrimPrefix(trimmed, "- Status:"))
+		}
+		if strings.HasPrefix(trimmed, "- Owner:") {
+			current.Owner = strings.TrimSpace(strings.TrimPrefix(trimmed, "- Owner:"))
+		}
+	}
+	flush()
+
+	return items
+}
+
+func isResolvedReviewStatus(status string) bool {
+	switch status {
+	case "resolved", "closed", "fixed", "done", "accepted":
+		return true
+	default:
+		return false
+	}
 }
 
 func defaultEventIDGenerator() string {

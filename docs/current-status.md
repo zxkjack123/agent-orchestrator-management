@@ -149,6 +149,26 @@ Implemented in the first slice:
 - task artifact refresh now surfaces latest checkpoint and handoff presence in `index.md`
 - handoff flow now marks the source session `WaitingHandoff`
 
+Implemented in the second slice:
+- `aom review` as a lightweight review workflow wrapper
+- `review-notes.md` template creation and refresh in the canonical task artifact root
+- unresolved review item counting from `review-notes.md`
+- `index.md`, `task show`, and `status` now surface unresolved review state
+- review-driven next-action hints now prefer resolving open review items before continuing implementation
+- `review` now degrades cleanly on environments without tmux by preparing artifacts without requiring live session spawn
+- `handoff` now transfers task ownership and active-step ownership to the target role or agent immediately while leaving actual execution start to the receiving session
+- `review` now reuses an existing review step when possible and otherwise creates a new explicit `review` step with reviewer ownership and simple dependency seeding
+- `review` now prefers reusing an existing live reviewer session for the same task and agent before spawning a new reviewer pane
+- `review` now promotes task and review-step state conservatively: preparation without a live reviewer session moves them to `Ready`, while a live reviewer session moves them to `InProgress`
+- `review-notes.md` template seeding is now non-destructive and preserves existing review findings on repeated `review` runs
+- when unresolved review findings already exist while the review task is active, `review` now moves the task and review step to `NeedsAttention` automatically
+- `handoff` to a role-only target now resets `InProgress` or `Blocked` task/step state back to `Ready` so work is no longer shown as actively owned by the source session
+- unresolved review findings now derive a conservative preferred-owner hint from `review-notes.md`; when all open findings point to one owner role, the task preferred owner is reset to that role with no pinned agent
+- review owner hints now surface directly in `status`, `task show`, and `index.md`; mixed unresolved owners are called out explicitly as an operator ambiguity
+- review owner ambiguity now changes next-action guidance directly: one shared owner routes follow-up work to that role, while mixed owners force an explicit operator choice
+- when a shared review owner hint matches exactly one enabled project agent, AOM now auto-picks that concrete agent for preferred follow-up ownership instead of leaving the hint role-only
+- when review findings infer a single follow-up owner, AOM now also updates the latest non-review follow-up step owner hint to match that role or agent
+
 ## Current CLI Surface
 
 Implemented commands:
@@ -173,6 +193,7 @@ Implemented commands:
 - `aom capture`
 - `aom checkpoint`
 - `aom handoff`
+- `aom review`
 
 Current behavior notes:
 - `open` ensures tmux workspace and fails clearly when tmux is unavailable
@@ -216,6 +237,21 @@ Current behavior notes:
 - task-bound `session spawn` now blocks a second `dedicated-writer` from occupying the same task worktree while still allowing read-only roles such as reviewers
 - `checkpoint` appends a canonical checkpoint event, refreshes task artifacts, and reports the latest checkpoint summary
 - `handoff` writes `handoff.md`, records `handoff.prepared`, refreshes task artifacts, and moves the current session to `WaitingHandoff`
+- `handoff` now also updates task preferred owner and active-step owner to the target role or agent immediately
+- `review <task-id>` prepares `review-notes.md`, records `review.prepared`, and spawns the reviewer session when tmux is available
+- `review <task-id>` now binds the reviewer session to an explicit review step when tmux is available
+- `review <task-id>` now reuses an existing `Idle` or `WaitingHandoff` reviewer session for the same task when possible instead of spawning a duplicate pane
+- `review <task-id>` still prepares review context on Windows or other tmux-unavailable environments and prints a follow-up action instead of failing after artifact setup
+- `review <task-id>` now promotes `Planned -> Ready` during review preparation and promotes `Ready -> InProgress` once a reviewer session is live
+- `review <task-id>` now preserves existing `review-notes.md` content and, when unresolved findings are present during active review, pushes task and review step state to `NeedsAttention`
+- `handoff <session-id> --to <role>` now clears the specific agent owner and returns active task/step state from `InProgress` or `Blocked` to `Ready`
+- repeated `review <task-id>` runs now use open `review-notes.md` owners to steer preferred follow-up ownership back to the fixing role when the findings all agree on one owner
+- `status`, `task show`, and `index.md` now distinguish a single shared review owner hint from mixed-owner ambiguity and adjust next-action guidance accordingly
+- mixed-owner review findings now surface as a first-class operator ambiguity instead of looking like a normal single-owner follow-up
+- single-owner review hints now surface as concrete agent-level guidance when the hinted role has exactly one enabled agent available
+- single-owner review hints now flow into both task-level preferred ownership and the latest non-review follow-up step owner hint
+- `index.md`, `task show`, and `status` now count unresolved review items from structured `review-notes.md`
+- when unresolved review items are open, task next-action guidance now prefers addressing review findings before continuing implementation
 - `attach` and `capture` operate through the tmux manager abstraction
 
 ## Current Packages
@@ -337,9 +373,12 @@ Last verified state before this handoff:
     - `status` prints `artifacts=... | log=...` under each task
   - focused one-writer-per-worktree coverage:
     - a second `dedicated-writer` on the same task is rejected while read-only roles can still attach to the task context
-  - focused checkpoint and handoff coverage:
-    - `checkpoint <session-id>` appends `checkpoint.created`, refreshes `index.md`, and prints checkpoint metadata
-    - `handoff <session-id> --to <role-or-agent>` writes `handoff.md`, appends `handoff.prepared`, and moves the source session to `WaitingHandoff`
+- focused checkpoint and handoff coverage:
+  - `checkpoint <session-id>` appends `checkpoint.created`, refreshes `index.md`, and prints checkpoint metadata
+  - `handoff <session-id> --to <role-or-agent>` writes `handoff.md`, appends `handoff.prepared`, and moves the source session to `WaitingHandoff`
+- focused review wrapper and unresolved review coverage:
+  - `review <task-id>` writes `review-notes.md` and returns a tmux-unavailable follow-up hint without failing on Windows-style environments
+  - `status` and `task show` surface unresolved review item counts and review-driven next actions from `review-notes.md`
 
 Suggested verification commands on a new machine:
 
@@ -466,9 +505,9 @@ Next milestone to continue:
 - `Milestone 6: Handoff and Checkpoint Flow`
 
 Recommended first implementation slice:
-1. add `aom review` for structured `review-notes.md`
-2. decide how owner transition should be recorded after `handoff`
-3. surface unresolved review state in `index.md` and `status`
+1. decide whether reused reviewer sessions should eventually receive an explicit prompt delivery flow once `session send` exists
+2. decide whether mixed-owner review findings should also be reflected in a dedicated event type or artifact field instead of only output wording
+3. decide whether follow-up step owner hint updates from review findings should ever create a new fix step instead of reusing the latest non-review step
 
 Current next recommended slice:
 1. decide whether checkpoint output should capture richer changed-file summaries from git state inside the task worktree

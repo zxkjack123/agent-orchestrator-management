@@ -269,6 +269,31 @@ func (s *Service) Close(id string) (*Record, error) {
 	return s.Update(id, UpdateParams{Status: "Done"})
 }
 
+// AssignOwner updates task ownership explicitly, including clearing the preferred agent when needed.
+func (s *Service) AssignOwner(id, roleName, agentName string) (*Record, error) {
+	record, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, fmt.Errorf("task %q not found", strings.TrimSpace(id))
+	}
+
+	next := *record
+	next.PreferredRole = strings.TrimSpace(roleName)
+	next.PreferredAgent = strings.TrimSpace(agentName)
+
+	if next.PreferredRole == record.PreferredRole && next.PreferredAgent == record.PreferredAgent {
+		return record, nil
+	}
+
+	if err := s.repo.Upsert(next); err != nil {
+		return nil, err
+	}
+
+	return s.repo.GetByID(next.ID)
+}
+
 func normalizeMode(input string) (string, error) {
 	value := strings.TrimSpace(input)
 	if value == "" {

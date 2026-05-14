@@ -12,6 +12,7 @@ import (
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/app"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
 	aomruntime "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/runtime"
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/tmux"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/worktree"
 )
@@ -1020,6 +1021,24 @@ func TestExecuteHandoffWritesHandoffArtifactAndMarksSessionWaiting(t *testing.T)
 	if !strings.Contains(string(indexData), "handoff.md: present") {
 		t.Fatalf("index.md = %q, want handoff artifact inventory", string(indexData))
 	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task show failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Preferred role: reviewer") || !strings.Contains(out, "Preferred agent: reviewer-main") {
+		t.Fatalf("stdout = %q, want ownership moved to reviewer-main", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "role=reviewer") || !strings.Contains(out, "agent=reviewer-main") {
+		t.Fatalf("stdout = %q, want active step ownership moved to reviewer-main", out)
+	}
 }
 
 func TestExecuteSessionSpawnWithTaskLogsFailureWhenPaneCreationFails(t *testing.T) {
@@ -1109,6 +1128,122 @@ func TestExecuteSessionSpawnWithTaskLogsFailureWhenPaneCreationFails(t *testing.
 	}
 	if !strings.Contains(string(logData), "Session Failed") {
 		t.Fatalf("log.md = %q, want failed lifecycle state", string(logData))
+	}
+}
+
+func TestExecuteHandoffToRoleOnlyResetsActiveTaskAndStepToReady(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	firstHasSession := true
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(name string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
+			case "set-option":
+				return nil, nil
+			case "display-message":
+				return []byte("%5\n"), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Role-only handoff task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+
+	stdout.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	stepID := extractStepID(stdout.String())
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "update", taskID, "--status", "ready"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task update to ready failed: %v", err)
+	}
+	stdout.Reset()
+	if err := Execute([]string{"task", "update", taskID, "--status", "in-progress"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task update to in-progress failed: %v", err)
+	}
+	stdout.Reset()
+	if err := Execute([]string{"step", "update", stepID, "--status", "confirmed"}, &stdout, &stderr); err != nil {
+		t.Fatalf("step update to confirmed failed: %v", err)
+	}
+	stdout.Reset()
+	if err := Execute([]string{"step", "update", stepID, "--status", "ready"}, &stdout, &stderr); err != nil {
+		t.Fatalf("step update to ready failed: %v", err)
+	}
+	stdout.Reset()
+	if err := Execute([]string{"step", "update", stepID, "--status", "in-progress"}, &stdout, &stderr); err != nil {
+		t.Fatalf("step update to in-progress failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("session spawn failed: %v", err)
+	}
+	sessionID := extractSessionID(stdout.String())
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"handoff", sessionID, "--to", "reviewer"}, &stdout, &stderr); err != nil {
+		t.Fatalf("handoff failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "To agent: -") {
+		t.Fatalf("stdout = %q, want role-only handoff", out)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task show failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Status: Ready") || !strings.Contains(out, "Preferred role: reviewer") || !strings.Contains(out, "Preferred agent: -") {
+		t.Fatalf("stdout = %q, want role-only handoff to reset task to Ready", out)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, stepID) || !strings.Contains(out, "status=Ready") || !strings.Contains(out, "role=reviewer") || !strings.Contains(out, "agent=-") {
+		t.Fatalf("stdout = %q, want active step reset to Ready under reviewer role", out)
 	}
 }
 
@@ -3323,6 +3458,663 @@ func TestExecuteStatusHighlightsNeedsAttention(t *testing.T) {
 	}
 }
 
+func TestExecuteReviewPreparesNotesWithoutTmux(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "", errors.New("not found") },
+		func(string, ...string) ([]byte, error) { return nil, nil },
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Review wrapper task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"review", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("review failed: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Review prepared") {
+		t.Fatalf("stdout = %q, want review prepared header", out)
+	}
+	if !strings.Contains(out, "Review step: STEP-") {
+		t.Fatalf("stdout = %q, want review step id", out)
+	}
+	if !strings.Contains(out, "Reviewer agent: reviewer-main") {
+		t.Fatalf("stdout = %q, want reviewer-main", out)
+	}
+	if !strings.Contains(out, "tmux is unavailable here") {
+		t.Fatalf("stdout = %q, want tmux-unavailable next action", out)
+	}
+
+	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	data, err := os.ReadFile(reviewNotesPath)
+	if err != nil {
+		t.Fatalf("ReadFile(review-notes.md) failed: %v", err)
+	}
+	if !strings.Contains(string(data), "Reviewer: reviewer-main") {
+		t.Fatalf("review-notes.md = %q, want reviewer template", string(data))
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task show failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Unresolved review items: 0") {
+		t.Fatalf("stdout = %q, want unresolved review count", out)
+	} else if !strings.Contains(out, "Status: Ready") {
+		t.Fatalf("stdout = %q, want task promoted to Ready after review preparation", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "type=review") || !strings.Contains(out, "role=reviewer") || !strings.Contains(out, "agent=reviewer-main") {
+		t.Fatalf("stdout = %q, want explicit reviewer step", out)
+	}
+	if out := stdout.String(); !strings.Contains(out, "status=Ready") {
+		t.Fatalf("stdout = %q, want ready review step", out)
+	}
+}
+
+func TestExecuteReviewReusesExistingReviewStep(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "", errors.New("not found") },
+		func(string, ...string) ([]byte, error) { return nil, nil },
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Reuse review step task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+
+	projectResult, err := app.New().Projects.Open(".")
+	if err != nil {
+		t.Fatalf("project open failed: %v", err)
+	}
+	stepService, sqlDB, err := app.New().OpenStepService(projectResult.DBPath)
+	if err != nil {
+		t.Fatalf("open step service failed: %v", err)
+	}
+	createdStep, err := stepService.Create(step.CreateParams{
+		ProjectID: projectResult.Project.ID,
+		TaskID:    taskID,
+		StepType:  "review",
+		Title:     "Review existing work",
+		Status:    "confirmed",
+		RoleName:  "backend",
+		AgentName: "backend-main",
+	})
+	sqlDB.Close()
+	if err != nil {
+		t.Fatalf("create review step failed: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"review", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("review failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Review step: "+createdStep.ID) {
+		t.Fatalf("stdout = %q, want reused review step id", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	out := stdout.String()
+	if strings.Count(out, "type=review") != 1 {
+		t.Fatalf("stdout = %q, want one review step", out)
+	}
+	if !strings.Contains(out, createdStep.ID) || !strings.Contains(out, "status=Ready") || !strings.Contains(out, "role=reviewer") || !strings.Contains(out, "agent=reviewer-main") {
+		t.Fatalf("stdout = %q, want retargeted ready reviewer step", out)
+	}
+}
+
+func TestExecuteReviewReusesExistingReviewerSession(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	firstHasSession := true
+	splitCount := 0
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(name string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				splitCount++
+				return []byte("@1 %5\n"), nil
+			case "set-option":
+				return nil, nil
+			case "display-message":
+				return []byte("%5\n"), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Reuse reviewer session task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("first review failed: %v", err)
+	}
+	firstOut := stdout.String()
+	if !strings.Contains(firstOut, "Session spawned: ") {
+		t.Fatalf("stdout = %q, want spawned reviewer session", firstOut)
+	}
+	sessionID := extractEntityID(firstOut, "Session spawned: ")
+	if sessionID == "" {
+		t.Fatalf("could not extract spawned session id from %q", firstOut)
+	}
+	if splitCount != 1 {
+		t.Fatalf("splitCount = %d, want 1 after first review", splitCount)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("second review failed: %v", err)
+	}
+	secondOut := stdout.String()
+	if !strings.Contains(secondOut, "Session reused: "+sessionID) {
+		t.Fatalf("stdout = %q, want reused reviewer session", secondOut)
+	}
+	if splitCount != 1 {
+		t.Fatalf("splitCount = %d, want no additional pane creation", splitCount)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task show failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Status: InProgress") {
+		t.Fatalf("stdout = %q, want task promoted to InProgress once reviewer session is live", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "type=review") || !strings.Contains(out, "status=InProgress") {
+		t.Fatalf("stdout = %q, want live review step in progress", out)
+	}
+}
+
+func TestExecuteReviewFindingsMoveTaskAndReviewStepToNeedsAttention(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	firstHasSession := true
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(name string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
+			case "set-option":
+				return nil, nil
+			case "display-message":
+				return []byte("%5\n"), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Review findings transition task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("first review failed: %v", err)
+	}
+	reviewStepID := extractEntityID(stdout.String(), "Review step: ")
+	if reviewStepID == "" {
+		t.Fatalf("could not extract review step id from %q", stdout.String())
+	}
+
+	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	reviewContent := `# Review Notes
+
+## Summary
+- Status: Needs fixes
+
+## Items
+
+### RVW-001
+- Severity: high
+- Path: internal/auth/handler.go
+- Issue: inconsistent error payload
+- Expected Fix: use shared envelope helper
+- Status: open
+- Owner: backend
+`
+	if err := os.WriteFile(reviewNotesPath, []byte(reviewContent), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-notes.md) failed: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("second review failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Review findings detected: 1") {
+		t.Fatalf("stdout = %q, want findings detection summary", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task show failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Status: NeedsAttention") {
+		t.Fatalf("stdout = %q, want task moved to NeedsAttention", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, reviewStepID) || !strings.Contains(out, "status=NeedsAttention") {
+		t.Fatalf("stdout = %q, want review step moved to NeedsAttention", out)
+	}
+}
+
+func TestExecuteReviewFindingsResetPreferredOwnerToSharedFindingOwner(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	firstHasSession := true
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(name string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
+			case "set-option":
+				return nil, nil
+			case "display-message":
+				return []byte("%5\n"), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Review owner hint task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+
+	stdout.Reset()
+	if err := Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("session spawn failed: %v", err)
+	}
+	sessionID := extractSessionID(stdout.String())
+
+	stdout.Reset()
+	if err := Execute([]string{"handoff", sessionID, "--to", "reviewer-main", "--reason", "ready for review"}, &stdout, &stderr); err != nil {
+		t.Fatalf("handoff failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("first review failed: %v", err)
+	}
+	stdout.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	followupStepID := extractStepID(stdout.String())
+
+	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	reviewContent := `# Review Notes
+
+## Summary
+- Status: Needs fixes
+
+## Items
+
+### RVW-001
+- Severity: high
+- Path: internal/auth/handler.go
+- Issue: inconsistent error payload
+- Expected Fix: use shared envelope helper
+- Status: open
+- Owner: backend
+`
+	if err := os.WriteFile(reviewNotesPath, []byte(reviewContent), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-notes.md) failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("second review failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task show failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Preferred role: backend") || !strings.Contains(out, "Preferred agent: backend-main") {
+		t.Fatalf("stdout = %q, want preferred owner reset to backend-main auto-pick hint", out)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, followupStepID) || !strings.Contains(out, "role=backend") || !strings.Contains(out, "agent=backend-main") {
+		t.Fatalf("stdout = %q, want follow-up step owner hint reset to backend-main", out)
+	}
+}
+
+func TestExecuteStatusSurfacesUnresolvedReviewItems(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "", errors.New("not found") },
+		func(string, ...string) ([]byte, error) { return nil, nil },
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Review findings task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+
+	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	reviewContent := `# Review Notes
+
+## Summary
+- Status: Needs fixes
+
+## Items
+
+### RVW-001
+- Severity: high
+- Path: internal/auth/handler.go
+- Issue: inconsistent error payload
+- Expected Fix: use shared envelope helper
+- Status: open
+- Owner: backend
+`
+	if err := os.WriteFile(reviewNotesPath, []byte(reviewContent), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-notes.md) failed: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"status"}, &stdout, &stderr); err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "reviews=open:1") {
+		t.Fatalf("stdout = %q, want unresolved review count in status", out)
+	}
+	if !strings.Contains(out, "review-owner=backend-main (backend)") {
+		t.Fatalf("stdout = %q, want backend-main auto-picked review owner hint", out)
+	}
+	if !strings.Contains(out, "next=address unresolved review items and route follow-up work to backend-main (backend)") {
+		t.Fatalf("stdout = %q, want review-driven next action with auto-picked owner hint", out)
+	}
+}
+
+func TestExecuteStatusHighlightsMixedReviewOwners(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWD)
+	}()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "", errors.New("not found") },
+		func(string, ...string) ([]byte, error) { return nil, nil },
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Mixed owner review task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+
+	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	reviewContent := `# Review Notes
+
+## Summary
+- Status: Needs fixes
+
+## Items
+
+### RVW-001
+- Status: open
+- Owner: backend
+
+### RVW-002
+- Status: open
+- Owner: qa
+`
+	if err := os.WriteFile(reviewNotesPath, []byte(reviewContent), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-notes.md) failed: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"status"}, &stdout, &stderr); err != nil {
+		t.Fatalf("status failed: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "review-owner=mixed owners - operator must choose") {
+		t.Fatalf("stdout = %q, want mixed review owner hint", out)
+	}
+	if !strings.Contains(out, "next=review findings have mixed owners; operator must choose the follow-up owner before continuing") {
+		t.Fatalf("stdout = %q, want mixed-owner next action", out)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task show failed: %v", err)
+	}
+	if out := stdout.String(); !strings.Contains(out, "Review owner hint: mixed owners - operator must choose") {
+		t.Fatalf("stdout = %q, want task show mixed-owner hint", out)
+	}
+}
+
 func TestExecuteOpenFailsClearlyWhenTmuxIsUnavailable(t *testing.T) {
 	repoRoot := t.TempDir()
 	oldWD, err := os.Getwd()
@@ -3710,12 +4502,12 @@ func TestWorktreeHintClassifiesUnregisteredPaths(t *testing.T) {
 func TestRecommendTaskActionClassifiesUnregisteredPaths(t *testing.T) {
 	mapping := &worktree.Record{Status: worktree.StatusNeedsRepair}
 
-	artifactOnly := recommendTaskAction("Ready", nil, mapping, worktree.DriftUnregisteredArtifactOnlyPath)
+	artifactOnly := recommendTaskAction("Ready", nil, mapping, worktree.DriftUnregisteredArtifactOnlyPath, 0, "", false)
 	if artifactOnly != "run worktree repair to recreate the unregistered task worktree" {
 		t.Fatalf("artifactOnly next action = %q", artifactOnly)
 	}
 
-	dirty := recommendTaskAction("Ready", nil, mapping, worktree.DriftUnregisteredDirtyPath)
+	dirty := recommendTaskAction("Ready", nil, mapping, worktree.DriftUnregisteredDirtyPath, 0, "", false)
 	if dirty != "inspect the existing task worktree path and clean it up manually before continuing" {
 		t.Fatalf("dirty next action = %q", dirty)
 	}

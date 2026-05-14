@@ -174,3 +174,136 @@ func TestServiceSeedTaskArtifactsCreatesModeSpecificFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestCountUnresolvedReviewItemsCountsOnlyOpenStatuses(t *testing.T) {
+	repoRoot := t.TempDir()
+	path := filepath.Join(repoRoot, "review-notes.md")
+	content := `# Review Notes
+
+## Summary
+- Status: Needs fixes
+
+## Items
+
+### RVW-001
+- Severity: high
+- Path: internal/auth/handler.go
+- Issue: inconsistent error payload
+- Expected Fix: use shared envelope helper
+- Status: open
+- Owner: backend
+
+### RVW-002
+- Severity: medium
+- Path: internal/auth/handler_test.go
+- Issue: missing malformed email test
+- Expected Fix: add focused negative test
+- Status: resolved
+- Owner: backend
+
+### RVW-003
+- Severity: low
+- Path: internal/auth/validation.go
+- Issue: follow-up cleanup
+- Expected Fix: simplify duplicated branch
+- Status: in-progress
+- Owner: backend
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-notes.md) failed: %v", err)
+	}
+
+	if got := CountUnresolvedReviewItems(path); got != 2 {
+		t.Fatalf("CountUnresolvedReviewItems() = %d, want 2", got)
+	}
+}
+
+func TestEnsureReviewNotesTemplateDoesNotOverwriteExistingFindings(t *testing.T) {
+	repoRoot := t.TempDir()
+	service := NewService(repoRoot, "tasks")
+	params := SyncParams{
+		Task: task.Record{
+			ID:    "TASK-010",
+			Title: "Review findings preservation",
+			Mode:  "Direct",
+		},
+	}
+
+	dir := filepath.Join(repoRoot, ".aom", "tasks", "TASK-010")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	original := `# Review Notes
+
+## Summary
+- Status: Needs fixes
+
+## Items
+
+### RVW-001
+- Status: open
+`
+	path := filepath.Join(dir, "review-notes.md")
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-notes.md) failed: %v", err)
+	}
+
+	if err := service.EnsureReviewNotesTemplate(params, "reviewer-main", "SESS-001"); err != nil {
+		t.Fatalf("EnsureReviewNotesTemplate failed: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(review-notes.md) failed: %v", err)
+	}
+	if string(data) != original {
+		t.Fatalf("review-notes.md was overwritten: %q", string(data))
+	}
+}
+
+func TestSuggestedReviewOwnerReturnsSharedUnresolvedOwnerOnly(t *testing.T) {
+	repoRoot := t.TempDir()
+	path := filepath.Join(repoRoot, "review-notes.md")
+	content := `# Review Notes
+
+## Items
+
+### RVW-001
+- Status: open
+- Owner: backend
+
+### RVW-002
+- Status: resolved
+- Owner: reviewer
+
+### RVW-003
+- Status: in-progress
+- Owner: backend
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-notes.md) failed: %v", err)
+	}
+	if got := SuggestedReviewOwner(path); got != "backend" {
+		t.Fatalf("SuggestedReviewOwner() = %q, want backend", got)
+	}
+
+	mixedPath := filepath.Join(repoRoot, "review-notes-mixed.md")
+	mixed := `# Review Notes
+
+## Items
+
+### RVW-001
+- Status: open
+- Owner: backend
+
+### RVW-002
+- Status: open
+- Owner: qa
+`
+	if err := os.WriteFile(mixedPath, []byte(mixed), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-notes-mixed.md) failed: %v", err)
+	}
+	if got := SuggestedReviewOwner(mixedPath); got != "" {
+		t.Fatalf("SuggestedReviewOwner() = %q, want empty for mixed owners", got)
+	}
+}

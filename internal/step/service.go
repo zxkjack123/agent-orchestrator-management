@@ -3,8 +3,28 @@ package step
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 )
+
+var defaultStepIDSequence atomic.Int64
+
+// IDGenerator produces durable AOM step IDs.
+type IDGenerator func() string
+
+// CreateParams describes the minimum input needed to create one step.
+type CreateParams struct {
+	ProjectID    string
+	TaskID       string
+	StepType     string
+	Title        string
+	Status       string
+	RoleName     string
+	AgentName    string
+	Dependencies []string
+}
 
 // UpdateParams describes mutable step fields in Milestone 3.
 type UpdateParams struct {
@@ -15,12 +35,76 @@ type UpdateParams struct {
 
 // Service owns step retrieval and update behavior for Milestone 3.
 type Service struct {
-	repo *Repository
+	repo  *Repository
+	idGen IDGenerator
 }
 
 // NewService creates a step service backed by the provided database.
 func NewService(db *sql.DB) *Service {
-	return &Service{repo: NewRepository(db)}
+	return NewServiceWithIDGenerator(db, defaultIDGenerator())
+}
+
+// NewServiceWithIDGenerator creates a step service with an injected ID generator.
+func NewServiceWithIDGenerator(db *sql.DB, idGen IDGenerator) *Service {
+	if idGen == nil {
+		idGen = defaultIDGenerator()
+	}
+
+	return &Service{
+		repo:  NewRepository(db),
+		idGen: idGen,
+	}
+}
+
+// Create inserts one explicit workflow step.
+func (s *Service) Create(params CreateParams) (*Record, error) {
+	projectID := strings.TrimSpace(params.ProjectID)
+	if projectID == "" {
+		return nil, fmt.Errorf("project id is required")
+	}
+	taskID := strings.TrimSpace(params.TaskID)
+	if taskID == "" {
+		return nil, fmt.Errorf("task id is required")
+	}
+	title := strings.TrimSpace(params.Title)
+	if title == "" {
+		return nil, fmt.Errorf("step title is required")
+	}
+
+	stepType := strings.TrimSpace(params.StepType)
+	if stepType == "" {
+		stepType = "implementation"
+	}
+
+	status := "Proposed"
+	if strings.TrimSpace(params.Status) != "" {
+		normalizedStatus, err := normalizeStatus(params.Status)
+		if err != nil {
+			return nil, err
+		}
+		status = normalizedStatus
+	}
+
+	record := Record{
+		ID:           s.idGen(),
+		ProjectID:    projectID,
+		TaskID:       taskID,
+		StepType:     stepType,
+		Title:        title,
+		Status:       status,
+		RoleName:     strings.TrimSpace(params.RoleName),
+		AgentName:    strings.TrimSpace(params.AgentName),
+		Dependencies: append([]string(nil), params.Dependencies...),
+	}
+	if record.Status == "Ready" && record.RoleName == "" && record.AgentName == "" {
+		return nil, fmt.Errorf("step %q needs a role or agent before entering Ready", record.ID)
+	}
+
+	if err := s.repo.Upsert(record); err != nil {
+		return nil, err
+	}
+
+	return s.repo.GetByID(record.ID)
 }
 
 // Get returns one step by ID.
@@ -77,6 +161,35 @@ func (s *Service) Update(id string, params UpdateParams) (*Record, error) {
 	if !changed {
 		return nil, fmt.Errorf("at least one step field must be updated")
 	}
+	if next.Status == "Ready" && strings.TrimSpace(next.RoleName) == "" && strings.TrimSpace(next.AgentName) == "" {
+		return nil, fmt.Errorf("step %q needs a role or agent before entering Ready", next.ID)
+	}
+
+	if err := s.repo.Upsert(next); err != nil {
+		return nil, err
+	}
+
+	return s.repo.GetByID(next.ID)
+}
+
+// AssignOwner updates step ownership explicitly, including clearing the assigned agent when needed.
+func (s *Service) AssignOwner(id, roleName, agentName string) (*Record, error) {
+	record, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, fmt.Errorf("step %q not found", strings.TrimSpace(id))
+	}
+
+	next := *record
+	next.RoleName = strings.TrimSpace(roleName)
+	next.AgentName = strings.TrimSpace(agentName)
+
+	if next.RoleName == record.RoleName && next.AgentName == record.AgentName {
+		return record, nil
+	}
+
 	if next.Status == "Ready" && strings.TrimSpace(next.RoleName) == "" && strings.TrimSpace(next.AgentName) == "" {
 		return nil, fmt.Errorf("step %q needs a role or agent before entering Ready", next.ID)
 	}
@@ -155,4 +268,12 @@ func validateTransition(current, next string) error {
 	}
 
 	return fmt.Errorf("step transition %s -> %s is not allowed", current, next)
+}
+
+func defaultIDGenerator() IDGenerator {
+	return func() string {
+		timestamp := time.Now().UnixNano()
+		sequence := defaultStepIDSequence.Add(1)
+		return "STEP-" + strconv.FormatInt(timestamp, 10) + "-" + strconv.FormatInt(sequence, 10)
+	}
 }
