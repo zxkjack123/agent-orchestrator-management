@@ -97,6 +97,8 @@ func (r Runner) Execute(args []string) error {
 		return r.executeStatus(args[1:])
 	case "merge":
 		return r.executeMerge(args[1:])
+	case "metrics":
+		return r.executeMetrics(args[1:])
 	case "message":
 		return r.executeMessage(args[1:])
 	case "pause-all":
@@ -425,6 +427,8 @@ func (r Runner) executeWorktree(args []string) error {
 	switch args[0] {
 	case "repair":
 		return r.executeWorktreeRepair(args[1:])
+	case "read-file":
+		return r.executeWorktreeReadFile(args[1:])
 	default:
 		return fmt.Errorf("unknown worktree command %q", strings.Join(args, " "))
 	}
@@ -3586,6 +3590,128 @@ func (r Runner) executeResumeAll(args []string) error {
 	if len(resumed) == 0 {
 		fmt.Fprintln(r.stdout, "No WaitingApproval sessions found to resume.")
 	}
+	return nil
+}
+
+// ── M17: observability ───────────────────────────────────────────────────────
+
+func (r Runner) executeWorktreeReadFile(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: aom worktree read-file <task-id> <relative-path>")
+	}
+
+	taskID := strings.TrimSpace(args[0])
+	relPath := filepath.Clean(strings.TrimSpace(args[1]))
+
+	// Reject obvious traversal attempts before hitting the filesystem.
+	if strings.HasPrefix(relPath, "..") {
+		return fmt.Errorf("path %q escapes the worktree root", args[1])
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	worktreeService, wDB, err := r.app.OpenWorktreeService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer wDB.Close()
+
+	mapping, err := worktreeService.GetByTask(taskID)
+	if err != nil {
+		return err
+	}
+	if mapping == nil {
+		return fmt.Errorf("task %q has no worktree", taskID)
+	}
+	if mapping.Status != "Ready" && mapping.Status != "Active" {
+		return fmt.Errorf("worktree for task %q is not available (status: %s)", taskID, mapping.Status)
+	}
+
+	// Final path validation: resolved path must stay inside worktree root.
+	worktreeRoot := filepath.Clean(mapping.WorktreePath)
+	targetPath := filepath.Join(worktreeRoot, relPath)
+	targetPath = filepath.Clean(targetPath)
+
+	if !strings.HasPrefix(targetPath, worktreeRoot+string(filepath.Separator)) && targetPath != worktreeRoot {
+		return fmt.Errorf("path %q escapes the worktree root", args[1])
+	}
+
+	data, err := os.ReadFile(targetPath)
+	if err != nil {
+		return fmt.Errorf("read file: %w", err)
+	}
+
+	// Audit trail.
+	_ = r.syncTaskArtifacts(result, taskID, artifact.Event{
+		Type:    "worktree.read",
+		Actor:   "operator",
+		Summary: fmt.Sprintf("Read file %s from worktree of task %s", relPath, taskID),
+	}, false)
+
+	fmt.Fprint(r.stdout, string(data))
+	return nil
+}
+
+func (r Runner) executeMetrics(args []string) error {
+	days := 7
+	filterTaskID := ""
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--days":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--days requires a value")
+			}
+			n := 0
+			if _, err := fmt.Sscanf(args[i], "%d", &n); err != nil || n <= 0 {
+				return fmt.Errorf("--days must be a positive integer")
+			}
+			days = n
+		case "--task":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--task requires a value")
+			}
+			filterTaskID = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	taskService, taskDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer taskDB.Close()
+
+	allTasks, err := taskService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	if filterTaskID != "" {
+		filtered := allTasks[:0]
+		for _, t := range allTasks {
+			if t.ID == filterTaskID {
+				filtered = append(filtered, t)
+				break
+			}
+		}
+		allTasks = filtered
+	}
+
+	logDir := logDirForTask(result.Project.RepoPath, result.StateDir)
+	report := BuildVelocityReport(allTasks, logDir, days, time.Now())
+	PrintVelocityReport(r.stdout, report)
 	return nil
 }
 
