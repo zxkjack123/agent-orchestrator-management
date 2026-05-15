@@ -1095,6 +1095,66 @@ func strconvFormatInt(value int64) string {
 	return fmt.Sprintf("%d", value)
 }
 
+// MergePlanParams carries the data needed to write a merge-plan.md artifact.
+type MergePlanParams struct {
+	TaskID        string
+	TargetBranch  string
+	ConflictScore string // "Green" | "Yellow" | "Red"
+	Overlaps      []MergePlanOverlap
+}
+
+// MergePlanOverlap describes one overlapping file.
+type MergePlanOverlap struct {
+	Path        string
+	OtherBranch string
+}
+
+// WriteMergePlan writes merge-plan.md into the task's canonical artifact root.
+func (s *Service) WriteMergePlan(params SyncParams, plan MergePlanParams) error {
+	dir := s.taskDir(params)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create artifact dir: %w", err)
+	}
+
+	content := s.renderMergePlanMarkdown(plan)
+	return os.WriteFile(filepath.Join(dir, "merge-plan.md"), []byte(content), 0o644)
+}
+
+func (s *Service) renderMergePlanMarkdown(plan MergePlanParams) string {
+	var overlapLines strings.Builder
+	if len(plan.Overlaps) == 0 {
+		overlapLines.WriteString("No overlapping files detected.\n")
+	} else {
+		for _, o := range plan.Overlaps {
+			fmt.Fprintf(&overlapLines, "- `%s` — also modified in branch `%s`\n", o.Path, o.OtherBranch)
+		}
+	}
+
+	var actions strings.Builder
+	if len(plan.Overlaps) > 0 {
+		actions.WriteString("- [ ] Review overlapping files with the other task owner\n")
+	}
+	actions.WriteString("- [ ] Run tests after merge\n")
+
+	return fmt.Sprintf(`# Merge Plan
+- Task: %s
+- Target branch: %s
+- Prepared at: %s
+- Conflict score: %s
+
+## File Overlaps
+%s
+## Recommended actions
+%s`,
+		plan.TaskID,
+		plan.TargetBranch,
+		s.now().Format(time.RFC3339),
+		plan.ConflictScore,
+		overlapLines.String(),
+		actions.String(),
+	)
+}
+
 // TeamBriefAgent is a summary of one agent for the team brief.
 type TeamBriefAgent struct {
 	Name          string
