@@ -96,6 +96,8 @@ func (r Runner) Execute(args []string) error {
 		return r.executeStatus(args[1:])
 	case "next":
 		return r.executeNext(args[1:])
+	case "team":
+		return r.executeTeam(args[1:])
 	case "task":
 		return r.executeTask(args[1:])
 	case "watch":
@@ -129,6 +131,14 @@ func (r Runner) executeTask(args []string) error {
 		return r.executeTaskLink(args[1:])
 	case "unlink":
 		return r.executeTaskUnlink(args[1:])
+	case "request":
+		return r.executeTaskRequest(args[1:])
+	case "list-requests":
+		return r.executeTaskListRequests(args[1:])
+	case "approve-request":
+		return r.executeTaskApproveRequest(args[1:])
+	case "reject-request":
+		return r.executeTaskRejectRequest(args[1:])
 	default:
 		return fmt.Errorf("unknown task command %q", strings.Join(args, " "))
 	}
@@ -2555,6 +2565,393 @@ func (r Runner) executeWatchAllTasks(result *project.OpenResult, eventType strin
 	fmt.Fprintln(r.stdout, "")
 
 	return tailMultiTaskLogEvents(r.stdout, entries, watchTimeout)
+}
+
+// ── M14: task request / team brief ──────────────────────────────────────────
+
+func (r Runner) executeTaskRequest(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task title is required")
+	}
+
+	title := strings.TrimSpace(args[0])
+	var fromSession, priorityFlag string
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--from-session":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--from-session requires a value")
+			}
+			fromSession = strings.TrimSpace(args[i])
+		case "--priority":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--priority requires a value")
+			}
+			priorityFlag = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	if priorityFlag == "" {
+		priorityFlag = "normal"
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	reqID := generateRequestID(time.Now())
+
+	requestedBy := "operator"
+	if fromSession != "" {
+		requestedBy = fromSession
+	}
+
+	rec := RequestRecord{
+		ID:          reqID,
+		Title:       title,
+		RequestedBy: requestedBy,
+		Priority:    priorityFlag,
+		Status:      "pending",
+	}
+
+	if err := writeRequestArtifact(result.Project.RepoPath, rec); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(r.stdout, "Request filed\n\n")
+	fmt.Fprintf(r.stdout, "Request: %s\n", reqID)
+	fmt.Fprintf(r.stdout, "Title:   %s\n", title)
+	fmt.Fprintf(r.stdout, "Status:  pending\n")
+	fmt.Fprintf(r.stdout, "Next:    aom task list-requests\n")
+	return nil
+}
+
+func (r Runner) executeTaskListRequests(args []string) error {
+	_ = args
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	records, err := readPendingRequests(result.Project.RepoPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Pending task requests")
+	fmt.Fprintln(r.stdout, "")
+
+	if len(records) == 0 {
+		fmt.Fprintln(r.stdout, "No pending requests.")
+		return nil
+	}
+
+	for _, rec := range records {
+		fmt.Fprintf(r.stdout, "  %s  [%s]  %s  from=%s\n",
+			rec.ID, rec.Priority, rec.Title, emptyFallback(rec.RequestedBy))
+	}
+	fmt.Fprintf(r.stdout, "\nApprove: aom task approve-request <id>\n")
+	return nil
+}
+
+func (r Runner) executeTaskApproveRequest(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("request id is required")
+	}
+
+	reqID := strings.TrimSpace(args[0])
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	all, err := readAllRequests(result.Project.RepoPath)
+	if err != nil {
+		return err
+	}
+
+	var rec *RequestRecord
+	for i := range all {
+		if all[i].ID == reqID {
+			rec = &all[i]
+			break
+		}
+	}
+	if rec == nil {
+		return fmt.Errorf("request %q not found", reqID)
+	}
+	if rec.Status != "pending" {
+		return fmt.Errorf("request %q is already %s", reqID, rec.Status)
+	}
+
+	if err := r.validateTaskProvisioning(result); err != nil {
+		return err
+	}
+
+	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	priority, err := task.NormalizePriority(rec.Priority)
+	if err != nil {
+		priority = task.PriorityNormal
+	}
+
+	createResult, err := taskService.Create(task.CreateParams{
+		ProjectID: result.Project.ID,
+		Title:     rec.Title,
+		Priority:  priority,
+	})
+	if err != nil {
+		return err
+	}
+
+	if _, err := r.ensurePlannedWorktree(result, createResult.Task); err != nil {
+		return err
+	}
+
+	if err := r.syncTaskArtifacts(result, createResult.Task.ID, artifact.Event{
+		Type:        "task.created",
+		Actor:       "operator",
+		Summary:     fmt.Sprintf("Task created from approved request %s", reqID),
+		StateEffect: fmt.Sprintf("Task %s", createResult.Task.Status),
+	}, true); err != nil {
+		return err
+	}
+
+	// Mark request approved.
+	rec.Status = "approved"
+	if err := writeRequestArtifact(result.Project.RepoPath, *rec); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(r.stdout, "Request approved\n\n")
+	fmt.Fprintf(r.stdout, "Request: %s\n", reqID)
+	fmt.Fprintf(r.stdout, "Task:    %s\n", createResult.Task.ID)
+	fmt.Fprintf(r.stdout, "Title:   %s\n", createResult.Task.Title)
+	return nil
+}
+
+func (r Runner) executeTaskRejectRequest(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("request id is required")
+	}
+
+	reqID := strings.TrimSpace(args[0])
+	var reason string
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--reason":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--reason requires a value")
+			}
+			reason = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	all, err := readAllRequests(result.Project.RepoPath)
+	if err != nil {
+		return err
+	}
+
+	var rec *RequestRecord
+	for i := range all {
+		if all[i].ID == reqID {
+			rec = &all[i]
+			break
+		}
+	}
+	if rec == nil {
+		return fmt.Errorf("request %q not found", reqID)
+	}
+	if rec.Status != "pending" {
+		return fmt.Errorf("request %q is already %s", reqID, rec.Status)
+	}
+
+	rec.Status = "rejected"
+	rec.Reason = reason
+	if err := writeRequestArtifact(result.Project.RepoPath, *rec); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(r.stdout, "Request rejected\n\n")
+	fmt.Fprintf(r.stdout, "Request: %s\n", reqID)
+	if reason != "" {
+		fmt.Fprintf(r.stdout, "Reason:  %s\n", reason)
+	}
+	return nil
+}
+
+func (r Runner) executeTeam(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("team subcommand is required (try: team brief)")
+	}
+
+	switch args[0] {
+	case "brief":
+		return r.executeTeamBrief(args[1:])
+	default:
+		return fmt.Errorf("unknown team command %q", args[0])
+	}
+}
+
+func (r Runner) executeTeamBrief(args []string) error {
+	_ = args
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	taskService, taskDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer taskDB.Close()
+
+	allTasks, err := taskService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	sessionService, sessDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sessDB.Close()
+
+	sessions, err := sessionService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	// Build session status index by task.
+	taskSessionStatus := make(map[string]string)
+	for _, s := range sessions {
+		if s.TaskID != "" {
+			taskSessionStatus[s.TaskID] = s.Status
+		}
+	}
+
+	// Build agent session status index.
+	agentSessionStatus := make(map[string]string)
+	for _, s := range sessions {
+		if s.AgentName != "" {
+			agentSessionStatus[s.AgentName] = s.Status
+		}
+	}
+
+	var briefTasks []artifact.TeamBriefTask
+	for _, t := range allTasks {
+		if t.Status == "Done" || t.Status == "Archived" {
+			continue
+		}
+		blockers, _ := taskService.BlockedBy(t.ID)
+		blockerIDs := make([]string, 0, len(blockers))
+		for _, b := range blockers {
+			if b.Status != "Done" && b.Status != "Archived" {
+				blockerIDs = append(blockerIDs, b.ID)
+			}
+		}
+		owner := t.PreferredAgent
+		if owner == "" {
+			owner = t.PreferredRole
+		}
+		briefTasks = append(briefTasks, artifact.TeamBriefTask{
+			ID:        t.ID,
+			Title:     t.Title,
+			Status:    t.Status,
+			Priority:  task.PriorityLabel(t.Priority),
+			Agent:     owner,
+			BlockedBy: blockerIDs,
+		})
+	}
+
+	// Pending requests.
+	pendingReqs, _ := readPendingRequests(result.Project.RepoPath)
+	var reqLines []string
+	for _, req := range pendingReqs {
+		reqLines = append(reqLines, fmt.Sprintf("%s: \"%s\" from %s [%s]",
+			req.ID, req.Title, emptyFallback(req.RequestedBy), req.Priority))
+	}
+
+	// Last 5 channel messages (raw lines from channel.md).
+	channelTail := lastChannelMessages(result.Project.RepoPath, 5)
+
+	// Agents from config.
+	var briefAgents []artifact.TeamBriefAgent
+	for _, a := range result.Agents {
+		status := agentSessionStatus[a.Name]
+		briefAgents = append(briefAgents, artifact.TeamBriefAgent{
+			Name:          a.Name,
+			Role:          a.Role,
+			Runtime:       a.Runtime,
+			SessionStatus: status,
+		})
+	}
+
+	svc := artifact.NewService(result.Project.RepoPath, result.StateDir)
+	briefPath, err := svc.GenerateTeamBrief(artifact.TeamBriefParams{
+		ProjectName:     result.Project.Name,
+		Tasks:           briefTasks,
+		PendingRequests: reqLines,
+		ChannelTail:     channelTail,
+		Agents:          briefAgents,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(r.stdout, "Team brief generated\n\n")
+	fmt.Fprintf(r.stdout, "Path:    %s\n", briefPath)
+	fmt.Fprintf(r.stdout, "Tasks:   %d active\n", len(briefTasks))
+	fmt.Fprintf(r.stdout, "Pending requests: %d\n", len(pendingReqs))
+	return nil
+}
+
+// lastChannelMessages returns the last n message blocks from channel.md.
+func lastChannelMessages(repoPath string, n int) []string {
+	content, err := readChannelFile(repoPath)
+	if err != nil || content == "" {
+		return nil
+	}
+
+	// Split on "### " to get individual message blocks.
+	parts := strings.Split(content, "\n### ")
+	if len(parts) <= 1 {
+		return nil
+	}
+
+	// Drop the header part (before first ###).
+	msgs := parts[1:]
+	if len(msgs) > n {
+		msgs = msgs[len(msgs)-n:]
+	}
+
+	result := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		result = append(result, "### "+strings.TrimSpace(m))
+	}
+	return result
 }
 
 func (r Runner) executeChannel(args []string) error {

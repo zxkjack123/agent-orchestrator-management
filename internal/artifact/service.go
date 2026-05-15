@@ -1094,3 +1094,111 @@ func defaultEventIDGenerator() string {
 func strconvFormatInt(value int64) string {
 	return fmt.Sprintf("%d", value)
 }
+
+// TeamBriefAgent is a summary of one agent for the team brief.
+type TeamBriefAgent struct {
+	Name          string
+	Role          string
+	Runtime       string
+	SessionStatus string
+}
+
+// TeamBriefTask is a summary of one task for the team brief.
+type TeamBriefTask struct {
+	ID         string
+	Title      string
+	Status     string
+	Priority   string
+	Agent      string
+	BlockedBy  []string
+}
+
+// TeamBriefParams carries all data needed to generate the team brief.
+type TeamBriefParams struct {
+	ProjectName     string
+	Tasks           []TeamBriefTask
+	PendingRequests []string // formatted lines
+	ChannelTail     []string // last N channel messages
+	Agents          []TeamBriefAgent
+}
+
+// GenerateTeamBrief writes .aom/team-brief.md and returns its path.
+func (s *Service) GenerateTeamBrief(params TeamBriefParams) (string, error) {
+	path := filepath.Join(s.repoPath, ".aom", "team-brief.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("create team brief dir: %w", err)
+	}
+
+	content := s.renderTeamBriefMarkdown(params)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write team brief: %w", err)
+	}
+
+	return path, nil
+}
+
+func (s *Service) renderTeamBriefMarkdown(params TeamBriefParams) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "# AOM Team Brief\n")
+	fmt.Fprintf(&b, "- Generated: %s\n", s.now().Format(time.RFC3339))
+	fmt.Fprintf(&b, "- Project: %s\n\n", params.ProjectName)
+
+	fmt.Fprintf(&b, "## Active Tasks\n\n")
+	if len(params.Tasks) == 0 {
+		fmt.Fprintf(&b, "No active tasks.\n\n")
+	} else {
+		fmt.Fprintf(&b, "| Task | Title | Status | Priority | Agent | Blocked by |\n")
+		fmt.Fprintf(&b, "|------|-------|--------|----------|-------|------------|\n")
+		for _, t := range params.Tasks {
+			blockedBy := "-"
+			if len(t.BlockedBy) > 0 {
+				blockedBy = strings.Join(t.BlockedBy, ", ")
+			}
+			agent := t.Agent
+			if agent == "" {
+				agent = "-"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n",
+				t.ID, t.Title, t.Status, t.Priority, agent, blockedBy)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	fmt.Fprintf(&b, "## Pending Requests\n\n")
+	if len(params.PendingRequests) == 0 {
+		fmt.Fprintf(&b, "No pending requests.\n\n")
+	} else {
+		for _, line := range params.PendingRequests {
+			fmt.Fprintf(&b, "- %s\n", line)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	fmt.Fprintf(&b, "## Team Channel (last messages)\n\n")
+	if len(params.ChannelTail) == 0 {
+		fmt.Fprintf(&b, "No messages.\n\n")
+	} else {
+		for _, msg := range params.ChannelTail {
+			fmt.Fprintf(&b, "%s\n", msg)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+
+	fmt.Fprintf(&b, "## Agents\n\n")
+	if len(params.Agents) == 0 {
+		fmt.Fprintf(&b, "No agents configured.\n\n")
+	} else {
+		fmt.Fprintf(&b, "| Name | Role | Runtime | Session Status |\n")
+		fmt.Fprintf(&b, "|------|------|---------|----------------|\n")
+		for _, a := range params.Agents {
+			status := a.SessionStatus
+			if status == "" {
+				status = "no session"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", a.Name, a.Role, a.Runtime, status)
+		}
+	}
+
+	return b.String()
+}
