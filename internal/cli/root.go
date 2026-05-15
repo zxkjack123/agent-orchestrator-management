@@ -97,6 +97,12 @@ func (r Runner) Execute(args []string) error {
 		return r.executeStatus(args[1:])
 	case "merge":
 		return r.executeMerge(args[1:])
+	case "message":
+		return r.executeMessage(args[1:])
+	case "pause-all":
+		return r.executePauseAll(args[1:])
+	case "resume-all":
+		return r.executeResumeAll(args[1:])
 	case "next":
 		return r.executeNext(args[1:])
 	case "team":
@@ -134,6 +140,8 @@ func (r Runner) executeTask(args []string) error {
 		return r.executeTaskLink(args[1:])
 	case "unlink":
 		return r.executeTaskUnlink(args[1:])
+	case "record-result":
+		return r.executeTaskRecordResult(args[1:])
 	case "request":
 		return r.executeTaskRequest(args[1:])
 	case "list-requests":
@@ -314,6 +322,8 @@ func (r Runner) executeSession(args []string) error {
 		return r.executeSessionSetAgentID(args[1:])
 	case "wait":
 		return r.executeSessionWait(args[1:])
+	case "health":
+		return r.executeSessionHealth(args[1:])
 	default:
 		return fmt.Errorf("unknown session command %q", strings.Join(args, " "))
 	}
@@ -3137,6 +3147,445 @@ func (r Runner) executeMergePrepare(args []string) error {
 	fmt.Fprintf(r.stdout, "Conflict score: %s\n", checkResult.Score)
 	fmt.Fprintf(r.stdout, "Overlapping files: %d\n", len(checkResult.Overlaps))
 	fmt.Fprintf(r.stdout, "merge-plan.md written to task artifact root.\n")
+	return nil
+}
+
+// ── M16: communication & feedback upgrade ────────────────────────────────────
+
+func (r Runner) executeMessage(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("message subcommand is required (send | read | clear)")
+	}
+
+	switch args[0] {
+	case "send":
+		return r.executeMessageSend(args[1:])
+	case "read":
+		return r.executeMessageRead(args[1:])
+	case "clear":
+		return r.executeMessageClear(args[1:])
+	default:
+		return fmt.Errorf("unknown message command %q", args[0])
+	}
+}
+
+func (r Runner) executeMessageSend(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: aom message send <agent-name> \"<message>\" [--from <sender>]")
+	}
+
+	agentName := strings.TrimSpace(args[0])
+	message := strings.TrimSpace(args[1])
+	fromSender := "operator"
+
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--from":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--from requires a value")
+			}
+			fromSender = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	if err := appendMailboxMessage(result.Project.RepoPath, agentName, message, fromSender, time.Now()); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(r.stdout, "Message sent to %s\n", agentName)
+	return nil
+}
+
+func (r Runner) executeMessageRead(args []string) error {
+	var agentName string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--agent":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--agent requires a value")
+			}
+			agentName = strings.TrimSpace(args[i])
+		default:
+			if agentName == "" {
+				agentName = strings.TrimSpace(args[i])
+			} else {
+				return fmt.Errorf("unknown flag %q", args[i])
+			}
+		}
+	}
+
+	if agentName == "" {
+		return fmt.Errorf("agent name is required (--agent <name>)")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	content, err := readMailbox(result.Project.RepoPath, agentName)
+	if err != nil {
+		return err
+	}
+
+	if content == "" {
+		fmt.Fprintf(r.stdout, "Mailbox for %s is empty.\n", agentName)
+		return nil
+	}
+
+	fmt.Fprint(r.stdout, content)
+	return nil
+}
+
+func (r Runner) executeMessageClear(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("agent name is required")
+	}
+
+	agentName := strings.TrimSpace(args[0])
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	if err := clearMailbox(result.Project.RepoPath, agentName); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(r.stdout, "Mailbox for %s cleared (archived).\n", agentName)
+	return nil
+}
+
+func (r Runner) executeTaskRecordResult(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task id is required")
+	}
+
+	taskID := strings.TrimSpace(args[0])
+	var passed, failed bool
+	var summary, ciURL string
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--passed":
+			passed = true
+		case "--failed":
+			failed = true
+		case "--summary":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--summary requires a value")
+			}
+			summary = strings.TrimSpace(args[i])
+		case "--url":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--url requires a value")
+			}
+			ciURL = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	if !passed && !failed {
+		return fmt.Errorf("--passed or --failed is required")
+	}
+	if passed && failed {
+		return fmt.Errorf("--passed and --failed are mutually exclusive")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	eventType := "test.passed"
+	eventSummary := "CI tests passed"
+	if failed {
+		eventType = "test.failed"
+		eventSummary = "CI tests failed"
+	}
+	if summary != "" {
+		eventSummary = eventSummary + ": " + summary
+	}
+	if ciURL != "" {
+		eventSummary = eventSummary + " (" + ciURL + ")"
+	}
+
+	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
+		Type:        eventType,
+		Actor:       "ci",
+		Summary:     eventSummary,
+		StateEffect: eventType,
+	}, false); err != nil {
+		return err
+	}
+
+	// Move task to NeedsAttention on failure.
+	if failed {
+		taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+		if err != nil {
+			return err
+		}
+		defer sqlDB.Close()
+
+		rec, err := taskService.Get(taskID)
+		if err != nil {
+			return err
+		}
+		if rec != nil && (rec.Status == "InProgress" || rec.Status == "Ready") {
+			if _, err := taskService.Update(taskID, task.UpdateParams{Status: "NeedsAttention"}); err != nil {
+				// Non-fatal: log event already appended.
+				fmt.Fprintf(r.stderr, "warning: could not transition task to NeedsAttention: %v\n", err)
+			}
+		}
+	}
+
+	status := "passed"
+	if failed {
+		status = "failed"
+	}
+	fmt.Fprintf(r.stdout, "Result recorded: %s — %s\n", status, eventSummary)
+	return nil
+}
+
+func (r Runner) executeSessionHealth(args []string) error {
+	showAll := false
+	sessionID := ""
+
+	for _, arg := range args {
+		switch arg {
+		case "--all":
+			showAll = true
+		default:
+			if sessionID == "" {
+				sessionID = strings.TrimSpace(arg)
+			}
+		}
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	sessionService, sessDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sessDB.Close()
+
+	sessions, err := sessionService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+
+	if showAll {
+		fmt.Fprintln(r.stdout, "Session health")
+		fmt.Fprintln(r.stdout, "")
+		active := 0
+		for _, s := range sessions {
+			switch s.Status {
+			case "Booting", "Idle", "Working", "WaitingApproval", "WaitingHandoff", "Blocked":
+			default:
+				continue
+			}
+			active++
+			logPath := r.resolveTaskLogPath(result, s.TaskID)
+			h := computeSessionHealth(logPath, s.ID, now)
+			warning := ""
+			if h.CheckpointWarning {
+				warning += " [checkpoint overdue]"
+			}
+			fmt.Fprintf(r.stdout, "  %s  agent=%-20s  status=%-20s  since-checkpoint=%-8s%s\n",
+				s.ID, s.AgentName, s.Status, h.TimeSinceCheckpoint, warning)
+		}
+		if active == 0 {
+			fmt.Fprintln(r.stdout, "No active sessions.")
+		}
+		return nil
+	}
+
+	if sessionID == "" {
+		return fmt.Errorf("session id is required (or use --all)")
+	}
+
+	var targetSession *session.Record
+	for i := range sessions {
+		if sessions[i].ID == sessionID {
+			targetSession = &sessions[i]
+			break
+		}
+	}
+	if targetSession == nil {
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+
+	logPath := r.resolveTaskLogPath(result, targetSession.TaskID)
+	h := computeSessionHealth(logPath, sessionID, now)
+
+	fmt.Fprintf(r.stdout, "Session health: %s\n\n", sessionID)
+	fmt.Fprintf(r.stdout, "Agent:               %s\n", emptyFallback(targetSession.AgentName))
+	fmt.Fprintf(r.stdout, "Status:              %s\n", targetSession.Status)
+	fmt.Fprintf(r.stdout, "Time since checkpoint: %s\n", h.TimeSinceCheckpoint)
+	if h.CheckpointWarning {
+		fmt.Fprintf(r.stdout, "Warning: context may be stale — consider: aom checkpoint %s\n", sessionID)
+	}
+
+	return nil
+}
+
+// resolveTaskLogPath returns the log.md path for a task, falling back gracefully.
+func (r Runner) resolveTaskLogPath(result *project.OpenResult, taskID string) string {
+	if taskID == "" {
+		return ""
+	}
+	view, err := r.loadTaskView(result, taskID)
+	if err != nil || view == nil {
+		return filepath.Join(result.Project.RepoPath, result.StateDir, "tasks", taskID, "log.md")
+	}
+	svc := artifact.NewService(result.Project.RepoPath, result.StateDir)
+	return svc.TaskLogPath(artifact.SyncParams{Task: view.Task, Worktree: view.Worktree})
+}
+
+func (r Runner) executePauseAll(args []string) error {
+	reason := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--reason":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--reason requires a value")
+			}
+			reason = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	sessionService, sessDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sessDB.Close()
+
+	sessions, err := sessionService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	pauseMsg := "PAUSE: operator has paused all agents"
+	if reason != "" {
+		pauseMsg += " — " + reason
+	}
+
+	var paused []string
+	for i := range sessions {
+		s := sessions[i]
+		if s.Status != "Working" {
+			continue
+		}
+
+		s.Status = "WaitingApproval"
+		if _, err := sessionService.Save(s); err != nil {
+			fmt.Fprintf(r.stderr, "warning: could not pause session %s: %v\n", s.ID, err)
+			continue
+		}
+
+		_ = r.app.Tmux.SendKeys(s.TmuxPane, pauseMsg)
+
+		if s.TaskID != "" {
+			_ = r.syncTaskArtifacts(result, s.TaskID, artifact.Event{
+				Type:        "operator.pause",
+				Actor:       "operator",
+				Summary:     pauseMsg,
+				StateEffect: "session WaitingApproval",
+			}, false)
+		}
+
+		paused = append(paused, s.ID)
+	}
+
+	fmt.Fprintf(r.stdout, "Paused %d session(s)\n", len(paused))
+	for _, id := range paused {
+		fmt.Fprintf(r.stdout, "  %s  → WaitingApproval  (resume: aom approve %s)\n", id, id)
+	}
+	if len(paused) == 0 {
+		fmt.Fprintln(r.stdout, "No Working sessions found to pause.")
+	}
+	return nil
+}
+
+func (r Runner) executeResumeAll(args []string) error {
+	_ = args
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	sessionService, sessDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sessDB.Close()
+
+	sessions, err := sessionService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	var resumed []string
+	for i := range sessions {
+		s := sessions[i]
+		if s.Status != "WaitingApproval" {
+			continue
+		}
+
+		s.Status = "Idle"
+		if _, err := sessionService.Save(s); err != nil {
+			fmt.Fprintf(r.stderr, "warning: could not resume session %s: %v\n", s.ID, err)
+			continue
+		}
+
+		if s.TaskID != "" {
+			_ = r.syncTaskArtifacts(result, s.TaskID, artifact.Event{
+				Type:        "operator.resume",
+				Actor:       "operator",
+				Summary:     "Operator resumed all paused sessions",
+				StateEffect: "session Idle",
+			}, false)
+		}
+
+		resumed = append(resumed, s.ID)
+	}
+
+	fmt.Fprintf(r.stdout, "Resumed %d session(s)\n", len(resumed))
+	for _, id := range resumed {
+		fmt.Fprintf(r.stdout, "  %s  → Idle\n", id)
+	}
+	if len(resumed) == 0 {
+		fmt.Fprintln(r.stdout, "No WaitingApproval sessions found to resume.")
+	}
 	return nil
 }
 

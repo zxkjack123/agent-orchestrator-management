@@ -900,6 +900,11 @@ func (s *Service) taskDir(params SyncParams) string {
 	return filepath.Join(s.repoPath, ".aom", s.stateDir, params.Task.ID)
 }
 
+// TaskLogPath returns the absolute path of log.md for a task.
+func (s *Service) TaskLogPath(params SyncParams) string {
+	return filepath.Join(s.taskDir(params), "log.md")
+}
+
 func usesWorktreeArtifactRoot(mapping *worktree.Record) bool {
 	if mapping == nil || strings.TrimSpace(mapping.WorktreePath) == "" {
 		return false
