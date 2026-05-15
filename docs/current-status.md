@@ -218,6 +218,30 @@ Implemented after live multi-agent E2E testing on macOS (2026-05-14/15) and WSL 
 - `tailLogEvents` bug fixed: was using line-count to track position (off-by-one when files end with `\n`); now tracks by byte offset so no events are missed
 - `internal/cli/log_wait.go` extracted into its own file: contains `waitForLogEvent`, `tailLogEvents`, `scanLogForEvent`, `tailMultiTaskLogEvents`, `waitForMultiTaskLogEvent`
 
+### Milestone 9 — Project Governance (Skills, MCP, Policy)
+
+Implemented in one slice (2026-05-15):
+- `internal/config/config.go` now exposes `ResourcesForRole(roleName, runtimeName)` that returns `RoleResources{Skills, MCPServers}` filtered by runtime compatibility; `ResolvedSkill` and `ResolvedMCPServer` wrapper types carry the name alongside the config for downstream use
+- `internal/project/service.go` `OpenResult` now includes `Resources config.ResourcesFile` and `Policy config.PolicyFile` so CLI handlers have full governance context without re-loading config
+- `MaterializeSkillFiles` added to `internal/artifact/service.go`: copies role-bound skill markdown files from the repo root into the worktree root at spawn time; missing source files are silently skipped
+- `MaterializeMCPConfig` added to `internal/artifact/service.go`: for `claude` runtimes appends a `## MCP Servers` section to `CLAUDE.md`; for `codex` runtimes writes `.codex/mcp.json`; other runtimes are no-ops
+- `MaterializePolicyConstraints` added to `internal/artifact/service.go`: appends a `## Policy Constraints` section listing deny_commands to the runtime identity file (`CLAUDE.md` for claude, `AGENTS.md` for codex); no-op when deny list is empty
+- `materializeAgentContext` helper in `internal/cli/root.go` consolidates identity file, skill files, MCP config, and policy constraints into a single call from both spawn sites; prevents divergence between spawn and rebind paths
+- `enforcePolicyDefaults` warns on `yolo_mode=enabled` at spawn time; full runtime interception deferred to M10
+- `aom project resources` added: prints all role bindings (skills, MCP servers) and policy summary loaded from the project config
+- `aom status` now uses ANSI color for status fields (green=active/healthy, yellow=attention needed, red=failed, dim=archived/done) and bold section headers; colors are suppressed automatically when stdout is not a TTY or `NO_COLOR` is set
+- `internal/cli/status_format.go` added: contains `isTTYWriter`, `colorize`, `colorStatus`, and `sectionLabel` helpers
+
+### Six Additional Pre-Gemini/Kiro Features (2026-05-15)
+
+Implemented after M9, before gemini/kiro runtime support:
+- **Initial context delivery**: `session spawn --task` output now includes the `task.md` path and a reminder to read it before starting work; when `--real` mode, also prints the `aom session send` command hint for delivering the file reference to the agent
+- **Policy enforcement via identity file**: `MaterializePolicyConstraints` appends deny_commands list to the runtime identity file at spawn time, making project policy visible to agents without manual instruction; called from `materializeAgentContext` alongside identity, skill, and MCP materialization
+- **Pane rebind without re-spawn**: `aom session rebind <session-id>` reconnects a `Detached` session to a live tmux pane; if the original pane is still alive it un-detaches the session to `Idle`; if the pane is gone it creates a new placeholder pane in the project workspace using a fresh `LaunchModePlaceholder` command
+- **Dynamic continuity readiness in index.md**: `- Continuity Readiness:` in `index.md` is now computed from task status, active session presence, worktree health, and unresolved review count; returns `High` (green path), `Medium` (partial), or `Low` (blockers present)
+- **Orchestrator actor type via `AOM_ACTOR` env var**: `aom session send` now reads `AOM_ACTOR` from the environment; if set, uses its value as the `Actor` field in `orchestrator.prompt` log events instead of the hardcoded `"operator"` string; enables AI orchestrator sessions to self-identify in the task log
+- **`aom review close <task-id>`**: closes the active review step (advances through `InProgress` → `Completed` to respect step state machine), transitions the task back to `InProgress`, records a `review.closed` event in `log.md`, and if the review notes contain an unambiguous owner hint applies it to the task's preferred agent
+
 ## Current CLI Surface
 
 Implemented commands:
@@ -244,6 +268,9 @@ Implemented commands:
 - `aom checkpoint`
 - `aom handoff`
 - `aom review`
+- `aom review close`
+- `aom session rebind`
+- `aom project resources`
 - `aom doctor`
 - `aom runtime list`
 - `aom runtime inspect`
@@ -499,10 +526,9 @@ Recommended path for live E2E:
 ## What Is Intentionally Not Done Yet
 
 Still out of scope at the current handoff point:
-- first-class real-runtime launch for runtimes beyond the current `codex` and `claude` slice (gemini, kiro)
+- first-class real-runtime launch for runtimes beyond the current `codex` and `claude` slice (gemini, kiro): add two cases to `realRuntimeShellCommand` and `runtimeResumeInfo` in `internal/runtime/launch.go`
 - provider-native resume for `gemini` and `kiro` (claude and codex resume flows are live)
-- richer review and unresolved review-item handling under Milestone 6
-- richer status output formatting (columnar layout, color, compact task rows)
+- runtime command interception for policy enforcement (M10): `deny_commands` are currently appended to identity files as instructions only; no runtime-level blocking is implemented yet
 
 ## AI Orchestrator Path
 
@@ -531,12 +557,10 @@ replace.
 
 - Completion event convention: agents append `task.completed` or `handoff.prepared`
   to log.md when work is done; see docs/artifact-schemas.md Agent Completion Protocol — convention is defined, live E2E verified with codex and claude
-- Runtime identity file materialization: on `session spawn`, AOM should read
-  `.aom/agents/<name>/profile.md` and write it into the task worktree as the
-  appropriate runtime config file (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`) so each
-  agent session has its own role identity; without this, two sessions of the same
-  runtime are indistinguishable to the agent; see docs/project-config.md Runtime
-  Identity Files section for the storage model and delivery design
+- Runtime identity file materialization: DONE — `project init` seeds `.aom/agents/<name>/profile.md`
+  for every enabled agent; `session spawn` and `session resume` call `artifact.MaterializeIdentityFile`
+  to copy the profile into the worktree as `CLAUDE.md` (claude), `AGENTS.md` (codex), or `GEMINI.md`
+  (gemini); kiro uses a directory format (`.kiro/rules/`) and is intentionally deferred
 
 ### Gaps — Tier 2 (ergonomic orchestration)
 
@@ -555,7 +579,6 @@ replace.
 
 1. gemini/kiro runtime support — add 2 cases to `realRuntimeShellCommand` in `internal/runtime/launch.go`
 2. M9 governance — MCP resource bindings, role skill injection at `session spawn`, policy enforcement
-3. Richer status output formatting
 
 ## Immediate Next Step
 
@@ -563,15 +586,26 @@ Milestones 6–12 core slice are substantially complete. Remaining work:
 
 - M9: Project governance (MCP resource bindings, role skills, policy enforcement) — not started
 - M10 remainder: `aom runtime inspect` now done; gemini/kiro real-runtime launch still out of scope
-- M11: Operator UX (multi-task watch without `--task` — done; richer status formatting — not started)
-- `aom doctor` — done (validates tmux, config, runtimes, db, worktrees)
+- `aom doctor` — done
 - `aom runtime list` / `aom runtime inspect` — done
+- Richer status formatting — done (ANSI color on status values, visual section labels, NO_COLOR respected)
+- Runtime identity file materialization — done (profile.md seeded at init, materialized at spawn/resume)
 
 Recommended next slices in priority order:
 
 1. **gemini/kiro runtime support** — small change, add 2 cases to `realRuntimeShellCommand` and `runtimeResumeInfo`
-2. **M9 governance** — MCP resource binding, role skill injection, policy checks
-3. **Richer status formatting** — columnar output, color, compact task rows
+2. **M9 governance** — DONE (see below)
+
+### M9 — Project Governance (complete)
+
+Implemented in one slice:
+- `ResourcesForRole(roleName, runtime)` in `internal/config/config.go` — resolves role-bound skills and MCP servers filtered by runtime compatibility
+- `OpenResult` now carries `Resources config.ResourcesFile` and `Policy config.PolicyFile` — available to all downstream CLI handlers
+- `MaterializeSkillFiles` in `internal/artifact/service.go` — copies role-bound skill `.md` files into the worktree root at spawn time; missing source files are silently skipped
+- `MaterializeMCPConfig` in `internal/artifact/service.go` — for `claude`: appends `## MCP Servers` section to `CLAUDE.md`; for `codex`: writes `.codex/mcp.json`; other runtimes are no-ops pending M10
+- `materializeAgentContext` private helper in `internal/cli/root.go` — consolidates identity + skill + MCP materialization; called at both spawn sites (`executeResolvedSessionSpawn` and session resume rebind) so they cannot diverge
+- `enforcePolicyDefaults` in `internal/cli/root.go` — warns operator when `yolo_mode=enabled`; full deny_commands interception deferred to M10 (requires runtime adapter layer)
+- `aom project resources` command — shows role bindings, skills, MCP servers, and policy summary so operators can verify governance is configured before spawning agents
 
 ## System Diagrams
 

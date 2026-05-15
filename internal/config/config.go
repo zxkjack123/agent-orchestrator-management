@@ -354,6 +354,69 @@ func validateRuntimes(runtimes []string) error {
 	return nil
 }
 
+// ResolvedSkill is a skill with its name resolved from the map key.
+type ResolvedSkill struct {
+	Name string
+	SkillConfig
+}
+
+// ResolvedMCPServer is an MCP server config with its name resolved from the map key.
+type ResolvedMCPServer struct {
+	Name string
+	MCPServerConfig
+}
+
+// RoleResources holds the concrete skills and MCP servers bound to one role+runtime pair.
+type RoleResources struct {
+	Skills     []ResolvedSkill
+	MCPServers []ResolvedMCPServer
+}
+
+// ResourcesForRole resolves the skills and MCP servers bound to roleName,
+// filtered to those compatible with runtimeName. Returns empty RoleResources
+// when there is no binding for the role or when Resources is empty.
+func (f *ResourcesFile) ResourcesForRole(roleName, runtimeName string) RoleResources {
+	binding, ok := f.RoleBindings[roleName]
+	if !ok {
+		return RoleResources{}
+	}
+
+	var skills []ResolvedSkill
+	for _, skillName := range binding.Skills {
+		skill, ok := f.Skills[skillName]
+		if !ok {
+			continue
+		}
+		if !runtimeInList(skill.Runtimes, runtimeName) {
+			continue
+		}
+		skills = append(skills, ResolvedSkill{Name: skillName, SkillConfig: skill})
+	}
+
+	var mcpServers []ResolvedMCPServer
+	for _, serverName := range binding.MCPServers {
+		server, ok := f.MCPServers[serverName]
+		if !ok {
+			continue
+		}
+		if !runtimeInList(server.Runtimes, runtimeName) {
+			continue
+		}
+		mcpServers = append(mcpServers, ResolvedMCPServer{Name: serverName, MCPServerConfig: server})
+	}
+
+	return RoleResources{Skills: skills, MCPServers: mcpServers}
+}
+
+func runtimeInList(runtimes []string, target string) bool {
+	for _, r := range runtimes {
+		if r == target {
+			return true
+		}
+	}
+	return false
+}
+
 func validateProjectRelativePath(path string) error {
 	if filepath.IsAbs(path) {
 		return fmt.Errorf("absolute paths are not allowed")

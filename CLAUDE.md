@@ -107,9 +107,25 @@ Defined in full in `docs/state-machine.md`. Summary:
 | 1 — Project init, config, basic status | Complete |
 | 2 — tmux management, session spawning | Complete |
 | 3 — Task/step management, planning, mode inference | Complete |
-| 4 — Canonical task artifacts, worktree mapping, session lifecycle | Code complete; repair handling pending |
+| 4 — Canonical task artifacts, worktree mapping, session lifecycle | Complete |
+| 5 — Git worktree continuity, one-writer guardrails | Complete |
+| 6 — Checkpoint, handoff, review workflow | Complete |
+| 7 — Manual intervention, re-analysis (`aom task reanalyze`) | Complete |
+| 8 — Session approval/deny, recovery | Complete |
+| 9 — Project governance: skills, MCP, policy injection | Complete |
+| 10 — Runtime adapters (codex + claude) | Partial — codex and claude live; gemini/kiro pending |
+| 11 — Operator UX refinement | Partial — ANSI color status, section headers done |
+| 12 — Agent team collaboration (channel, broadcast, watch) | Complete |
 
-**Immediate next work**: worktree repair handling, session/worktree state reconciliation (Ready → Active, NeedsRepair), and real provider runtime launch (currently placeholder).
+**Immediate next work**: gemini and kiro runtime launch support (2 cases in `internal/runtime/launch.go`); runtime-level policy enforcement (deny_commands currently injected as instructions only, not enforced at runtime).
+
+**Recent additions** (see `docs/current-status.md` for full detail):
+- `aom session rebind` — reconnect Detached session to live pane without re-spawn
+- `aom review close` — close active review step and return task to InProgress
+- `aom project resources` — show role bindings, skills, MCP, and policy summary
+- `AOM_ACTOR` env var in `aom session send` — log actor identity for AI orchestrator sessions
+- Dynamic continuity readiness scoring in `index.md` (High / Medium / Low)
+- Policy deny_commands injected into agent identity files at spawn time
 
 ---
 

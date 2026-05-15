@@ -24,24 +24,28 @@ This document defines the Milestone 0 command contract, not the final long-term 
 
 The CLI is grouped by intent:
 
-- `aom project ...`
+- `aom project ...` (`init`, `resources`)
 - `aom open`
 - `aom status`
 - `aom plan`
 - `aom agent ...`
-- `aom runtime ...`
+- `aom runtime ...` (`list`, `inspect`)
 - `aom doctor`
-- `aom task ...`
-- `aom step ...`
-- `aom session ...`
+- `aom task ...` (`create`, `show`, `update`, `close`)
+- `aom step ...` (`list`, `update`)
+- `aom session ...` (`spawn`, `list`, `show`, `send`, `resume`, `rebind`, `recover`, `replace`, `stop`, `archive`, `set-agent-id`, `wait`)
+- `aom worktree repair`
 - `aom attach`
 - `aom capture`
 - `aom checkpoint`
 - `aom handoff`
-- `aom review`
+- `aom review` / `aom review close`
 - `aom approve`
 - `aom deny`
 - `aom reanalyze`
+- `aom broadcast`
+- `aom channel ...` (`append`, `read`)
+- `aom watch`
 - `aom events ...`
 
 Not every command must be fully implemented in the first coding slice, but the intent and naming should be locked now.
@@ -104,6 +108,29 @@ Should show:
 - repo path
 - config files created
 - database initialized or reused
+
+## aom project resources
+
+### Purpose
+
+Shows the project's governance configuration: role-to-resource bindings, skills, MCP servers, and policy summary.
+
+### Example
+
+```bash
+aom project resources
+```
+
+### Behavior
+
+- load `resources.yaml` and `policy.yaml` from the current project
+- for each role binding, list bound skills and MCP servers with runtime compatibility
+- show policy: `deny_commands`, `require_approval`, `session_defaults`, and `owner_exceptions`
+
+### Output
+
+- role bindings table (role → skills, MCP servers)
+- policy summary (deny list, approval list, yolo_mode, owner exceptions)
 
 ## aom open
 
@@ -625,7 +652,7 @@ aom session send SESS-001 "your next task is ready — read .agent/task.md"
 
 - load session record and verify pane binding is live
 - send the message text to the tmux pane via send-keys
-- append `orchestrator.prompt` event to task log if session is task-bound
+- append `orchestrator.prompt` event to task log if session is task-bound; actor defaults to `"operator"` but is overridden by the `AOM_ACTOR` environment variable (e.g. `AOM_ACTOR=orchestrator-ai`) to support AI-driven orchestrator loops
 - fail clearly if pane is not live
 
 ### Output
@@ -696,6 +723,32 @@ Should show:
 - recovery assessment
 - continuity quality
 - recommended action
+
+## aom session rebind
+
+### Purpose
+
+Reconnects a `Detached` session to a live tmux pane without spawning a new runtime process.
+
+### Example
+
+```bash
+aom session rebind SESS-001
+```
+
+### Behavior
+
+- reject if session status is not `Detached`
+- if the existing pane is still alive (verified via `PaneExists`): mark session `Idle` without touching the pane
+- if the pane is gone: create a new placeholder pane in the project workspace using `LaunchModePlaceholder`, update `TmuxWindow`/`TmuxPane`/`TmuxSessionName` on the session record, mark `Idle`
+
+### Output
+
+- session id
+- agent name
+- pane id
+- new status (`Idle`)
+- whether the pane was reused or recreated
 
 ## aom session replace
 
@@ -900,6 +953,34 @@ aom review TASK-001 --agent reviewer-main
 ### Note
 
 For MVP, this is a workflow wrapper, not a full review subsystem.
+
+## aom review close
+
+### Purpose
+
+Closes the active review step and returns the task to `InProgress` when the operator or orchestrator has accepted the review findings.
+
+### Example
+
+```bash
+aom review close TASK-001
+```
+
+### Behavior
+
+- find the active review step (status `InProgress`, `Ready`, or `NeedsAttention`)
+- advance through `InProgress → Completed` (respecting step state machine)
+- transition task status to `InProgress`
+- if `review-notes.md` contains an unambiguous owner hint, apply it to the task's `preferred_agent`
+- append `review.closed` event to `log.md`
+- refresh task artifacts
+
+### Output
+
+- task id
+- review step id
+- new task status
+- preferred agent (if applied from review hint)
 
 ## Approval Commands
 

@@ -58,6 +58,8 @@ type OpenResult struct {
 	Project        Record
 	Agents         []agent.Record
 	RoleConfigs    map[string]config.RoleConfig
+	Resources      config.ResourcesFile
+	Policy         config.PolicyFile
 	DBPath         string
 	StateDir       string
 	TerminalDriver string
@@ -257,6 +259,8 @@ func (s *Service) Open(repoPath string) (*OpenResult, error) {
 		Project:        record,
 		Agents:         agents,
 		RoleConfigs:    cfg.Agents.Roles,
+		Resources:      cfg.Resources,
+		Policy:         cfg.Policy,
 		DBPath:         dbPath,
 		StateDir:       cfg.Project.Context.StateDir,
 		TerminalDriver: cfg.Project.Runtime.Terminal,

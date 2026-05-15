@@ -1,12 +1,14 @@
 package artifact
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/session"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
@@ -79,6 +81,151 @@ func MaterializeIdentityFile(agentName, runtime, worktreePath string, profileSou
 		return fmt.Errorf("write runtime identity file for agent %q: %w", agentName, err)
 	}
 
+	return nil
+}
+
+// MaterializeSkillFiles copies role-bound skill markdown files into the worktree
+// root so the agent can read them directly. Source paths are project-root-relative.
+// Missing skill source files are silently skipped.
+func MaterializeSkillFiles(agentName string, skills []config.ResolvedSkill, repoPath, worktreePath string) error {
+	if strings.TrimSpace(worktreePath) == "" || len(skills) == 0 {
+		return nil
+	}
+
+	for _, skill := range skills {
+		src := filepath.Join(repoPath, skill.Path)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("read skill %q for agent %q: %w", skill.Name, agentName, err)
+		}
+
+		dst := filepath.Join(worktreePath, filepath.Base(skill.Path))
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			return fmt.Errorf("write skill %q for agent %q: %w", skill.Name, agentName, err)
+		}
+	}
+
+	return nil
+}
+
+// MaterializeMCPConfig writes runtime-specific MCP server configuration into
+// the worktree. For claude, an MCP section is appended to CLAUDE.md. For codex,
+// a .codex/mcp.json file is written. Other runtimes are no-ops for now.
+func MaterializeMCPConfig(agentName, runtime string, mcpServers []config.ResolvedMCPServer, worktreePath string) error {
+	if strings.TrimSpace(worktreePath) == "" || len(mcpServers) == 0 {
+		return nil
+	}
+
+	switch strings.TrimSpace(runtime) {
+	case "claude":
+		return appendClaudeMCPSection(agentName, mcpServers, worktreePath)
+	case "codex":
+		return writeCodexMCPConfig(agentName, mcpServers, worktreePath)
+	default:
+		return nil
+	}
+}
+
+func appendClaudeMCPSection(agentName string, servers []config.ResolvedMCPServer, worktreePath string) error {
+	var b strings.Builder
+	b.WriteString("\n## MCP Servers\n\n")
+	b.WriteString("The following MCP servers are available for this session via project governance:\n\n")
+	for _, s := range servers {
+		switch s.Type {
+		case "stdio":
+			cmd := s.Command
+			if len(s.Args) > 0 {
+				cmd += " " + strings.Join(s.Args, " ")
+			}
+			fmt.Fprintf(&b, "- **%s** (stdio): `%s`\n", s.Name, cmd)
+		case "http":
+			fmt.Fprintf(&b, "- **%s** (http): `%s`\n", s.Name, s.URL)
+		}
+	}
+
+	claudeMD := filepath.Join(worktreePath, "CLAUDE.md")
+	f, err := os.OpenFile(claudeMD, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return fmt.Errorf("open CLAUDE.md for agent %q: %w", agentName, err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(b.String()); err != nil {
+		return fmt.Errorf("append MCP section to CLAUDE.md for agent %q: %w", agentName, err)
+	}
+	return nil
+}
+
+// MaterializePolicyConstraints appends the project deny_commands list to the
+// runtime-specific identity file so the agent is aware of project-level rules.
+// Missing or unrecognised runtimes are silently skipped.
+func MaterializePolicyConstraints(agentName, runtime string, denyCommands []string, worktreePath string) error {
+	if strings.TrimSpace(worktreePath) == "" || len(denyCommands) == 0 {
+		return nil
+	}
+	targetName := runtimeIdentityFilename(runtime)
+	if targetName == "" {
+		return nil
+	}
+
+	var b strings.Builder
+	b.WriteString("\n## Policy Constraints\n\n")
+	b.WriteString("The following commands are prohibited by project policy:\n\n")
+	for _, cmd := range denyCommands {
+		fmt.Fprintf(&b, "- `%s`\n", cmd)
+	}
+
+	targetPath := filepath.Join(worktreePath, targetName)
+	f, err := os.OpenFile(targetPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return fmt.Errorf("open identity file for policy constraints (agent %q): %w", agentName, err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(b.String()); err != nil {
+		return fmt.Errorf("append policy constraints to identity file for agent %q: %w", agentName, err)
+	}
+	return nil
+}
+
+func writeCodexMCPConfig(agentName string, servers []config.ResolvedMCPServer, worktreePath string) error {
+	type stdioEntry struct {
+		Type    string   `json:"type"`
+		Command string   `json:"command"`
+		Args    []string `json:"args,omitempty"`
+	}
+	type httpEntry struct {
+		Type string `json:"type"`
+		URL  string `json:"url"`
+	}
+
+	entries := make(map[string]any, len(servers))
+	for _, s := range servers {
+		switch s.Type {
+		case "stdio":
+			entries[s.Name] = stdioEntry{Type: "stdio", Command: s.Command, Args: s.Args}
+		case "http":
+			entries[s.Name] = httpEntry{Type: "http", URL: s.URL}
+		}
+	}
+
+	payload := map[string]any{"mcpServers": entries}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal codex MCP config for agent %q: %w", agentName, err)
+	}
+
+	dir := filepath.Join(worktreePath, ".codex")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create .codex dir for agent %q: %w", agentName, err)
+	}
+	dst := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return fmt.Errorf("write .codex/mcp.json for agent %q: %w", agentName, err)
+	}
 	return nil
 }
 
@@ -378,7 +525,7 @@ func (s *Service) renderIndexMarkdown(params SyncParams) string {
 - Active Session: %s
 - Runtime: %s
 - Worktree Status: %s
-- Continuity Readiness: Good
+- Continuity Readiness: %s
 
 ## Artifacts
 %s
@@ -406,6 +553,7 @@ func (s *Service) renderIndexMarkdown(params SyncParams) string {
 		activeSession,
 		runtime,
 		worktreeStatus,
+		computeContinuityReadiness(params, reviewCount),
 		s.renderArtifactInventory(params),
 		checkpointID,
 		checkpointAt,
@@ -414,6 +562,33 @@ func (s *Service) renderIndexMarkdown(params SyncParams) string {
 		recoveryStatus,
 		emptyFallback(params.RecommendedNextAction),
 	)
+}
+
+// computeContinuityReadiness returns "High", "Medium", or "Low" based on how
+// ready the task state is for an agent to resume work without operator help.
+func computeContinuityReadiness(params SyncParams, reviewCount int) string {
+	taskStatus := params.Task.Status
+	hasActiveSession := params.ActiveSession != nil
+	worktreeOK := params.Worktree == nil || params.Worktree.Status == worktree.StatusReady || params.Worktree.Status == worktree.StatusActive
+
+	// Definitive blockers → Low.
+	switch taskStatus {
+	case "Blocked", "NeedsAttention", "Failed":
+		return "Low"
+	}
+	if params.Worktree != nil && params.Worktree.Status == worktree.StatusNeedsRepair {
+		return "Low"
+	}
+	if reviewCount > 0 {
+		return "Low"
+	}
+
+	// Full green-path → High.
+	if (taskStatus == "InProgress" || taskStatus == "Ready") && hasActiveSession && worktreeOK {
+		return "High"
+	}
+
+	return "Medium"
 }
 
 func (s *Service) reviewOwnerHintLine(params SyncParams) string {

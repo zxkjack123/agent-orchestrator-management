@@ -289,6 +289,8 @@ func (r Runner) executeSession(args []string) error {
 		return r.executeSessionArchive(args[1:])
 	case "resume":
 		return r.executeSessionResume(args[1:])
+	case "rebind":
+		return r.executeSessionRebind(args[1:])
 	case "set-agent-id":
 		return r.executeSessionSetAgentID(args[1:])
 	case "wait":
@@ -306,9 +308,84 @@ func (r Runner) executeProject(args []string) error {
 	switch args[0] {
 	case "init":
 		return r.executeProjectInit(args[1:])
+	case "resources":
+		return r.executeProjectResources(args[1:])
 	default:
 		return fmt.Errorf("unknown project command %q", strings.Join(args, " "))
 	}
+}
+
+func (r Runner) executeProjectResources(args []string) error {
+	_ = args
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(r.stdout, "Project resources: %s\n", result.Project.Name)
+	fmt.Fprintln(r.stdout, "")
+
+	res := result.Resources
+	if len(res.RoleBindings) == 0 {
+		fmt.Fprintln(r.stdout, "Role bindings: none (add skill and MCP server definitions to .aom/resources.yaml)")
+	} else {
+		fmt.Fprintln(r.stdout, "Role bindings:")
+		for roleName, binding := range res.RoleBindings {
+			fmt.Fprintf(r.stdout, "\n  Role: %s\n", roleName)
+			fmt.Fprintln(r.stdout, "    Skills:")
+			if len(binding.Skills) == 0 {
+				fmt.Fprintln(r.stdout, "      none")
+			} else {
+				for _, skillName := range binding.Skills {
+					skill, ok := res.Skills[skillName]
+					if !ok {
+						continue
+					}
+					fmt.Fprintf(r.stdout, "      %s   path=%s  runtimes=%s\n",
+						skillName, skill.Path, strings.Join(skill.Runtimes, ","))
+				}
+			}
+			fmt.Fprintln(r.stdout, "    MCP Servers:")
+			if len(binding.MCPServers) == 0 {
+				fmt.Fprintln(r.stdout, "      none")
+			} else {
+				for _, serverName := range binding.MCPServers {
+					srv, ok := res.MCPServers[serverName]
+					if !ok {
+						continue
+					}
+					switch srv.Type {
+					case "stdio":
+						cmd := srv.Command
+						if len(srv.Args) > 0 {
+							cmd += " " + strings.Join(srv.Args, " ")
+						}
+						fmt.Fprintf(r.stdout, "      %s   type=stdio  command=%s  runtimes=%s\n",
+							serverName, cmd, strings.Join(srv.Runtimes, ","))
+					case "http":
+						fmt.Fprintf(r.stdout, "      %s   type=http  url=%s  runtimes=%s\n",
+							serverName, srv.URL, strings.Join(srv.Runtimes, ","))
+					}
+				}
+			}
+		}
+	}
+
+	fmt.Fprintln(r.stdout, "")
+	pol := result.Policy.Policy
+	fmt.Fprintln(r.stdout, "Policy:")
+	fmt.Fprintf(r.stdout, "  Yolo mode: %s\n", pol.SessionDefaults.YoloMode)
+	fmt.Fprintf(r.stdout, "  Approval scope: %s\n", pol.SessionDefaults.ApprovalScope)
+	fmt.Fprintf(r.stdout, "  Deny commands: %d configured\n", len(pol.DenyCommands))
+	fmt.Fprintf(r.stdout, "  Require approval: %d configured\n", len(pol.RequireApproval))
+	if len(pol.DenyCommands) > 0 {
+		for _, cmd := range pol.DenyCommands {
+			fmt.Fprintf(r.stdout, "    deny: %s\n", cmd)
+		}
+	}
+
+	return nil
 }
 
 func (r Runner) executeWorktree(args []string) error {
@@ -1160,15 +1237,11 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "session launch validation failed before session became interactive", err)
 	}
 
-	profilePath := filepath.Join(result.Project.RepoPath, ".aom", "agents", agentRecord.Name, "profile.md")
-	if err := artifact.MaterializeIdentityFile(
-		agentRecord.Name,
-		agentRecord.Runtime,
-		executionPath,
-		profilePath,
-	); err != nil {
-		return nil, fmt.Errorf("materialize identity file: %w", err)
+	if err := materializeAgentContext(result, agentRecord, executionPath); err != nil {
+		return nil, fmt.Errorf("materialize agent context: %w", err)
 	}
+
+	r.enforcePolicyDefaults(result)
 
 	paneBinding, err := r.app.Tmux.CreatePane(workspace.Target, executionPath, launchCommand)
 	if err != nil {
@@ -1254,6 +1327,15 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 			fmt.Fprintln(r.stdout, "Continuity: fresh start (--fresh flag set — previous context ignored)")
 		} else {
 			fmt.Fprintln(r.stdout, "Continuity: fresh start (no previous session found for this task)")
+		}
+
+		artifactRoot := taskArtifactRoot(result.Project.RepoPath, result.StateDir, params.taskID, taskWorktree)
+		taskMDPath := filepath.Join(artifactRoot, "task.md")
+		fmt.Fprintln(r.stdout, "")
+		fmt.Fprintf(r.stdout, "Context: %s\n", taskMDPath)
+		fmt.Fprintln(r.stdout, "         Read this file before starting work on the task.")
+		if params.launchMode == aomruntime.LaunchModeReal {
+			fmt.Fprintf(r.stdout, "         To send it: aom session send %s \"@%s\"\n", record.ID, taskMDPath)
 		}
 	}
 
@@ -1798,9 +1880,10 @@ func (r Runner) executeSessionResume(args []string) error {
 		_ = r.app.Tmux.SendKeys(record.TmuxPane, "cd "+newExecutionPath)
 	}
 
-	// Deliver the agent's identity file into the new worktree.
-	profilePath := filepath.Join(result.Project.RepoPath, ".aom", "agents", record.AgentName, "profile.md")
-	_ = artifact.MaterializeIdentityFile(record.AgentName, record.Runtime, newExecutionPath, profilePath)
+	// Deliver agent context (identity, skills, MCP) into the new worktree.
+	if agentRec := findAgentByName(result.Agents, record.AgentName); agentRec != nil {
+		_ = materializeAgentContext(result, agentRec, newExecutionPath)
+	}
 
 	// Advance new task's worktree to Active.
 	if newTaskWorktree != nil {
@@ -1847,6 +1930,105 @@ func (r Runner) executeSessionResume(args []string) error {
 	fmt.Fprintf(r.stdout, "Worktree: %s\n", updated.WorktreePath)
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Next: aom session send %s \"read .agent/task.md and begin\"\n", updated.ID)
+	return nil
+}
+
+// executeSessionRebind reconnects a Detached session to a live tmux pane
+// without replacing the session record or re-spawning the runtime. If the
+// existing pane is still alive the session is simply un-detached. If the pane
+// is gone a new placeholder pane is created in the project workspace.
+func (r Runner) executeSessionRebind(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+
+	record, err := r.loadSessionByIdentifier(strings.TrimSpace(args[0]))
+	if err != nil {
+		return err
+	}
+	if record.Status != "Detached" {
+		return fmt.Errorf("session %q is %s; rebind only applies to Detached sessions", record.ID, record.Status)
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	// If the existing pane is still alive, just un-detach.
+	if strings.TrimSpace(record.TmuxPane) != "" {
+		if alive, _ := r.app.Tmux.PaneExists(record.TmuxPane); alive {
+			sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+			if err != nil {
+				return err
+			}
+			defer sqlDB.Close()
+
+			record.Status = "Idle"
+			if _, err := sessionService.Save(*record); err != nil {
+				return err
+			}
+
+			fmt.Fprintln(r.stdout, "Session rebound (pane still alive)")
+			fmt.Fprintln(r.stdout, "")
+			fmt.Fprintf(r.stdout, "Session: %s\n", record.ID)
+			fmt.Fprintf(r.stdout, "Pane: %s\n", record.TmuxPane)
+			fmt.Fprintf(r.stdout, "Status: Idle\n")
+			return nil
+		}
+	}
+
+	// Pane is gone — create a new one in the project workspace.
+	workspace, err := r.app.Tmux.EnsureWorkspace(result.SessionPrefix, result.Project.RepoPath)
+	if err != nil {
+		return fmt.Errorf("ensure workspace for rebind: %w", err)
+	}
+
+	launchCommand, err := newLaunchBuilder().Build(aomruntime.SessionSpec{
+		SessionID:      record.ID,
+		AgentName:      record.AgentName,
+		RoleName:       record.RoleName,
+		Runtime:        record.Runtime,
+		AgentSessionID: record.VendorSessionID,
+	}, aomruntime.LaunchModePlaceholder)
+	if err != nil {
+		return fmt.Errorf("build launch command for rebind: %w", err)
+	}
+
+	executionPath := record.WorktreePath
+	if strings.TrimSpace(executionPath) == "" {
+		executionPath = result.Project.RepoPath
+	}
+
+	paneBinding, err := r.app.Tmux.CreatePane(workspace.Target, executionPath, launchCommand)
+	if err != nil {
+		return fmt.Errorf("create pane for rebind: %w", err)
+	}
+
+	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	record.Status = "Idle"
+	record.TmuxSessionName = workspace.Name
+	record.TmuxWindow = paneBinding.WindowID
+	record.TmuxPane = paneBinding.PaneID
+
+	if _, err := sessionService.Save(*record); err != nil {
+		return err
+	}
+
+	_ = r.app.Tmux.RenameWindow(paneBinding.WindowID, record.AgentName)
+
+	fmt.Fprintln(r.stdout, "Session rebound (new pane)")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Session: %s\n", record.ID)
+	fmt.Fprintf(r.stdout, "Agent: %s\n", record.AgentName)
+	fmt.Fprintf(r.stdout, "Pane: %s\n", record.TmuxPane)
+	fmt.Fprintf(r.stdout, "Window: %s\n", record.TmuxWindow)
+	fmt.Fprintf(r.stdout, "Status: Idle\n")
 	return nil
 }
 
@@ -2531,9 +2713,14 @@ func (r Runner) executeSessionSend(args []string) error {
 			return err
 		}
 
+		actor := "operator"
+		if env := strings.TrimSpace(os.Getenv("AOM_ACTOR")); env != "" {
+			actor = env
+		}
+
 		if err := r.syncTaskArtifactsWithSession(result, sessionRecord.TaskID, artifact.Event{
 			Type:        "orchestrator.prompt",
-			Actor:       "operator",
+			Actor:       actor,
 			SessionID:   sessionRecord.ID,
 			Summary:     fmt.Sprintf("Prompt delivered to session %s: %s", sessionRecord.ID, briefSummary(message)),
 			StateEffect: "Session Prompted",
@@ -2734,7 +2921,11 @@ func (r Runner) executeHandoff(args []string) error {
 
 func (r Runner) executeReview(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("task identifier is required")
+		return fmt.Errorf("task identifier is required (or use 'close <task-id>')")
+	}
+
+	if args[0] == "close" {
+		return r.executeReviewClose(args[1:])
 	}
 
 	params := reviewParams{
@@ -2887,6 +3078,95 @@ func (r Runner) executeReview(args []string) error {
 	return nil
 }
 
+// executeReviewClose marks the active review step Completed, transitions the
+// task back to InProgress, and records a review.closed event. If the review
+// notes contain an unambiguous owner hint, it is applied to the task.
+func (r Runner) executeReviewClose(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task identifier is required")
+	}
+	taskID := strings.TrimSpace(args[0])
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	view, err := r.loadTaskView(result, taskID)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+
+	// Find the active review step.
+	var reviewStep *step.Record
+	for i := range view.Steps {
+		s := &view.Steps[i]
+		if s.StepType == "review" && (s.Status == "InProgress" || s.Status == "Ready" || s.Status == "NeedsAttention") {
+			reviewStep = s
+			break
+		}
+	}
+	if reviewStep == nil {
+		return fmt.Errorf("no active review step found for task %q", taskID)
+	}
+
+	// Complete the review step. The step machine requires InProgress before Completed,
+	// so advance through InProgress if the step hasn't entered it yet.
+	stepService, stepDB, err := r.app.OpenStepService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer stepDB.Close()
+
+	if reviewStep.Status == "Ready" || reviewStep.Status == "NeedsAttention" {
+		if _, err := stepService.Update(reviewStep.ID, step.UpdateParams{Status: "in-progress"}); err != nil {
+			return fmt.Errorf("advance review step to in-progress: %w", err)
+		}
+	}
+	if _, err := stepService.Update(reviewStep.ID, step.UpdateParams{Status: "completed"}); err != nil {
+		return fmt.Errorf("complete review step: %w", err)
+	}
+
+	// Transition task back to InProgress.
+	taskService, taskDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer taskDB.Close()
+
+	updateParams := task.UpdateParams{Status: "in-progress"}
+	if !view.ReviewOwnerAmbiguous && strings.TrimSpace(view.ReviewOwnerHint) != "" {
+		updateParams.PreferredAgent = view.ReviewOwnerHint
+	}
+	if _, err := taskService.Update(taskID, updateParams); err != nil {
+		return fmt.Errorf("transition task to in-progress: %w", err)
+	}
+
+	// Record the review.closed event in the artifact log.
+	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
+		Type:        "review.closed",
+		Actor:       "operator",
+		StepID:      reviewStep.ID,
+		Summary:     fmt.Sprintf("Review step %s closed; task returned to in-progress", reviewStep.ID),
+		StateEffect: "Review Closed",
+	}, false); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Review closed")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Task: %s\n", taskID)
+	fmt.Fprintf(r.stdout, "Review step: %s\n", reviewStep.ID)
+	fmt.Fprintf(r.stdout, "Task status: in-progress\n")
+	if updateParams.PreferredAgent != "" {
+		fmt.Fprintf(r.stdout, "Preferred agent: %s\n", updateParams.PreferredAgent)
+	}
+	return nil
+}
+
 type taskView struct {
 	Task                  task.Record
 	Steps                 []step.Record
@@ -2908,7 +3188,7 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 	fmt.Fprintf(r.stdout, "Default branch: %s\n", result.Project.DefaultBranch)
 	fmt.Fprintf(r.stdout, "DB: %s\n", result.DBPath)
 	fmt.Fprintln(r.stdout, "")
-	fmt.Fprintln(r.stdout, "Terminal:")
+	fmt.Fprintln(r.stdout, sectionLabel("Terminal:", r.stdout))
 	fmt.Fprintf(r.stdout, "  Driver: %s\n", result.TerminalDriver)
 	fmt.Fprintf(r.stdout, "  Available: %t\n", terminalAvailability.Available)
 	if terminalAvailability.Available {
@@ -2925,12 +3205,12 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 		fmt.Fprintf(r.stdout, "  Workspace state: %s\n", state)
 	}
 	fmt.Fprintln(r.stdout, "")
-	fmt.Fprintln(r.stdout, "Agents:")
+	fmt.Fprintln(r.stdout, sectionLabel("Agents:", r.stdout))
 	for _, agent := range result.Agents {
 		fmt.Fprintf(r.stdout, "  - %s | role=%s | runtime=%s | enabled=%t\n", agent.Name, agent.Role, agent.Runtime, agent.Enabled)
 	}
 	fmt.Fprintln(r.stdout, "")
-	fmt.Fprintln(r.stdout, "Sessions:")
+	fmt.Fprintln(r.stdout, sectionLabel("Sessions:", r.stdout))
 	if len(sessions) == 0 {
 		fmt.Fprintln(r.stdout, "  None")
 	} else {
@@ -2942,7 +3222,7 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 				item.AgentName,
 				item.RoleName,
 				item.Runtime,
-				item.Status,
+				colorStatus(item.Status, r.stdout),
 				item.TmuxSessionName,
 				item.TmuxWindow,
 				item.TmuxPane,
@@ -2950,7 +3230,7 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 		}
 	}
 	fmt.Fprintln(r.stdout, "")
-	fmt.Fprintln(r.stdout, "Tasks:")
+	fmt.Fprintln(r.stdout, sectionLabel("Tasks:", r.stdout))
 	if len(taskViews) == 0 {
 		fmt.Fprintln(r.stdout, "  None")
 	} else {
@@ -2961,7 +3241,7 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 				item.Task.ID,
 				item.Task.Title,
 				item.Task.Mode,
-				item.Task.Status,
+				colorStatus(item.Task.Status, r.stdout),
 				emptyFallback(item.Task.PreferredRole),
 				emptyFallback(item.Task.PreferredAgent),
 				len(item.Steps),
@@ -2972,7 +3252,7 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 				fmt.Fprintf(
 					r.stdout,
 					"    worktree=%s | branch=%s | path=%s\n",
-					item.Worktree.Status,
+					colorStatus(item.Worktree.Status, r.stdout),
 					item.Worktree.BranchName,
 					item.Worktree.WorktreePath,
 				)
@@ -2998,7 +3278,7 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 					taskStep.ID,
 					taskStep.StepType,
 					taskStep.Title,
-					taskStep.Status,
+					colorStatus(taskStep.Status, r.stdout),
 					emptyFallback(taskStep.RoleName),
 					emptyFallback(taskStep.AgentName),
 					formatDependencies(taskStep.Dependencies),
@@ -3050,6 +3330,7 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Project")
 	fmt.Fprintln(r.stdout, "aom project init <name> --repo <path> : create .aom config, db, and starter agents")
+	fmt.Fprintln(r.stdout, "aom project resources : show role bindings, skills, MCP servers, and policy")
 	fmt.Fprintln(r.stdout, "aom open : load project state and reconcile tmux/worktree/session state")
 	fmt.Fprintln(r.stdout, "aom status : show project, tasks, sessions, worktrees, and next-action hints")
 	fmt.Fprintln(r.stdout, "aom plan \"work\" [--create] : draft a task plan and optionally persist it")
@@ -3824,6 +4105,15 @@ func (r Runner) enforceWriterWorktreeBoundary(result *project.OpenResult, agentR
 	return nil
 }
 
+func findAgentByName(agents []agent.Record, name string) *agent.Record {
+	for i := range agents {
+		if agents[i].Name == name {
+			return &agents[i]
+		}
+	}
+	return nil
+}
+
 func roleWorktreeMode(result *project.OpenResult, roleName string) string {
 	if result == nil {
 		return ""
@@ -3879,6 +4169,41 @@ func (r Runner) resolveTaskExecutionPath(result *project.OpenResult, taskRecord 
 	}
 
 	return mapping, mapping.WorktreePath, nil
+}
+
+// materializeAgentContext consolidates all three spawn-time context injections:
+// identity file, role skill files, and MCP server config. Both spawn sites call
+// this so they cannot diverge.
+func materializeAgentContext(result *project.OpenResult, agentRecord *agent.Record, worktreePath string) error {
+	profilePath := filepath.Join(result.Project.RepoPath, ".aom", "agents", agentRecord.Name, "profile.md")
+	if err := artifact.MaterializeIdentityFile(agentRecord.Name, agentRecord.Runtime, worktreePath, profilePath); err != nil {
+		return fmt.Errorf("materialize identity file: %w", err)
+	}
+
+	roleRes := result.Resources.ResourcesForRole(agentRecord.Role, agentRecord.Runtime)
+
+	if err := artifact.MaterializeSkillFiles(agentRecord.Name, roleRes.Skills, result.Project.RepoPath, worktreePath); err != nil {
+		return fmt.Errorf("materialize skill files: %w", err)
+	}
+
+	if err := artifact.MaterializeMCPConfig(agentRecord.Name, agentRecord.Runtime, roleRes.MCPServers, worktreePath); err != nil {
+		return fmt.Errorf("materialize mcp config: %w", err)
+	}
+
+	if err := artifact.MaterializePolicyConstraints(agentRecord.Name, agentRecord.Runtime, result.Policy.Policy.DenyCommands, worktreePath); err != nil {
+		return fmt.Errorf("materialize policy constraints: %w", err)
+	}
+
+	return nil
+}
+
+// enforcePolicyDefaults surfaces policy information at spawn time.
+// Full command interception is deferred to M10 (runtime adapter layer).
+func (r Runner) enforcePolicyDefaults(result *project.OpenResult) {
+	policy := result.Policy.Policy
+	if policy.SessionDefaults.YoloMode == "enabled" {
+		fmt.Fprintln(r.stderr, "Warning: project policy has yolo_mode=enabled — agent runs without approval gates")
+	}
 }
 
 func recommendTaskAction(status string, steps []step.Record, mapping *worktree.Record, driftKind string, unresolvedReviewItems int, reviewOwnerHint string, reviewOwnerAmbiguous bool) string {

@@ -257,6 +257,40 @@ func validConfig(root string) *ProjectConfig {
 	}
 }
 
+func TestResourcesForRoleReturnsSkillsAndMCPForKnownRole(t *testing.T) {
+	cfg := validConfig(t.TempDir())
+	res := cfg.Resources.ResourcesForRole("backend", "codex")
+
+	if len(res.Skills) != 1 || res.Skills[0].Name != "api-patterns" {
+		t.Fatalf("Skills = %v, want [api-patterns]", res.Skills)
+	}
+	if len(res.MCPServers) != 1 || res.MCPServers[0].Name != "repo-index" {
+		t.Fatalf("MCPServers = %v, want [repo-index]", res.MCPServers)
+	}
+}
+
+func TestResourcesForRoleReturnsEmptyForUnknownRole(t *testing.T) {
+	cfg := validConfig(t.TempDir())
+	res := cfg.Resources.ResourcesForRole("nonexistent", "codex")
+
+	if len(res.Skills) != 0 || len(res.MCPServers) != 0 {
+		t.Fatalf("expected empty RoleResources for unknown role, got %+v", res)
+	}
+}
+
+func TestResourcesForRoleFiltersIncompatibleRuntimes(t *testing.T) {
+	cfg := validConfig(t.TempDir())
+	// codex skills/MCP are not compatible with claude runtime
+	res := cfg.Resources.ResourcesForRole("backend", "claude")
+
+	if len(res.Skills) != 0 {
+		t.Fatalf("Skills = %v, want empty (codex skills incompatible with claude)", res.Skills)
+	}
+	if len(res.MCPServers) != 0 {
+		t.Fatalf("MCPServers = %v, want empty (codex MCP incompatible with claude)", res.MCPServers)
+	}
+}
+
 func writeConfigFile(t *testing.T, path string, contents string) {
 	t.Helper()
 

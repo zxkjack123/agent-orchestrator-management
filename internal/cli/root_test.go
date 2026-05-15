@@ -5468,3 +5468,262 @@ func TestRuntimeInspectRequiresRuntimeName(t *testing.T) {
 		t.Fatal("expected error without runtime name, got nil")
 	}
 }
+
+func TestExecuteReviewCloseTransitionsTaskToInProgress(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "", errors.New("not found") },
+		func(string, ...string) ([]byte, error) { return nil, nil },
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Close review task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+	if taskID == "" {
+		t.Fatalf("could not extract task id from %q", stdout.String())
+	}
+
+	// Prepare a review step (tmux unavailable so it stops after notes creation).
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"review", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("review failed: %v", err)
+	}
+
+	// Extract the review step id.
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	stepOut := stdout.String()
+	reviewStepID := ""
+	for _, line := range strings.Split(stepOut, "\n") {
+		if strings.Contains(line, "type=review") {
+			for _, part := range strings.Fields(line) {
+				if strings.HasPrefix(part, "STEP-") {
+					reviewStepID = part
+				}
+			}
+		}
+	}
+	if reviewStepID == "" {
+		t.Fatalf("could not find review step in %q", stepOut)
+	}
+
+	// Close the review.
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"review", "close", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("review close failed: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Review closed") {
+		t.Fatalf("stdout = %q, want review closed header", out)
+	}
+	if !strings.Contains(out, "Task: "+taskID) {
+		t.Fatalf("stdout = %q, want task id", out)
+	}
+	if !strings.Contains(out, "Task status: in-progress") {
+		t.Fatalf("stdout = %q, want in-progress status", out)
+	}
+
+	// Verify the task is now InProgress.
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task show failed: %v", err)
+	}
+	if showOut := stdout.String(); !strings.Contains(showOut, "Status: InProgress") {
+		t.Fatalf("task show stdout = %q, want InProgress", showOut)
+	}
+
+	// Verify the review step is Completed.
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("step list failed: %v", err)
+	}
+	if stepListOut := stdout.String(); !strings.Contains(stepListOut, "status=Completed") {
+		t.Fatalf("step list stdout = %q, want Completed review step", stepListOut)
+	}
+
+	// Verify the log records a review.closed event.
+	logPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md")
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log.md) failed: %v", err)
+	}
+	if !strings.Contains(string(logData), "review.closed") {
+		t.Fatalf("log.md = %q, want review.closed event", string(logData))
+	}
+}
+
+func TestExecuteSessionSendUsesAOMActorEnvVar(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	firstHasSession := true
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(name string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
+			case "set-option", "send-keys":
+				return nil, nil
+			case "display-message":
+				return []byte("%5\n"), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Actor env var task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+
+	stdout.Reset()
+	if err := Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("session spawn failed: %v", err)
+	}
+	sessionID := extractSessionID(stdout.String())
+
+	// Set AOM_ACTOR and send a prompt.
+	t.Setenv("AOM_ACTOR", "orchestrator-ai")
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute([]string{"session", "send", sessionID, "start work"}, &stdout, &stderr); err != nil {
+		t.Fatalf("session send failed: %v", err)
+	}
+
+	logPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md")
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(log.md) failed: %v", err)
+	}
+	if !strings.Contains(string(logData), "orchestrator-ai") {
+		t.Fatalf("log.md = %q, want orchestrator-ai actor", string(logData))
+	}
+}
+
+func TestExecuteSessionRebindRejectsNonDetached(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd failed: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldWD) }()
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
+	firstHasSession := true
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(name string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
+			case "set-option":
+				return nil, nil
+			case "display-message":
+				// Return the pane ID so PaneExists returns true and the
+				// session stays Idle during loadSessionByIdentifier reconciliation.
+				return []byte("%5\n"), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init failed: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"session", "spawn", "backend-main", "--mock"}, &stdout, &stderr); err != nil {
+		t.Fatalf("session spawn failed: %v", err)
+	}
+	sessionID := extractSessionID(stdout.String())
+
+	// Session is Idle, not Detached — rebind must reject it.
+	rebindErr := Execute([]string{"session", "rebind", sessionID}, &stdout, &stderr)
+	if rebindErr == nil {
+		t.Fatal("expected error rebinding non-Detached session, got nil")
+	}
+	if !strings.Contains(rebindErr.Error(), "rebind only applies to Detached") {
+		t.Fatalf("error = %q, want detached message", rebindErr.Error())
+	}
+}

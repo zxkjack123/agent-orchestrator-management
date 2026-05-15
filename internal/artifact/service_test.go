@@ -1,12 +1,14 @@
 package artifact
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/session"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
@@ -431,5 +433,201 @@ func TestSuggestedReviewOwnerReturnsSharedUnresolvedOwnerOnly(t *testing.T) {
 	}
 	if got := SuggestedReviewOwner(mixedPath); got != "" {
 		t.Fatalf("SuggestedReviewOwner() = %q, want empty for mixed owners", got)
+	}
+}
+
+func TestMaterializeSkillFilesCopiesSkillToWorktree(t *testing.T) {
+	root := t.TempDir()
+	repoPath := filepath.Join(root, "repo")
+	worktreePath := filepath.Join(root, "worktree")
+	skillSrc := filepath.Join(repoPath, ".aom", "skills", "api-patterns.md")
+
+	if err := os.MkdirAll(filepath.Dir(skillSrc), 0o755); err != nil {
+		t.Fatalf("MkdirAll skill src dir: %v", err)
+	}
+	if err := os.WriteFile(skillSrc, []byte("# API Patterns\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile skill src: %v", err)
+	}
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree: %v", err)
+	}
+
+	skills := []config.ResolvedSkill{
+		{Name: "api-patterns", SkillConfig: config.SkillConfig{Path: ".aom/skills/api-patterns.md", Runtimes: []string{"codex"}}},
+	}
+	if err := MaterializeSkillFiles("backend-main", skills, repoPath, worktreePath); err != nil {
+		t.Fatalf("MaterializeSkillFiles: %v", err)
+	}
+
+	dst := filepath.Join(worktreePath, "api-patterns.md")
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("ReadFile(api-patterns.md): %v", err)
+	}
+	if string(data) != "# API Patterns\n" {
+		t.Fatalf("api-patterns.md = %q, want original content", string(data))
+	}
+}
+
+func TestMaterializeSkillFilesSkipsMissingSource(t *testing.T) {
+	root := t.TempDir()
+	worktreePath := filepath.Join(root, "worktree")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatalf("MkdirAll worktree: %v", err)
+	}
+
+	skills := []config.ResolvedSkill{
+		{Name: "missing", SkillConfig: config.SkillConfig{Path: ".aom/skills/missing.md", Runtimes: []string{"codex"}}},
+	}
+	if err := MaterializeSkillFiles("backend-main", skills, root, worktreePath); err != nil {
+		t.Fatalf("MaterializeSkillFiles with missing source: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreePath, "missing.md")); !os.IsNotExist(err) {
+		t.Fatal("missing.md unexpectedly created")
+	}
+}
+
+func TestMaterializeMCPConfigAppendsClaudeSection(t *testing.T) {
+	root := t.TempDir()
+	claudeMD := filepath.Join(root, "CLAUDE.md")
+	if err := os.WriteFile(claudeMD, []byte("# Identity\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile CLAUDE.md: %v", err)
+	}
+
+	servers := []config.ResolvedMCPServer{
+		{Name: "repo-index", MCPServerConfig: config.MCPServerConfig{Type: "stdio", Command: "uvx", Args: []string{"repo-index-server"}}},
+	}
+	if err := MaterializeMCPConfig("backend-main", "claude", servers, root); err != nil {
+		t.Fatalf("MaterializeMCPConfig(claude): %v", err)
+	}
+
+	data, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("ReadFile CLAUDE.md: %v", err)
+	}
+	out := string(data)
+	if !strings.Contains(out, "## MCP Servers") {
+		t.Fatalf("CLAUDE.md missing MCP Servers section: %q", out)
+	}
+	if !strings.Contains(out, "repo-index") {
+		t.Fatalf("CLAUDE.md missing repo-index entry: %q", out)
+	}
+	if !strings.Contains(out, "# Identity") {
+		t.Fatalf("CLAUDE.md original content lost: %q", out)
+	}
+}
+
+func TestMaterializeMCPConfigWritesCodexJSON(t *testing.T) {
+	root := t.TempDir()
+
+	servers := []config.ResolvedMCPServer{
+		{Name: "repo-index", MCPServerConfig: config.MCPServerConfig{Type: "stdio", Command: "uvx", Args: []string{"repo-index-server"}}},
+	}
+	if err := MaterializeMCPConfig("backend-main", "codex", servers, root); err != nil {
+		t.Fatalf("MaterializeMCPConfig(codex): %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".codex", "mcp.json"))
+	if err != nil {
+		t.Fatalf("ReadFile .codex/mcp.json: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Unmarshal mcp.json: %v", err)
+	}
+	mcpServers, ok := parsed["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcp.json missing mcpServers key: %v", parsed)
+	}
+	if _, ok := mcpServers["repo-index"]; !ok {
+		t.Fatalf("mcp.json missing repo-index entry: %v", mcpServers)
+	}
+}
+
+func TestMaterializeMCPConfigNoopForEmptyServers(t *testing.T) {
+	root := t.TempDir()
+	if err := MaterializeMCPConfig("backend-main", "claude", nil, root); err != nil {
+		t.Fatalf("MaterializeMCPConfig(empty): %v", err)
+	}
+	if err := MaterializeMCPConfig("backend-main", "codex", []config.ResolvedMCPServer{}, root); err != nil {
+		t.Fatalf("MaterializeMCPConfig(empty slice): %v", err)
+	}
+}
+
+func TestMaterializePolicyConstraintsAppendsToClaudeMD(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("# Agent\n"), 0o644); err != nil {
+		t.Fatalf("setup CLAUDE.md: %v", err)
+	}
+
+	if err := MaterializePolicyConstraints("backend-main", "claude", []string{"rm -rf", "git push --force"}, root); err != nil {
+		t.Fatalf("MaterializePolicyConstraints: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("read CLAUDE.md: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "## Policy Constraints") {
+		t.Fatalf("CLAUDE.md missing policy section: %q", got)
+	}
+	if !strings.Contains(got, "`rm -rf`") {
+		t.Fatalf("CLAUDE.md missing deny command: %q", got)
+	}
+	if !strings.Contains(got, "`git push --force`") {
+		t.Fatalf("CLAUDE.md missing deny command: %q", got)
+	}
+}
+
+func TestMaterializePolicyConstraintsNoopForEmptyList(t *testing.T) {
+	root := t.TempDir()
+	if err := MaterializePolicyConstraints("backend-main", "claude", nil, root); err != nil {
+		t.Fatalf("MaterializePolicyConstraints(nil): %v", err)
+	}
+	if err := MaterializePolicyConstraints("backend-main", "claude", []string{}, root); err != nil {
+		t.Fatalf("MaterializePolicyConstraints(empty): %v", err)
+	}
+	// no CLAUDE.md should be created
+	if _, err := os.Stat(filepath.Join(root, "CLAUDE.md")); !os.IsNotExist(err) {
+		t.Fatal("CLAUDE.md should not be created for empty deny list")
+	}
+}
+
+func TestComputeContinuityReadinessHigh(t *testing.T) {
+	sess := &session.Record{ID: "S1", Status: "Working"}
+	wt := &worktree.Record{Status: worktree.StatusActive}
+	params := SyncParams{
+		Task:          task.Record{Status: "InProgress"},
+		ActiveSession: sess,
+		Worktree:      wt,
+	}
+	if got := computeContinuityReadiness(params, 0); got != "High" {
+		t.Fatalf("want High, got %q", got)
+	}
+}
+
+func TestComputeContinuityReadinessLowOnBlockedTask(t *testing.T) {
+	params := SyncParams{Task: task.Record{Status: "Blocked"}}
+	if got := computeContinuityReadiness(params, 0); got != "Low" {
+		t.Fatalf("want Low, got %q", got)
+	}
+}
+
+func TestComputeContinuityReadinessLowOnUnresolvedReviews(t *testing.T) {
+	sess := &session.Record{ID: "S1"}
+	params := SyncParams{
+		Task:          task.Record{Status: "InProgress"},
+		ActiveSession: sess,
+	}
+	if got := computeContinuityReadiness(params, 2); got != "Low" {
+		t.Fatalf("want Low, got %q", got)
+	}
+}
+
+func TestComputeContinuityReadinessMediumWithNoSession(t *testing.T) {
+	params := SyncParams{Task: task.Record{Status: "InProgress"}}
+	if got := computeContinuityReadiness(params, 0); got != "Medium" {
+		t.Fatalf("want Medium, got %q", got)
 	}
 }
