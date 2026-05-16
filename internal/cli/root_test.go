@@ -1773,7 +1773,7 @@ func TestExecuteSessionSpawnWithTaskLogsFailureWhenPaneCreationFails(t *testing.
 	}
 }
 
-func TestExecuteHandoffToRoleOnlyResetsActiveTaskAndStepToReady(t *testing.T) {
+func TestExecuteHandoffToRoleOnlyPreservesStatusTransfersOwnership(t *testing.T) {
 	repoRoot := t.TempDir()
 	oldWD, err := os.Getwd()
 	if err != nil {
@@ -1876,16 +1876,17 @@ func TestExecuteHandoffToRoleOnlyResetsActiveTaskAndStepToReady(t *testing.T) {
 	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
 		t.Fatalf("task show failed: %v", err)
 	}
-	if out := stdout.String(); !strings.Contains(out, "Status: Ready") || !strings.Contains(out, "Preferred role: reviewer") || !strings.Contains(out, "Preferred agent: -") {
-		t.Fatalf("stdout = %q, want role-only handoff to reset task to Ready", out)
+	// Handoff preserves InProgress status; only transfers ownership to the new role.
+	if out := stdout.String(); !strings.Contains(out, "Status: InProgress") || !strings.Contains(out, "Preferred role: reviewer") || !strings.Contains(out, "Preferred agent: -") {
+		t.Fatalf("stdout = %q, want role-only handoff to keep InProgress and transfer ownership to reviewer", out)
 	}
 
 	stdout.Reset()
 	if err := Execute([]string{"step", "list", taskID}, &stdout, &stderr); err != nil {
 		t.Fatalf("step list failed: %v", err)
 	}
-	if out := stdout.String(); !strings.Contains(out, stepID) || !strings.Contains(out, "status=Ready") || !strings.Contains(out, "role=reviewer") || !strings.Contains(out, "agent=-") {
-		t.Fatalf("stdout = %q, want active step reset to Ready under reviewer role", out)
+	if out := stdout.String(); !strings.Contains(out, stepID) || !strings.Contains(out, "status=InProgress") || !strings.Contains(out, "role=reviewer") || !strings.Contains(out, "agent=-") {
+		t.Fatalf("stdout = %q, want active step to keep InProgress under reviewer role", out)
 	}
 }
 

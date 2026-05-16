@@ -13,6 +13,11 @@ type claudeProvider struct{}
 func (p *claudeProvider) Name() string            { return "claude" }
 func (p *claudeProvider) IdentityFilename() string { return "CLAUDE.md" }
 
+// claudeEnvReset clears environment variables that Claude Code sets on its own process.
+// Without this, a nested Claude agent inherits CLAUDECODE=1 and exits immediately
+// thinking it's already running inside a Claude Code session.
+const claudeEnvReset = "unset CLAUDECODE CLAUDE_CODE_SESSION_ID CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH AI_AGENT CLAUDE_CODE_IS_INNER_CLAUDE_CODE 2>/dev/null; "
+
 func (p *claudeProvider) LaunchCommand(spec LaunchSpec, lookPath func(string) (string, error)) (string, error) {
 	if _, err := lookPath("claude"); err != nil {
 		return "", fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", "claude", "claude")
@@ -20,14 +25,14 @@ func (p *claudeProvider) LaunchCommand(spec LaunchSpec, lookPath func(string) (s
 	disallowedFlag := buildDisallowedToolsFlag(spec.DenyCommands)
 	if spec.AgentSessionID != "" {
 		if disallowedFlag != "" {
-			return fmt.Sprintf("sh -lc 'exec claude --resume %s --dangerously-skip-permissions %s'", spec.AgentSessionID, disallowedFlag), nil
+			return fmt.Sprintf(`sh -lc "%sexec claude --resume %s --dangerously-skip-permissions %s"`, claudeEnvReset, spec.AgentSessionID, disallowedFlag), nil
 		}
-		return fmt.Sprintf("sh -lc 'exec claude --resume %s --dangerously-skip-permissions'", spec.AgentSessionID), nil
+		return fmt.Sprintf(`sh -lc "%sexec claude --resume %s --dangerously-skip-permissions"`, claudeEnvReset, spec.AgentSessionID), nil
 	}
 	if disallowedFlag != "" {
-		return fmt.Sprintf("sh -lc 'exec claude --dangerously-skip-permissions %s'", disallowedFlag), nil
+		return fmt.Sprintf(`sh -lc "%sexec claude --dangerously-skip-permissions %s"`, claudeEnvReset, disallowedFlag), nil
 	}
-	return "sh -lc 'exec claude --dangerously-skip-permissions'", nil
+	return fmt.Sprintf(`sh -lc "%sexec claude --dangerously-skip-permissions"`, claudeEnvReset), nil
 }
 
 func (p *claudeProvider) ResumeInfo() ResumeInfo {

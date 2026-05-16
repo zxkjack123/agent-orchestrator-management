@@ -11,7 +11,6 @@ import (
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/session"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/worktree"
 )
 
@@ -203,14 +202,8 @@ func (r Runner) transferHandoffOwnership(result *project.OpenResult, view *taskV
 	}
 	defer taskDB.Close()
 
-	updatedTask, err := taskService.AssignOwner(view.Task.ID, roleName, agentName)
-	if err != nil {
+	if _, err := taskService.AssignOwner(view.Task.ID, roleName, agentName); err != nil {
 		return err
-	}
-	if shouldResetRoleOnlyHandoffStatus(agentName, updatedTask.Status) {
-		if _, err := taskService.Update(view.Task.ID, task.UpdateParams{Status: "ready"}); err != nil {
-			return err
-		}
 	}
 
 	activeStep := selectHandoffStep(view.Steps)
@@ -224,14 +217,8 @@ func (r Runner) transferHandoffOwnership(result *project.OpenResult, view *taskV
 	}
 	defer stepDB.Close()
 
-	updatedStep, err := stepService.AssignOwner(activeStep.ID, roleName, agentName)
-	if err != nil {
+	if _, err := stepService.AssignOwner(activeStep.ID, roleName, agentName); err != nil {
 		return err
-	}
-	if shouldResetRoleOnlyHandoffStatus(agentName, updatedStep.Status) {
-		if _, err := stepService.Update(activeStep.ID, step.UpdateParams{Status: "ready"}); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -255,17 +242,6 @@ func ownershipSummary(roleName, agentName string) string {
 	return roleName
 }
 
-func shouldResetRoleOnlyHandoffStatus(agentName, status string) bool {
-	if strings.TrimSpace(agentName) != "" {
-		return false
-	}
-	switch strings.TrimSpace(status) {
-	case "InProgress", "Blocked":
-		return true
-	default:
-		return false
-	}
-}
 
 func taskHandoffPath(repoPath, stateDir, taskID string, mapping *worktree.Record) string {
 	return filepath.Join(taskArtifactRoot(repoPath, stateDir, taskID, mapping), "handoff.md")

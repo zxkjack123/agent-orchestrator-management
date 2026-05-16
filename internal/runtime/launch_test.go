@@ -71,8 +71,8 @@ func TestBuilderBuildReturnsRealClaudeCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	if command != "sh -lc 'exec claude --dangerously-skip-permissions'" {
-		t.Fatalf("command = %q, want claude exec command", command)
+	if !strings.Contains(command, "exec claude --dangerously-skip-permissions") || !strings.Contains(command, "unset CLAUDECODE") {
+		t.Fatalf("command = %q, want claude exec command with env reset", command)
 	}
 }
 
@@ -128,9 +128,8 @@ func TestBuilderBuildResumesClaudeSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	want := "sh -lc 'exec claude --resume abc-123-def --dangerously-skip-permissions'"
-	if command != want {
-		t.Fatalf("command = %q, want %q", command, want)
+	if !strings.Contains(command, "exec claude --resume abc-123-def --dangerously-skip-permissions") || !strings.Contains(command, "unset CLAUDECODE") {
+		t.Fatalf("command = %q, want claude resume command with env reset", command)
 	}
 }
 
@@ -161,18 +160,18 @@ func TestBuilderBuildFreshStartWhenNoAgentSessionID(t *testing.T) {
 	})
 
 	for _, tc := range []struct {
-		runtime string
-		want    string
+		runtime     string
+		wantContain string
 	}{
-		{"claude", "sh -lc 'exec claude --dangerously-skip-permissions'"},
+		{"claude", "exec claude --dangerously-skip-permissions"},
 		{"codex", "sh -lc 'exec codex --sandbox workspace-write'"},
 	} {
 		command, err := builder.Build(SessionSpec{Runtime: tc.runtime}, LaunchModeReal)
 		if err != nil {
 			t.Fatalf("%s: Build failed: %v", tc.runtime, err)
 		}
-		if command != tc.want {
-			t.Fatalf("%s: command = %q, want %q", tc.runtime, command, tc.want)
+		if !strings.Contains(command, tc.wantContain) {
+			t.Fatalf("%s: command = %q, want to contain %q", tc.runtime, command, tc.wantContain)
 		}
 	}
 }
