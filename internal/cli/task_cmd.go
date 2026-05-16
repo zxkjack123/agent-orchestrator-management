@@ -248,6 +248,7 @@ func (r Runner) executeTaskUpdate(args []string) error {
 	fmt.Fprintf(r.stdout, "Task: %s\n", record.ID)
 	fmt.Fprintf(r.stdout, "Mode: %s\n", record.Mode)
 	fmt.Fprintf(r.stdout, "Status: %s\n", record.Status)
+	fmt.Fprintf(r.stdout, "Priority: %s\n", task.PriorityLabel(record.Priority))
 	fmt.Fprintf(r.stdout, "Preferred role: %s\n", emptyFallback(record.PreferredRole))
 	fmt.Fprintf(r.stdout, "Preferred agent: %s\n", emptyFallback(record.PreferredAgent))
 
@@ -534,10 +535,18 @@ func (r Runner) executeTaskRequest(args []string) error {
 		return fmt.Errorf("task title is required")
 	}
 
+	// Support optional task-id prefix: aom task request [<task-id>] "<title>"
+	// If args[0] looks like a TASK-ID and args[1] exists, treat args[1] as title.
 	title := strings.TrimSpace(args[0])
+	startIdx := 1
+	if strings.HasPrefix(title, "TASK-") && len(args) > 1 && !strings.HasPrefix(args[1], "--") {
+		title = strings.TrimSpace(args[1])
+		startIdx = 2
+	}
+
 	var fromSession, priorityFlag string
 
-	for i := 1; i < len(args); i++ {
+	for i := startIdx; i < len(args); i++ {
 		switch args[i] {
 		case "--from-session":
 			i++

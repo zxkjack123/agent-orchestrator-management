@@ -274,6 +274,7 @@ func (s *Service) RefreshTaskArtifacts(params SyncParams) error {
 }
 
 // EnsureReviewNotesTemplate creates or refreshes a structured review-notes.md template.
+// If an existing file belongs to a different task (stale content), it is overwritten.
 func (s *Service) EnsureReviewNotesTemplate(params SyncParams, reviewer, sessionID string) error {
 	dir := s.taskDir(params)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -281,8 +282,13 @@ func (s *Service) EnsureReviewNotesTemplate(params SyncParams, reviewer, session
 	}
 
 	path := filepath.Join(dir, "review-notes.md")
-	if _, err := os.Stat(path); err == nil {
-		return nil
+	if existing, err := os.ReadFile(path); err == nil {
+		existingTaskID := reviewNotesTaskID(string(existing))
+		if existingTaskID == "" || existingTaskID == params.Task.ID {
+			// No task ID (manual/real findings) or already owned by this task — preserve.
+			return nil
+		}
+		// Task ID present but belongs to a different task — stale, overwrite.
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat review-notes.md: %w", err)
 	}
@@ -292,6 +298,17 @@ func (s *Service) EnsureReviewNotesTemplate(params SyncParams, reviewer, session
 		return fmt.Errorf("write review-notes.md: %w", err)
 	}
 	return nil
+}
+
+// reviewNotesTaskID extracts the task ID from a review-notes.md header line "- Task: <id>".
+func reviewNotesTaskID(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- Task:") {
+			return strings.TrimSpace(strings.TrimPrefix(trimmed, "- Task:"))
+		}
+	}
+	return ""
 }
 
 // EnsureHandoffTemplate creates a structured handoff.md template for one task-bound session.
@@ -624,6 +641,7 @@ func (s *Service) renderReviewNotesMarkdown(params SyncParams, reviewer, session
 	return fmt.Sprintf(`# Review Notes
 
 ## Summary
+- Task: %s
 - Review Step: %s
 - Reviewer: %s
 - Session: %s
@@ -632,6 +650,7 @@ func (s *Service) renderReviewNotesMarkdown(params SyncParams, reviewer, session
 ## Items
 - No findings recorded yet
 `,
+		params.Task.ID,
 		reviewStepID,
 		emptyFallback(reviewer),
 		emptyFallback(sessionID),

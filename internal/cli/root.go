@@ -51,6 +51,8 @@ func (r Runner) Execute(args []string) error {
 	case "help", "--help", "-h":
 		r.printHelp()
 		return nil
+	case "agent":
+		return r.executeAgent(args[1:])
 	case "attach":
 		return r.executeAttach(args[1:])
 	case "approve":
@@ -300,6 +302,13 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom status : show project, tasks, sessions, worktrees, and next-action hints")
 	fmt.Fprintln(r.stdout, "aom plan \"work\" [--create] : draft a task plan and optionally persist it")
 	fmt.Fprintln(r.stdout, "aom doctor : validate environment (tmux, config, runtimes, db, worktrees)")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintln(r.stdout, "Agent")
+	fmt.Fprintln(r.stdout, "aom agent list : list all configured agents with role, runtime, and profile path")
+	fmt.Fprintln(r.stdout, "aom agent add <name> --role <role> --runtime <runtime> : add a new agent and seed its profile")
+	fmt.Fprintln(r.stdout, "aom agent show <name> : show agent config and full profile content")
+	fmt.Fprintln(r.stdout, "aom agent profile show <name> : print agent profile markdown")
+	fmt.Fprintln(r.stdout, "aom agent profile update <name> [--responsibilities <text>] [--constraints <text>] : update profile sections")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Runtime")
 	fmt.Fprintln(r.stdout, "aom runtime list : list configured runtimes with binary availability")

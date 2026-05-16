@@ -7,7 +7,125 @@ import (
 	"strings"
 
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
+	"gopkg.in/yaml.v3"
 )
+
+// AgentProfilePath returns the path to an agent's profile.md file.
+func AgentProfilePath(aomPath, agentName string) string {
+	return filepath.Join(aomPath, "agents", agentName, "profile.md")
+}
+
+// ReadAgentProfile returns the content of an agent's profile.md, or empty string if not found.
+func ReadAgentProfile(aomPath, agentName string) (string, error) {
+	data, err := os.ReadFile(AgentProfilePath(aomPath, agentName))
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read agent profile %q: %w", agentName, err)
+	}
+	return string(data), nil
+}
+
+// WriteAgentProfile overwrites an agent's profile.md with new content.
+func WriteAgentProfile(aomPath, agentName, content string) error {
+	path := AgentProfilePath(aomPath, agentName)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create agent profile dir: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write agent profile %q: %w", agentName, err)
+	}
+	return nil
+}
+
+// AddAgentParams describes the parameters for adding a new agent.
+type AddAgentParams struct {
+	Name    string
+	Role    string
+	Runtime string
+}
+
+// AddAgentToConfig adds a new agent entry to agents.yaml and seeds its profile.
+// If the role does not exist, it is auto-created with builder-class defaults.
+func AddAgentToConfig(aomPath string, params AddAgentParams) error {
+	agentsPath := filepath.Join(aomPath, "agents.yaml")
+	data, err := os.ReadFile(agentsPath)
+	if err != nil {
+		return fmt.Errorf("read agents.yaml: %w", err)
+	}
+
+	var cfg config.AgentsFile
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("parse agents.yaml: %w", err)
+	}
+	if cfg.Agents == nil {
+		cfg.Agents = make(map[string]config.AgentConfig)
+	}
+	if cfg.Roles == nil {
+		cfg.Roles = make(map[string]config.RoleConfig)
+	}
+
+	if _, exists := cfg.Agents[params.Name]; exists {
+		return fmt.Errorf("agent %q already exists in agents.yaml", params.Name)
+	}
+
+	if _, exists := cfg.Roles[params.Role]; !exists {
+		cfg.Roles[params.Role] = defaultInlineRoleConfig()
+	}
+
+	cfg.Agents[params.Name] = config.AgentConfig{
+		Runtime: params.Runtime,
+		Role:    params.Role,
+		Enabled: true,
+	}
+
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return fmt.Errorf("marshal agents.yaml: %w", err)
+	}
+	if err := os.WriteFile(agentsPath, out, 0o644); err != nil {
+		return fmt.Errorf("write agents.yaml: %w", err)
+	}
+
+	roleCfg := cfg.Roles[params.Role]
+	content := renderAgentProfileMarkdown(params.Name, params.Role, params.Runtime, roleCfg.Class)
+	return WriteAgentProfile(aomPath, params.Name, content)
+}
+
+// UpdateProfileSection replaces a named markdown section (## Heading) with new content.
+// Returns the updated profile string. If the section is not found, it is appended.
+func UpdateProfileSection(profile, section, newContent string) string {
+	heading := "## " + section
+	lines := strings.Split(profile, "\n")
+	start := -1
+	end := len(lines)
+	for i, line := range lines {
+		if strings.TrimSpace(line) == heading {
+			start = i
+			continue
+		}
+		if start >= 0 && i > start && strings.HasPrefix(strings.TrimSpace(line), "## ") {
+			end = i
+			break
+		}
+	}
+
+	newLines := strings.Split(strings.TrimRight(newContent, "\n"), "\n")
+	replacement := append([]string{heading}, newLines...)
+	replacement = append(replacement, "")
+
+	if start < 0 {
+		// Section not found — append it
+		return strings.Join(append(lines, replacement...), "\n")
+	}
+
+	updated := make([]string, 0, len(lines))
+	updated = append(updated, lines[:start]...)
+	updated = append(updated, replacement...)
+	updated = append(updated, lines[end:]...)
+	return strings.Join(updated, "\n")
+}
 
 func seedAgentProfiles(aomPath string, cfg *config.ProjectConfig) error {
 	if cfg == nil {

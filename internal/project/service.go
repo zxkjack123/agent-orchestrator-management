@@ -61,6 +61,7 @@ type OpenResult struct {
 	Resources      config.ResourcesFile
 	Policy         config.PolicyFile
 	DBPath         string
+	AOMPath        string
 	StateDir       string
 	TerminalDriver string
 	SessionPrefix  string
@@ -269,6 +270,7 @@ func (s *Service) Open(repoPath string) (*OpenResult, error) {
 		Resources:      cfg.Resources,
 		Policy:         cfg.Policy,
 		DBPath:         dbPath,
+		AOMPath:        aomPath,
 		StateDir:       cfg.Project.Context.StateDir,
 		TerminalDriver: cfg.Project.Runtime.Terminal,
 		SessionPrefix:  cfg.Project.Runtime.SessionPrefix,

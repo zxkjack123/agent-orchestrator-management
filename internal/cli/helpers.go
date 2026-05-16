@@ -525,8 +525,10 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 				emptyFallback(item.Task.PreferredAgent),
 				len(item.Steps),
 			)
-			fmt.Fprintf(r.stdout, "    reviews=open:%d\n", item.UnresolvedReviewItems)
-			fmt.Fprintf(r.stdout, "    review-owner=%s\n", reviewOwnerHintDisplay(item.ReviewOwnerHint, item.ReviewOwnerAmbiguous))
+			if item.UnresolvedReviewItems > 0 {
+				fmt.Fprintf(r.stdout, "    reviews=open:%d\n", item.UnresolvedReviewItems)
+				fmt.Fprintf(r.stdout, "    review-owner=%s\n", reviewOwnerHintDisplay(item.ReviewOwnerHint, item.ReviewOwnerAmbiguous))
+			}
 			if item.Worktree != nil {
 				fmt.Fprintf(
 					r.stdout,

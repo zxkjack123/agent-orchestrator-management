@@ -25,7 +25,7 @@ func (r Runner) executeAttach(args []string) error {
 
 	fmt.Fprintf(r.stdout, "Attaching to %s (%s)\n", sessionRecord.ID, sessionRecord.TmuxPane)
 	if err := r.app.Tmux.AttachPane(sessionRecord.TmuxSessionName, sessionRecord.TmuxPane); err != nil {
-		return err
+		return fmt.Errorf("attach requires an interactive terminal — run this command from a real terminal session, not a script or pipe\n  (underlying error: %w)", err)
 	}
 
 	if strings.TrimSpace(sessionRecord.TaskID) == "" {
