@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
 )
 
 // LaunchMode controls how AOM starts a pane process for one session.
@@ -31,20 +33,37 @@ type LookPathFunc func(string) (string, error)
 // Builder owns narrow launch-mode validation and shell command construction.
 type Builder struct {
 	lookPath LookPathFunc
+	registry provider.Registry
 }
 
-// NewBuilder creates a launch builder with OS-backed binary lookup.
+// NewBuilder creates a launch builder with OS-backed binary lookup and the default provider registry.
 func NewBuilder() *Builder {
 	return NewBuilderWithLookPath(exec.LookPath)
 }
 
-// NewBuilderWithLookPath creates a launch builder with an injected binary lookup.
+// NewBuilderWithLookPath creates a launch builder with an injected binary lookup
+// and the default provider registry.
 func NewBuilderWithLookPath(lookPath LookPathFunc) *Builder {
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
+	return &Builder{
+		lookPath: lookPath,
+		registry: provider.DefaultRegistry(),
+	}
+}
 
-	return &Builder{lookPath: lookPath}
+// NewBuilderWithRegistry creates a launch builder with an injected binary lookup
+// and a custom provider registry. Intended for tests that need to inject a
+// specific registry without relying on DefaultRegistry.
+func NewBuilderWithRegistry(lookPath LookPathFunc, reg provider.Registry) *Builder {
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	return &Builder{
+		lookPath: lookPath,
+		registry: reg,
+	}
 }
 
 // Build validates the requested launch mode and returns the pane shell command.
@@ -62,57 +81,14 @@ func (b *Builder) Build(spec SessionSpec, mode LaunchMode) (string, error) {
 }
 
 func (b *Builder) realRuntimeShellCommand(spec SessionSpec) (string, error) {
-	runtimeName := strings.TrimSpace(spec.Runtime)
-	switch runtimeName {
-	case "codex":
-		return b.execRuntimeCommand(spec)
-	case "claude":
-		return b.execRuntimeCommand(spec)
-	default:
-		return "", fmt.Errorf("real launch mode does not support runtime %q in the current milestone", runtimeName)
-	}
-}
-
-func (b *Builder) execRuntimeCommand(spec SessionSpec) (string, error) {
-	runtimeName := strings.TrimSpace(spec.Runtime)
-	agentSessionID := strings.TrimSpace(spec.AgentSessionID)
-	if _, err := b.lookPath(runtimeName); err != nil {
-		return "", fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", runtimeName, runtimeName)
-	}
-	switch runtimeName {
-	case "claude":
-		disallowedFlag := buildDisallowedToolsFlag(spec.DenyCommands)
-		if agentSessionID != "" {
-			if disallowedFlag != "" {
-				return fmt.Sprintf("sh -lc 'exec claude --resume %s --dangerously-skip-permissions %s'", agentSessionID, disallowedFlag), nil
-			}
-			return fmt.Sprintf("sh -lc 'exec claude --resume %s --dangerously-skip-permissions'", agentSessionID), nil
-		}
-		if disallowedFlag != "" {
-			return fmt.Sprintf("sh -lc 'exec claude --dangerously-skip-permissions %s'", disallowedFlag), nil
-		}
-		return "sh -lc 'exec claude --dangerously-skip-permissions'", nil
-	case "codex":
-		if agentSessionID != "" {
-			return fmt.Sprintf("sh -lc 'exec codex resume %s --sandbox workspace-write'", agentSessionID), nil
-		}
-		return "sh -lc 'exec codex --sandbox workspace-write'", nil
-	default:
-		return fmt.Sprintf("sh -lc 'exec %s'", runtimeName), nil
-	}
-}
-
-// buildDisallowedToolsFlag converts deny_commands into a --disallowed-tools flag string.
-// Each command cmd becomes 'Bash(cmd*)'. Returns an empty string when no commands are given.
-func buildDisallowedToolsFlag(denyCommands []string) string {
-	if len(denyCommands) == 0 {
-		return ""
-	}
-	patterns := make([]string, len(denyCommands))
-	for i, cmd := range denyCommands {
-		patterns[i] = fmt.Sprintf("'Bash(%s*)'", cmd)
-	}
-	return "--disallowed-tools " + strings.Join(patterns, " ")
+	p := b.registry.Lookup(spec.Runtime)
+	return p.LaunchCommand(provider.LaunchSpec{
+		SessionID:      spec.SessionID,
+		AgentName:      spec.AgentName,
+		RoleName:       spec.RoleName,
+		AgentSessionID: spec.AgentSessionID,
+		DenyCommands:   spec.DenyCommands,
+	}, b.lookPath)
 }
 
 func placeholderShellCommand(spec SessionSpec) string {

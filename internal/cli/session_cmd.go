@@ -1,0 +1,1250 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/agent"
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/artifact"
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
+	aomruntime "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/runtime"
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/session"
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/worktree"
+)
+
+func (r Runner) executeSessionSpawn(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("agent name is required")
+	}
+
+	params := sessionSpawnParams{
+		agentName:  strings.TrimSpace(args[0]),
+		launchMode: aomruntime.LaunchModePlaceholder,
+	}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--task":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--task requires a value")
+			}
+			params.taskID = strings.TrimSpace(args[i])
+		case "--step":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--step requires a value")
+			}
+			params.stepID = strings.TrimSpace(args[i])
+		case "--mock":
+			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeMock); err != nil {
+				return err
+			}
+		case "--real":
+			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeReal); err != nil {
+				return err
+			}
+		case "--fresh":
+			params.freshStart = true
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	agentRecord, err := findAgent(result.Agents, params.agentName)
+	if err != nil {
+		return err
+	}
+	_, err = r.executeResolvedSessionSpawn(result, agentRecord, params)
+	return err
+}
+
+func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRecord *agent.Record, params sessionSpawnParams) (*session.Record, error) {
+	var err error
+	var taskRecord *task.Record
+	if params.taskID != "" {
+		taskRecord, err = r.loadTaskByID(result, params.taskID)
+		if err != nil {
+			return nil, err
+		}
+		if taskRecord == nil {
+			return nil, fmt.Errorf("task %q not found", params.taskID)
+		}
+	}
+
+	executionPath := result.Project.RepoPath
+	var taskWorktree *worktree.Record
+	if taskRecord != nil {
+		taskWorktree, executionPath, err = r.resolveTaskExecutionPath(result, *taskRecord)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var stepRecord *step.Record
+	if params.stepID != "" {
+		if taskRecord == nil {
+			return nil, fmt.Errorf("--step requires --task in the current milestone")
+		}
+		stepRecord, err = r.loadStepByID(result, params.stepID)
+		if err != nil {
+			return nil, err
+		}
+		if stepRecord == nil {
+			return nil, fmt.Errorf("step %q not found", params.stepID)
+		}
+		if stepRecord.TaskID != taskRecord.ID {
+			return nil, fmt.Errorf("step %q does not belong to task %q", stepRecord.ID, taskRecord.ID)
+		}
+	}
+
+	if err := r.enforceWriterWorktreeBoundary(result, agentRecord, params); err != nil {
+		return nil, err
+	}
+
+	if _, err := newLaunchBuilder().Build(aomruntime.SessionSpec{
+		SessionID:    "",
+		AgentName:    agentRecord.Name,
+		RoleName:     agentRecord.Role,
+		Runtime:      agentRecord.Runtime,
+		DenyCommands: result.Policy.Policy.DenyCommands,
+	}, params.launchMode); err != nil {
+		return nil, err
+	}
+
+	workspace, err := r.app.Tmux.EnsureWorkspace(result.SessionPrefix, result.Project.RepoPath)
+	if err != nil {
+		return nil, fmt.Errorf("ensure tmux workspace: %w", err)
+	}
+
+	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return nil, err
+	}
+	defer sqlDB.Close()
+
+	record, err := sessionService.Create(session.CreateParams{
+		ProjectID:       result.Project.ID,
+		AgentID:         agentRecord.ID,
+		AgentName:       agentRecord.Name,
+		RoleName:        agentRecord.Role,
+		TaskID:          params.taskID,
+		Runtime:         agentRecord.Runtime,
+		Status:          "Booting",
+		RepoPath:        result.Project.RepoPath,
+		WorktreePath:    executionPath,
+		TmuxSessionName: workspace.Name,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if taskRecord != nil {
+		if err := r.syncTaskArtifactsWithSessionEvents(result, taskRecord.ID, false, record, artifact.Event{
+			Type:        "session.created",
+			Actor:       "aom",
+			StepID:      params.stepID,
+			SessionID:   record.ID,
+			Summary:     fmt.Sprintf("Session record created for %s using %s launch mode", agentRecord.Name, params.launchMode),
+			StateEffect: "Session Booting",
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	agentSessionID := ""
+	if params.taskID != "" && !params.freshStart {
+		agentSessionID, _ = sessionService.LatestVendorSessionID(params.taskID, agentRecord.Name)
+	}
+
+	launchCommand, err := newLaunchBuilder().Build(aomruntime.SessionSpec{
+		SessionID:      record.ID,
+		AgentName:      record.AgentName,
+		RoleName:       record.RoleName,
+		Runtime:        record.Runtime,
+		AgentSessionID: agentSessionID,
+		DenyCommands:   result.Policy.Policy.DenyCommands,
+	}, params.launchMode)
+	if err != nil {
+		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "session launch validation failed before session became interactive", err)
+	}
+
+	if err := r.materializeAgentContext(result, agentRecord, executionPath); err != nil {
+		return nil, fmt.Errorf("materialize agent context: %w", err)
+	}
+
+	r.enforcePolicyDefaults(result, agentRecord.Runtime)
+
+	paneBinding, err := r.app.Tmux.CreatePane(workspace.Target, executionPath, launchCommand)
+	if err != nil {
+		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "pane creation failed before session became interactive", err)
+	}
+
+	record.Status = "Idle"
+	record.TmuxWindow = paneBinding.WindowID
+	record.TmuxPane = paneBinding.PaneID
+	record.TmuxSessionName = workspace.Name
+
+	// Label the window with the agent name so operators can identify sessions at a glance.
+	_ = r.app.Tmux.RenameWindow(paneBinding.WindowID, agentRecord.Name)
+
+	record, err = sessionService.Save(*record)
+	if err != nil {
+		return nil, err
+	}
+
+	if taskRecord != nil {
+		worktreeService, worktreeDB, err := r.app.OpenWorktreeService(result.DBPath)
+		if err != nil {
+			return nil, err
+		}
+		taskWorktree, err = worktreeService.Reconcile(taskRecord.ID, result.Project.RepoPath, true)
+		worktreeDB.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if taskRecord != nil {
+		if err := r.syncTaskArtifactsWithSessionEvents(result, taskRecord.ID, false, record, artifact.Event{
+			Type:        "session.ready",
+			Actor:       "aom",
+			StepID:      params.stepID,
+			SessionID:   record.ID,
+			Summary:     fmt.Sprintf("Session pane attached for %s and ready for operator inspection", agentRecord.Name),
+			StateEffect: fmt.Sprintf("Session %s", record.Status),
+		}); err != nil {
+			return nil, err
+		}
+		if err := r.ensureTaskHandoffTemplate(result, taskRecord.ID, record); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := r.app.Tmux.AnnotatePane(record.TmuxPane, map[string]string{
+		"@aom_session_id": record.ID,
+		"@aom_agent":      record.AgentName,
+		"@aom_role":       record.RoleName,
+	}); err != nil {
+		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "pane annotation failed after session launch", err)
+	}
+
+	fmt.Fprintln(r.stdout, "Session spawned")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Session: %s\n", record.ID)
+	fmt.Fprintf(r.stdout, "Agent: %s\n", record.AgentName)
+	fmt.Fprintf(r.stdout, "Role: %s\n", record.RoleName)
+	if taskRecord != nil {
+		fmt.Fprintf(r.stdout, "Task: %s\n", taskRecord.ID)
+	}
+	if stepRecord != nil {
+		fmt.Fprintf(r.stdout, "Step: %s\n", stepRecord.ID)
+	}
+	fmt.Fprintf(r.stdout, "Runtime: %s\n", record.Runtime)
+	fmt.Fprintf(r.stdout, "Launch mode: %s\n", params.launchMode)
+	if taskWorktree != nil {
+		fmt.Fprintf(r.stdout, "Worktree status: %s\n", taskWorktree.Status)
+	}
+	fmt.Fprintf(r.stdout, "Worktree path: %s\n", record.WorktreePath)
+	fmt.Fprintf(r.stdout, "Workspace: %s\n", workspace.Target)
+	fmt.Fprintf(r.stdout, "Window: %s\n", record.TmuxWindow)
+	fmt.Fprintf(r.stdout, "Pane: %s\n", record.TmuxPane)
+
+	if params.taskID != "" {
+		fmt.Fprintln(r.stdout, "")
+		if agentSessionID != "" {
+			fmt.Fprintf(r.stdout, "Continuity: resuming previous session %s\n", agentSessionID)
+			fmt.Fprintln(r.stdout, "            Use --fresh to start a clean context if this is unrelated work.")
+		} else if params.freshStart {
+			fmt.Fprintln(r.stdout, "Continuity: fresh start (--fresh flag set — previous context ignored)")
+		} else {
+			fmt.Fprintln(r.stdout, "Continuity: fresh start (no previous session found for this task)")
+		}
+
+		artifactRoot := taskArtifactRoot(result.Project.RepoPath, result.StateDir, params.taskID, taskWorktree)
+		taskMDPath := filepath.Join(artifactRoot, "task.md")
+		fmt.Fprintln(r.stdout, "")
+		fmt.Fprintf(r.stdout, "Context: %s\n", taskMDPath)
+		fmt.Fprintln(r.stdout, "         Read this file before starting work on the task.")
+		if params.launchMode == aomruntime.LaunchModeReal {
+			fmt.Fprintf(r.stdout, "         To send it: aom session send %s \"@%s\"\n", record.ID, taskMDPath)
+		}
+	}
+
+	if params.launchMode == aomruntime.LaunchModeReal {
+		if strategy := r.registry.Lookup(record.Runtime).NativeSessionDetection(); strategy != nil {
+			if agentSessionID != "" {
+				fmt.Fprintf(r.stdout, "Native session ID: %s (resumed)\n", agentSessionID)
+			} else {
+				spawnedAt := time.Now()
+				fmt.Fprintln(r.stdout, "")
+				fmt.Fprintln(r.stdout, "Detecting native session ID (this may take up to 45s)...")
+				time.Sleep(3 * time.Second)
+				_ = r.app.Tmux.SendKeys(record.TmuxPane, "2")
+				if sid, _ := strategy.DetectFn(record.WorktreePath, spawnedAt, 45*time.Second); sid != "" {
+					if updated, err := sessionService.SetVendorSessionID(record.ID, sid); err == nil {
+						record = updated
+					}
+					fmt.Fprintf(r.stdout, "Native session ID: %s (auto-detected)\n", sid)
+				} else {
+					fmt.Fprintln(r.stdout, "Native session ID not yet available")
+					fmt.Fprintf(r.stdout, "To register manually: aom session set-agent-id %s <uuid>\n", record.ID)
+				}
+			}
+		}
+	}
+
+	return record, nil
+}
+
+func (r Runner) executeSessionReplace(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+
+	params := sessionReplaceParams{
+		id:         strings.TrimSpace(args[0]),
+		launchMode: aomruntime.LaunchModePlaceholder,
+	}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--agent":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--agent requires a value")
+			}
+			params.agentName = strings.TrimSpace(args[i])
+		case "--reason":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--reason requires a value")
+			}
+			params.reason = strings.TrimSpace(args[i])
+		case "--mock":
+			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeMock); err != nil {
+				return err
+			}
+		case "--real":
+			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeReal); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+	if params.agentName == "" {
+		return fmt.Errorf("--agent is required")
+	}
+
+	oldRecord, err := r.loadSessionByIdentifier(params.id)
+	if err != nil {
+		return err
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	agentRecord, err := findAgent(result.Agents, params.agentName)
+	if err != nil {
+		return err
+	}
+
+	if err := r.replaceSession(result, *oldRecord, agentRecord, params); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r Runner) failTaskBoundSessionSpawn(
+	result *project.OpenResult,
+	sessionService *session.Service,
+	record *session.Record,
+	taskRecord *task.Record,
+	stepID string,
+	summary string,
+	cause error,
+) error {
+	if record == nil {
+		return cause
+	}
+
+	record.Status = "Failed"
+	if _, err := sessionService.Save(*record); err != nil {
+		return fmt.Errorf("%w (also failed to persist failed session state: %v)", cause, err)
+	}
+
+	if taskRecord != nil {
+		appendErr := r.syncTaskArtifactsWithSessionEvents(result, taskRecord.ID, false, record, artifact.Event{
+			Type:        "session.failed",
+			Actor:       "aom",
+			StepID:      stepID,
+			SessionID:   record.ID,
+			Summary:     summary,
+			StateEffect: "Session Failed",
+		})
+		if appendErr != nil {
+			return fmt.Errorf("%w (also failed to append task log event: %v)", cause, appendErr)
+		}
+	}
+
+	return cause
+}
+
+type sessionSpawnParams struct {
+	agentName       string
+	taskID          string
+	stepID          string
+	ignoreSessionID string
+	launchMode      aomruntime.LaunchMode
+	freshStart      bool
+}
+
+type sessionReplaceParams struct {
+	id         string
+	agentName  string
+	reason     string
+	launchMode aomruntime.LaunchMode
+}
+
+func (r Runner) executeSessionList(args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("session list does not accept positional arguments in the current milestone")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	sessions, err := r.loadProjectSessions(result)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Sessions")
+	fmt.Fprintln(r.stdout, "")
+	if len(sessions) == 0 {
+		fmt.Fprintln(r.stdout, "No sessions")
+		return nil
+	}
+
+	for _, item := range sessions {
+		fmt.Fprintf(
+			r.stdout,
+			"  - %s | agent=%s | role=%s | task=%s | runtime=%s | status=%s | tmux=%s %s %s\n",
+			item.ID,
+			item.AgentName,
+			item.RoleName,
+			emptyFallback(item.TaskID),
+			item.Runtime,
+			item.Status,
+			item.TmuxSessionName,
+			item.TmuxWindow,
+			item.TmuxPane,
+		)
+	}
+
+	return nil
+}
+
+func (r Runner) executeSessionShow(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+	if len(args) > 1 {
+		return fmt.Errorf("session show does not accept extra positional arguments in the current milestone")
+	}
+
+	sessionRecord, err := r.loadSessionByIdentifier(strings.TrimSpace(args[0]))
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Session")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "ID: %s\n", sessionRecord.ID)
+	fmt.Fprintf(r.stdout, "Agent: %s\n", sessionRecord.AgentName)
+	fmt.Fprintf(r.stdout, "Role: %s\n", sessionRecord.RoleName)
+	fmt.Fprintf(r.stdout, "Task: %s\n", emptyFallback(sessionRecord.TaskID))
+	fmt.Fprintf(r.stdout, "Runtime: %s\n", sessionRecord.Runtime)
+	fmt.Fprintf(r.stdout, "Status: %s\n", sessionRecord.Status)
+	fmt.Fprintf(r.stdout, "Repo: %s\n", sessionRecord.RepoPath)
+	fmt.Fprintf(r.stdout, "Worktree: %s\n", sessionRecord.WorktreePath)
+	fmt.Fprintf(r.stdout, "Tmux session: %s\n", sessionRecord.TmuxSessionName)
+	fmt.Fprintf(r.stdout, "Tmux window: %s\n", sessionRecord.TmuxWindow)
+	fmt.Fprintf(r.stdout, "Tmux pane: %s\n", sessionRecord.TmuxPane)
+	if sessionRecord.VendorSessionID != "" {
+		fmt.Fprintf(r.stdout, "Native session ID: %s\n", sessionRecord.VendorSessionID)
+	}
+
+	return nil
+}
+
+func (r Runner) replaceSession(result *project.OpenResult, oldRecord session.Record, agentRecord *agent.Record, params sessionReplaceParams) error {
+	if agentRecord == nil {
+		return fmt.Errorf("replacement agent is required")
+	}
+
+	spawnParams := sessionSpawnParams{
+		agentName:       agentRecord.Name,
+		taskID:          oldRecord.TaskID,
+		ignoreSessionID: oldRecord.ID,
+		launchMode:      params.launchMode,
+	}
+
+	taskRecord, err := r.loadTaskByID(result, oldRecord.TaskID)
+	if err != nil {
+		return err
+	}
+	if oldRecord.TaskID != "" && taskRecord == nil {
+		return fmt.Errorf("task %q not found", oldRecord.TaskID)
+	}
+
+	oldStatusBefore := oldRecord.Status
+	newSession, err := r.executeResolvedSessionSpawn(result, agentRecord, spawnParams)
+	if err != nil {
+		return err
+	}
+
+	stoppedStatus := oldRecord.Status
+	oldSessionOutcome := fmt.Sprintf("left running (%s requires operator intervention)", oldRecord.Status)
+	oldSessionHint := ""
+	stopWarning := ""
+	if archivableReplacementSession(oldRecord.Status) {
+		stopped, warning, err := r.stopSessionRecord(result, oldRecord, false)
+		if err != nil {
+			return err
+		}
+		archived, err := r.archiveSessionRecord(result, *stopped, false, "Superseded session archived automatically after replacement")
+		if err != nil {
+			return err
+		}
+		stoppedStatus = archived.Status
+		stopWarning = warning
+		oldSessionOutcome = fmt.Sprintf("archived (%s)", archived.Status)
+		if warning != "" {
+			oldSessionOutcome = fmt.Sprintf("archived with warning (%s)", archived.Status)
+		}
+	} else if stoppableReplacementSession(oldRecord.Status) {
+		stopped, warning, err := r.stopSessionRecord(result, oldRecord, false)
+		if err != nil {
+			return err
+		}
+		stoppedStatus = stopped.Status
+		stopWarning = warning
+		oldSessionOutcome = fmt.Sprintf("stopped (%s)", stopped.Status)
+		if warning != "" {
+			oldSessionOutcome = fmt.Sprintf("stopped with warning (%s)", stopped.Status)
+		}
+	} else {
+		oldSessionHint = fmt.Sprintf("run \"aom session stop %s\" after inspecting whether the previous session should be shut down", oldRecord.ID)
+	}
+
+	if strings.TrimSpace(oldRecord.TaskID) != "" {
+		reason := params.reason
+		if reason == "" {
+			reason = "operator requested replacement"
+		}
+		if err := r.syncTaskArtifactsWithSessionEvents(result, oldRecord.TaskID, false, newSession, artifact.Event{
+			Type:        "session.replaced",
+			Actor:       "operator",
+			SessionID:   newSession.ID,
+			Summary:     fmt.Sprintf("Session %s replaced %s using agent %s (%s)", newSession.ID, oldRecord.ID, agentRecord.Name, reason),
+			StateEffect: fmt.Sprintf("Old session %s, new session %s", stoppedStatus, newSession.Status),
+		}); err != nil {
+			return err
+		}
+	}
+
+	fmt.Fprintln(r.stdout, "Session replaced")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Old session: %s\n", oldRecord.ID)
+	fmt.Fprintf(r.stdout, "Old status: %s\n", oldStatusBefore)
+	fmt.Fprintf(r.stdout, "Old session result: %s\n", oldSessionOutcome)
+	fmt.Fprintf(r.stdout, "New session: %s\n", newSession.ID)
+	fmt.Fprintf(r.stdout, "Agent: %s\n", newSession.AgentName)
+	fmt.Fprintf(r.stdout, "Reason: %s\n", emptyFallback(params.reason))
+	if stopWarning != "" {
+		fmt.Fprintf(r.stdout, "Warning: %s\n", stopWarning)
+	}
+	if oldSessionHint != "" {
+		fmt.Fprintf(r.stdout, "Action hint: %s\n", oldSessionHint)
+	}
+	fmt.Fprintln(r.stdout, "Continuity quality: artifact-backed")
+	fmt.Fprintln(r.stdout, "Next recommended action: inspect the replacement session and continue work from the same task context")
+
+	return nil
+}
+
+func (r Runner) stopSessionRecord(result *project.OpenResult, record session.Record, print bool) (*session.Record, string, error) {
+	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer sqlDB.Close()
+
+	recordRefreshed, err := r.reconcileSessionRecord(sessionService, record)
+	if err != nil {
+		return nil, "", err
+	}
+	record = *recordRefreshed
+
+	warning := ""
+	if strings.TrimSpace(record.TmuxPane) != "" && record.Status != "Detached" {
+		paneExists, err := r.app.Tmux.PaneExists(record.TmuxPane)
+		if err != nil {
+			return nil, "", err
+		}
+		if paneExists {
+			if err := r.app.Tmux.KillPane(record.TmuxPane); err != nil {
+				warning = fmt.Sprintf("tmux pane cleanup failed for %s: %v", record.TmuxPane, err)
+			}
+		}
+	}
+
+	stopped, err := sessionService.Stop(record)
+	if err != nil {
+		return nil, warning, err
+	}
+
+	if strings.TrimSpace(stopped.TaskID) != "" {
+		summary := "Session stopped explicitly by operator"
+		stateEffect := "Session Stopped"
+		if warning != "" {
+			summary = fmt.Sprintf("%s (tmux cleanup warning: %s)", summary, warning)
+			stateEffect = "Session Stopped with tmux cleanup warning"
+		}
+		if err := r.syncTaskArtifacts(result, stopped.TaskID, artifact.Event{
+			Type:        "session.stopped",
+			Actor:       "operator",
+			SessionID:   stopped.ID,
+			Summary:     summary,
+			StateEffect: stateEffect,
+		}, false); err != nil {
+			return nil, warning, err
+		}
+	}
+
+	if print {
+		fmt.Fprintln(r.stdout, "Session stopped")
+		fmt.Fprintln(r.stdout, "")
+		fmt.Fprintf(r.stdout, "Session: %s\n", stopped.ID)
+		fmt.Fprintf(r.stdout, "Status: %s\n", stopped.Status)
+		fmt.Fprintf(r.stdout, "Task: %s\n", emptyFallback(stopped.TaskID))
+		if warning != "" {
+			fmt.Fprintf(r.stdout, "Warning: %s\n", warning)
+		}
+	}
+
+	return stopped, warning, nil
+}
+
+func (r Runner) archiveSessionRecord(result *project.OpenResult, record session.Record, print bool, summary string) (*session.Record, error) {
+	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return nil, err
+	}
+	defer sqlDB.Close()
+
+	archived, err := sessionService.Archive(record)
+	if err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(archived.TaskID) != "" {
+		if err := r.syncTaskArtifacts(result, archived.TaskID, artifact.Event{
+			Type:        "session.archived",
+			Actor:       "operator",
+			SessionID:   archived.ID,
+			Summary:     summary,
+			StateEffect: "Session Archived",
+		}, false); err != nil {
+			return nil, err
+		}
+	}
+
+	if print {
+		fmt.Fprintln(r.stdout, "Session archived")
+		fmt.Fprintln(r.stdout, "")
+		fmt.Fprintf(r.stdout, "Session: %s\n", archived.ID)
+		fmt.Fprintf(r.stdout, "Status: %s\n", archived.Status)
+		fmt.Fprintf(r.stdout, "Task: %s\n", emptyFallback(archived.TaskID))
+	}
+
+	return archived, nil
+}
+
+func stoppableReplacementSession(status string) bool {
+	switch status {
+	case "Idle", "WaitingHandoff":
+		return true
+	default:
+		return false
+	}
+}
+
+func archivableReplacementSession(status string) bool {
+	return status == "Detached"
+}
+
+func (r Runner) executeSessionStop(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+	if len(args) > 1 {
+		return fmt.Errorf("session stop does not accept extra positional arguments in the current milestone")
+	}
+
+	record, err := r.loadSessionByIdentifier(strings.TrimSpace(args[0]))
+	if err != nil {
+		return err
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+	_, _, err = r.stopSessionRecord(result, *record, true)
+	return err
+}
+
+func (r Runner) executeSessionArchive(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+	if len(args) > 1 {
+		return fmt.Errorf("session archive does not accept extra positional arguments in the current milestone")
+	}
+
+	record, err := r.loadSessionByIdentifier(strings.TrimSpace(args[0]))
+	if err != nil {
+		return err
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	_, err = r.archiveSessionRecord(result, *record, true, "Session archived explicitly by operator")
+	return err
+}
+
+func (r Runner) executeSessionResume(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+
+	sessionIdentifier := strings.TrimSpace(args[0])
+	newTaskID := ""
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--task":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--task requires a value")
+			}
+			newTaskID = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	if newTaskID == "" {
+		return fmt.Errorf("--task is required")
+	}
+
+	record, err := r.loadSessionByIdentifier(sessionIdentifier)
+	if err != nil {
+		return err
+	}
+	if record.Status != "WaitingHandoff" && record.Status != "Idle" {
+		return fmt.Errorf("session %q cannot be resumed for a new task (status: %s); session must be Idle or WaitingHandoff", record.ID, record.Status)
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	newTaskRecord, err := r.loadTaskByID(result, newTaskID)
+	if err != nil {
+		return err
+	}
+
+	agentRecord, err := findAgent(result.Agents, record.AgentName)
+	if err != nil {
+		return err
+	}
+
+	if err := r.enforceWriterWorktreeBoundary(result, agentRecord, sessionSpawnParams{
+		taskID:          newTaskID,
+		ignoreSessionID: record.ID,
+	}); err != nil {
+		return err
+	}
+
+	newTaskWorktree, newExecutionPath, err := r.resolveTaskExecutionPath(result, *newTaskRecord)
+	if err != nil {
+		return err
+	}
+
+	oldTaskID := record.TaskID
+
+	record.TaskID = newTaskID
+	record.WorktreePath = newExecutionPath
+	record.Status = "Idle"
+
+	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	updated, err := sessionService.Save(*record)
+	if err != nil {
+		return err
+	}
+
+	// Change the pane's working directory to the new task's worktree.
+	if strings.TrimSpace(record.TmuxPane) != "" && strings.TrimSpace(newExecutionPath) != "" {
+		_ = r.app.Tmux.SendKeys(record.TmuxPane, "cd "+newExecutionPath)
+	}
+
+	// Deliver agent context (identity, skills, MCP) into the new worktree.
+	if agentRec := findAgentByName(result.Agents, record.AgentName); agentRec != nil {
+		_ = r.materializeAgentContext(result, agentRec, newExecutionPath)
+	}
+
+	// Advance new task's worktree to Active.
+	if newTaskWorktree != nil {
+		worktreeService, worktreeDB, err := r.app.OpenWorktreeService(result.DBPath)
+		if err == nil {
+			_, _ = worktreeService.Reconcile(newTaskID, result.Project.RepoPath, true)
+			worktreeDB.Close()
+		}
+	}
+
+	// Record the session's departure from the old task.
+	if strings.TrimSpace(oldTaskID) != "" && oldTaskID != newTaskID {
+		_ = r.syncTaskArtifacts(result, oldTaskID, artifact.Event{
+			Type:        "operator.intervention",
+			Actor:       "operator",
+			SessionID:   record.ID,
+			Summary:     fmt.Sprintf("Session %s (%s) transferred to task %s", record.ID, record.AgentName, newTaskID),
+			StateEffect: "Session transferred out",
+		}, false)
+	}
+
+	// Bind session to the new task's artifacts.
+	if err := r.syncTaskArtifactsWithSessionEvents(result, newTaskID, false, updated, artifact.Event{
+		Type:        "session.ready",
+		Actor:       "aom",
+		SessionID:   updated.ID,
+		Summary:     fmt.Sprintf("Session %s (%s) resumed and bound to this task", updated.ID, updated.AgentName),
+		StateEffect: fmt.Sprintf("Session %s", updated.Status),
+	}); err != nil {
+		return err
+	}
+
+	_ = r.ensureTaskHandoffTemplate(result, newTaskID, updated)
+
+	fmt.Fprintln(r.stdout, "Session resumed")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Session: %s\n", updated.ID)
+	fmt.Fprintf(r.stdout, "Agent: %s\n", updated.AgentName)
+	fmt.Fprintf(r.stdout, "Task: %s\n", updated.TaskID)
+	if strings.TrimSpace(oldTaskID) != "" && oldTaskID != newTaskID {
+		fmt.Fprintf(r.stdout, "Previous task: %s\n", oldTaskID)
+	}
+	fmt.Fprintf(r.stdout, "Status: %s\n", updated.Status)
+	fmt.Fprintf(r.stdout, "Worktree: %s\n", updated.WorktreePath)
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Next: aom session send %s \"read .agent/task.md and begin\"\n", updated.ID)
+	return nil
+}
+
+// executeSessionRebind reconnects a Detached session to a live tmux pane
+// without replacing the session record or re-spawning the runtime. If the
+// existing pane is still alive the session is simply un-detached. If the pane
+// is gone a new placeholder pane is created in the project workspace.
+func (r Runner) executeSessionRebind(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+
+	record, err := r.loadSessionByIdentifier(strings.TrimSpace(args[0]))
+	if err != nil {
+		return err
+	}
+	if record.Status != "Detached" {
+		return fmt.Errorf("session %q is %s; rebind only applies to Detached sessions", record.ID, record.Status)
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	// If the existing pane is still alive, just un-detach.
+	if strings.TrimSpace(record.TmuxPane) != "" {
+		if alive, _ := r.app.Tmux.PaneExists(record.TmuxPane); alive {
+			sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+			if err != nil {
+				return err
+			}
+			defer sqlDB.Close()
+
+			record.Status = "Idle"
+			if _, err := sessionService.Save(*record); err != nil {
+				return err
+			}
+
+			fmt.Fprintln(r.stdout, "Session rebound (pane still alive)")
+			fmt.Fprintln(r.stdout, "")
+			fmt.Fprintf(r.stdout, "Session: %s\n", record.ID)
+			fmt.Fprintf(r.stdout, "Pane: %s\n", record.TmuxPane)
+			fmt.Fprintf(r.stdout, "Status: Idle\n")
+			return nil
+		}
+	}
+
+	// Pane is gone — create a new one in the project workspace.
+	workspace, err := r.app.Tmux.EnsureWorkspace(result.SessionPrefix, result.Project.RepoPath)
+	if err != nil {
+		return fmt.Errorf("ensure workspace for rebind: %w", err)
+	}
+
+	launchCommand, err := newLaunchBuilder().Build(aomruntime.SessionSpec{
+		SessionID:      record.ID,
+		AgentName:      record.AgentName,
+		RoleName:       record.RoleName,
+		Runtime:        record.Runtime,
+		AgentSessionID: record.VendorSessionID,
+	}, aomruntime.LaunchModePlaceholder)
+	if err != nil {
+		return fmt.Errorf("build launch command for rebind: %w", err)
+	}
+
+	executionPath := record.WorktreePath
+	if strings.TrimSpace(executionPath) == "" {
+		executionPath = result.Project.RepoPath
+	}
+
+	paneBinding, err := r.app.Tmux.CreatePane(workspace.Target, executionPath, launchCommand)
+	if err != nil {
+		return fmt.Errorf("create pane for rebind: %w", err)
+	}
+
+	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	record.Status = "Idle"
+	record.TmuxSessionName = workspace.Name
+	record.TmuxWindow = paneBinding.WindowID
+	record.TmuxPane = paneBinding.PaneID
+
+	if _, err := sessionService.Save(*record); err != nil {
+		return err
+	}
+
+	_ = r.app.Tmux.RenameWindow(paneBinding.WindowID, record.AgentName)
+
+	fmt.Fprintln(r.stdout, "Session rebound (new pane)")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Session: %s\n", record.ID)
+	fmt.Fprintf(r.stdout, "Agent: %s\n", record.AgentName)
+	fmt.Fprintf(r.stdout, "Pane: %s\n", record.TmuxPane)
+	fmt.Fprintf(r.stdout, "Window: %s\n", record.TmuxWindow)
+	fmt.Fprintf(r.stdout, "Status: Idle\n")
+	return nil
+}
+
+func (r Runner) executeSessionWait(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+
+	sessionIdentifier := strings.TrimSpace(args[0])
+	eventType := ""
+	waitTimeout := 30 * time.Minute
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--event":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--event requires a value")
+			}
+			eventType = strings.TrimSpace(args[i])
+		case "--timeout":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--timeout requires a value")
+			}
+			d, err := time.ParseDuration(args[i])
+			if err != nil {
+				return fmt.Errorf("--timeout value %q is not a valid duration (e.g. 30m, 1h): %w", args[i], err)
+			}
+			waitTimeout = d
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	if eventType == "" {
+		return fmt.Errorf("--event is required (e.g. --event handoff.prepared)")
+	}
+
+	record, err := r.loadSessionByIdentifier(sessionIdentifier)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(record.TaskID) == "" {
+		return fmt.Errorf("session %q is not bound to a task; session wait requires a task-bound session", record.ID)
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	view, err := r.loadTaskView(result, record.TaskID)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("task %q not found", record.TaskID)
+	}
+
+	logPath := taskArtifactLogPath(result.Project.RepoPath, result.StateDir, record.TaskID, view.Worktree)
+
+	fmt.Fprintf(r.stdout, "Waiting for event %q\n", eventType)
+	fmt.Fprintf(r.stdout, "Session: %s  Task: %s\n", record.ID, record.TaskID)
+	fmt.Fprintf(r.stdout, "Log: %s\n", logPath)
+	fmt.Fprintf(r.stdout, "Timeout: %s\n", waitTimeout)
+	fmt.Fprintln(r.stdout, "")
+
+	line, err := waitForLogEvent(logPath, eventType, waitTimeout)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Event detected")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Event: %s\n", eventType)
+	fmt.Fprintf(r.stdout, "Entry: %s\n", line)
+	return nil
+}
+
+
+func (r Runner) executeSessionSetAgentID(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: aom session set-agent-id <session-id> <native-session-id>")
+	}
+	sessID := strings.TrimSpace(args[0])
+	vendorID := strings.TrimSpace(args[1])
+
+	record, err := r.loadSessionByIdentifier(sessID)
+	if err != nil {
+		return err
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	updated, err := sessionService.SetVendorSessionID(record.ID, vendorID)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Agent session ID registered")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Session: %s\n", updated.ID)
+	fmt.Fprintf(r.stdout, "Agent: %s\n", updated.AgentName)
+	fmt.Fprintf(r.stdout, "Native session ID: %s\n", updated.VendorSessionID)
+	fmt.Fprintf(r.stdout, "Next spawn for this agent on task %s will resume this session.\n", emptyFallback(updated.TaskID))
+	return nil
+}
+
+func (r Runner) executeSessionHealth(args []string) error {
+	showAll := false
+	sessionID := ""
+
+	for _, arg := range args {
+		switch arg {
+		case "--all":
+			showAll = true
+		default:
+			if sessionID == "" {
+				sessionID = strings.TrimSpace(arg)
+			}
+		}
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	sessionService, sessDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sessDB.Close()
+
+	sessions, err := sessionService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+
+	if showAll {
+		fmt.Fprintln(r.stdout, "Session health")
+		fmt.Fprintln(r.stdout, "")
+		active := 0
+		for _, s := range sessions {
+			switch s.Status {
+			case "Booting", "Idle", "Working", "WaitingApproval", "WaitingHandoff", "Blocked":
+			default:
+				continue
+			}
+			active++
+			logPath := r.resolveTaskLogPath(result, s.TaskID)
+			h := computeSessionHealth(logPath, s.ID, now)
+			warning := ""
+			if h.CheckpointWarning {
+				warning += " [checkpoint overdue]"
+			}
+			fmt.Fprintf(r.stdout, "  %s  agent=%-20s  status=%-20s  since-checkpoint=%-8s%s\n",
+				s.ID, s.AgentName, s.Status, h.TimeSinceCheckpoint, warning)
+		}
+		if active == 0 {
+			fmt.Fprintln(r.stdout, "No active sessions.")
+		}
+		return nil
+	}
+
+	if sessionID == "" {
+		return fmt.Errorf("session id is required (or use --all)")
+	}
+
+	var targetSession *session.Record
+	for i := range sessions {
+		if sessions[i].ID == sessionID {
+			targetSession = &sessions[i]
+			break
+		}
+	}
+	if targetSession == nil {
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+
+	logPath := r.resolveTaskLogPath(result, targetSession.TaskID)
+	h := computeSessionHealth(logPath, sessionID, now)
+
+	fmt.Fprintf(r.stdout, "Session health: %s\n\n", sessionID)
+	fmt.Fprintf(r.stdout, "Agent:               %s\n", emptyFallback(targetSession.AgentName))
+	fmt.Fprintf(r.stdout, "Status:              %s\n", targetSession.Status)
+	fmt.Fprintf(r.stdout, "Time since checkpoint: %s\n", h.TimeSinceCheckpoint)
+	if h.CheckpointWarning {
+		fmt.Fprintf(r.stdout, "Warning: context may be stale — consider: aom checkpoint %s\n", sessionID)
+	}
+
+	return nil
+}
+
+// resolveTaskLogPath returns the log.md path for a task, falling back gracefully.
+func (r Runner) resolveTaskLogPath(result *project.OpenResult, taskID string) string {
+	if taskID == "" {
+		return ""
+	}
+	view, err := r.loadTaskView(result, taskID)
+	if err != nil || view == nil {
+		return filepath.Join(result.Project.RepoPath, result.StateDir, "tasks", taskID, "log.md")
+	}
+	svc := artifact.NewService(result.Project.RepoPath, result.StateDir)
+	return svc.TaskLogPath(artifact.SyncParams{Task: view.Task, Worktree: view.Worktree})
+}
+
+func (r Runner) executeSessionSend(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("session identifier is required")
+	}
+	if len(args) == 1 {
+		return fmt.Errorf("message is required")
+	}
+
+	sessionRecord, err := r.loadSessionByIdentifier(strings.TrimSpace(args[0]))
+	if err != nil {
+		return err
+	}
+	if !sendableSessionStatus(sessionRecord.Status) || strings.TrimSpace(sessionRecord.TmuxPane) == "" {
+		return fmt.Errorf("session %q does not have a live tmux pane binding", sessionRecord.ID)
+	}
+
+	message := strings.TrimSpace(strings.Join(args[1:], " "))
+	if message == "" {
+		return fmt.Errorf("message is required")
+	}
+
+	// Interpret shell-style escape sequences so callers can embed newlines with \n.
+	message = interpretEscapes(message)
+
+	if err := r.app.Tmux.SendKeys(sessionRecord.TmuxPane, message); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(sessionRecord.TaskID) != "" {
+		result, err := r.app.Projects.Open(".")
+		if err != nil {
+			return err
+		}
+
+		actor := "operator"
+		if env := strings.TrimSpace(os.Getenv("AOM_ACTOR")); env != "" {
+			actor = env
+		}
+
+		if err := r.syncTaskArtifactsWithSession(result, sessionRecord.TaskID, artifact.Event{
+			Type:        "orchestrator.prompt",
+			Actor:       actor,
+			SessionID:   sessionRecord.ID,
+			Summary:     fmt.Sprintf("Prompt delivered to session %s: %s", sessionRecord.ID, briefSummary(message)),
+			StateEffect: "Session Prompted",
+		}, false, sessionRecord); err != nil {
+			return err
+		}
+	}
+
+	fmt.Fprintln(r.stdout, "Prompt delivered")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Session: %s\n", sessionRecord.ID)
+	fmt.Fprintf(r.stdout, "Pane: %s\n", sessionRecord.TmuxPane)
+	fmt.Fprintf(r.stdout, "Message: %s\n", message)
+	return nil
+}

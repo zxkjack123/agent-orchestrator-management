@@ -9,11 +9,17 @@ import (
 	"time"
 
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/session"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/worktree"
 )
+
+// defaultRegistry is the package-level provider registry used by package-level
+// artifact functions (MaterializeIdentityFile, MaterializeMCPConfig, etc.).
+// Tests and callers that need a custom registry should use Service methods directly.
+var defaultRegistry = provider.DefaultRegistry()
 
 // Event is one canonical AOM task timeline event.
 type Event struct {
@@ -45,6 +51,7 @@ type Service struct {
 	stateDir   string
 	now        func() time.Time
 	eventIDGen func() string
+	registry   provider.Registry
 }
 
 // NewService creates an artifact service for one project root.
@@ -54,6 +61,7 @@ func NewService(repoPath, stateDir string) *Service {
 		stateDir:   stateDir,
 		now:        time.Now,
 		eventIDGen: defaultEventIDGenerator,
+		registry:   provider.DefaultRegistry(),
 	}
 }
 
@@ -64,7 +72,7 @@ func MaterializeIdentityFile(agentName, runtime, worktreePath string, profileSou
 		return nil
 	}
 
-	targetName := runtimeIdentityFilename(runtime)
+	targetName := defaultRegistry.Lookup(runtime).IdentityFilename()
 	if targetName == "" {
 		return nil
 	}
@@ -120,10 +128,10 @@ func MaterializeMCPConfig(agentName, runtime string, mcpServers []config.Resolve
 		return nil
 	}
 
-	switch strings.TrimSpace(runtime) {
-	case "claude":
+	switch defaultRegistry.Lookup(runtime).MCPConfigStyle() {
+	case provider.MCPStyleMarkdownAppend:
 		return appendClaudeMCPSection(agentName, mcpServers, worktreePath)
-	case "codex":
+	case provider.MCPStyleJSONFile:
 		return writeCodexMCPConfig(agentName, mcpServers, worktreePath)
 	default:
 		return nil
@@ -167,7 +175,7 @@ func MaterializePolicyConstraints(agentName, runtime string, denyCommands []stri
 	if strings.TrimSpace(worktreePath) == "" || len(denyCommands) == 0 {
 		return nil
 	}
-	targetName := runtimeIdentityFilename(runtime)
+	targetName := defaultRegistry.Lookup(runtime).IdentityFilename()
 	if targetName == "" {
 		return nil
 	}
@@ -741,19 +749,6 @@ func renderBlockedByLine(blockers []task.Record) string {
 		parts = append(parts, b.ID)
 	}
 	return strings.Join(parts, ", ")
-}
-
-func runtimeIdentityFilename(runtimeName string) string {
-	switch strings.TrimSpace(runtimeName) {
-	case "claude":
-		return "CLAUDE.md"
-	case "codex":
-		return "AGENTS.md"
-	case "gemini":
-		return "GEMINI.md"
-	default:
-		return ""
-	}
 }
 
 func (s *Service) latestCheckpointInfo(params SyncParams) (string, string) {

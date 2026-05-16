@@ -970,8 +970,9 @@ func TestExecuteSessionSpawnWithRealRuntimeRejectsUnsupportedAgent(t *testing.T)
 	if err == nil {
 		t.Fatal("session spawn returned nil error, want unsupported runtime failure")
 	}
-	if !strings.Contains(err.Error(), `does not support runtime "gemini"`) {
-		t.Fatalf("error = %q, want unsupported runtime message", err)
+	// gemini is a named stub provider that returns "not yet implemented"
+	if !strings.Contains(err.Error(), `"gemini"`) {
+		t.Fatalf("error = %q, want error mentioning gemini runtime", err)
 	}
 	if splitCount != 0 {
 		t.Fatalf("splitCount = %d, want no tmux pane creation", splitCount)

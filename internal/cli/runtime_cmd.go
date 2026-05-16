@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
 )
 
 func (r Runner) executeRuntime(args []string) error {
@@ -88,7 +89,7 @@ func (r Runner) executeRuntimeInspect(args []string) error {
 	fmt.Fprintln(r.stdout, "  Launch modes:  placeholder, mock, real")
 
 	// Resume support.
-	resumeSupport, freshArgs, resumeArgs := runtimeResumeInfo(target)
+	resumeSupport, freshArgs, resumeArgs := runtimeResumeInfo(target, r.registry)
 	fmt.Fprintf(r.stdout, "  Resume:        %v\n", resumeSupport)
 	if resumeSupport {
 		fmt.Fprintf(r.stdout, "  Fresh start:   %s\n", freshArgs)
@@ -124,17 +125,7 @@ func (r Runner) executeRuntimeInspect(args []string) error {
 }
 
 // runtimeResumeInfo returns resume support flag and example CLI invocations.
-func runtimeResumeInfo(rt string) (supported bool, freshExample, resumeExample string) {
-	switch rt {
-	case "claude":
-		return true,
-			"claude --dangerously-skip-permissions",
-			"claude --resume <session-uuid> --dangerously-skip-permissions"
-	case "codex":
-		return true,
-			"codex",
-			"codex resume <session-id>"
-	default:
-		return false, "", ""
-	}
+func runtimeResumeInfo(rt string, registry provider.Registry) (supported bool, freshExample, resumeExample string) {
+	info := registry.Lookup(rt).ResumeInfo()
+	return info.Supported, info.FreshExample, info.ResumeExample
 }

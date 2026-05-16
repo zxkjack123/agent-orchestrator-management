@@ -608,7 +608,7 @@ Recommended path for live E2E:
 ## What Is Intentionally Not Done Yet
 
 Still out of scope at the current handoff point:
-- first-class real-runtime launch for runtimes beyond the current `codex` and `claude` slice (gemini, kiro): add two cases to `realRuntimeShellCommand` and `runtimeResumeInfo` in `internal/runtime/launch.go`
+- gemini/kiro full runtime launch: `internal/provider/gemini.go` and `internal/provider/kiro.go` are stubbed — `LaunchCommand` returns an error; fill in when CLI flags are confirmed
 - provider-native resume for `gemini` and `kiro` (claude and codex resume flows are live)
 - runtime command interception for policy enforcement (M10): `deny_commands` are enforced via `--disallowed-tools` for claude (runtime-level); codex has no equivalent flag — identity file injection is the maximum available enforcement for codex
 - M17 Gemini/Kiro: deferred — no confirmed CLI flags available for testing
@@ -660,16 +660,36 @@ replace.
 
 ### Recommended implementation order
 
-1. gemini/kiro runtime support — add 2 cases to `realRuntimeShellCommand` in `internal/runtime/launch.go`
+1. gemini/kiro runtime support — fill in `LaunchCommand` in `internal/provider/gemini.go` and `internal/provider/kiro.go` when CLI flags are confirmed; no other files need to change
 2. M9 governance — MCP resource bindings, role skill injection at `session spawn`, policy enforcement
 
 ## Immediate Next Step
 
 Milestones 0–17 are complete. Remaining work before a production-ready release:
 
-1. **gemini/kiro runtime support** — add 2 cases to `realRuntimeShellCommand` and `runtimeResumeInfo` in `internal/runtime/launch.go`; blocked on confirmed CLI flags
+1. **gemini/kiro runtime support** — fill in `LaunchCommand` in `internal/provider/gemini.go` and `internal/provider/kiro.go`; blocked on confirmed CLI flags; no other files need to change (provider registry handles the rest)
 2. **Runtime-level policy enforcement** — ✓ DONE: claude gets `--disallowed-tools` at the process level; `enforcePolicyDefaults` now prints per-runtime enforcement level at spawn time (runtime-enforced for claude, instruction-only for codex/others); no further work unless a codex enforcement flag becomes available
 3. **Live E2E for M13–M17** — ✓ DONE: smoke test expanded to 51 checks across 12 sections; all M13–M17 commands now covered (task unlink, task claim, task reject-request, merge prepare, session health, pause-all, resume-all)
+
+## Refactoring (branch: refactor)
+
+Completed on 2026-05-16 on the `refactor` branch. See `docs/refactoring-plan.md` for full detail.
+
+### Part A — Provider/Runtime Architecture
+- New `internal/provider/` package with `Provider` interface + `Registry`
+- `claude.go`, `codex.go` (full); `gemini.go`, `kiro.go` (stubs)
+- `internal/cli/vendor_session.go` deleted — logic moved to `provider/claude.go`
+- All 5 provider `switch` dispatch sites replaced with `registry.Lookup()` calls
+- **Adding a new runtime = one new file in `internal/provider/` only**
+
+### Part B — CLI `root.go` Split
+- `internal/cli/root.go` reduced from **6,606 → 357 lines**
+- 16 new focused files in `package cli` (no sub-packages, no visibility changes):
+  `task_cmd.go`, `session_cmd.go`, `session_spawn_helpers.go`, `review_cmd.go`,
+  `handoff_cmd.go`, `merge_cmd.go`, `project_cmd.go`, `worktree_cmd.go`,
+  `step_cmd.go`, `observability_cmd.go`, `approval_cmd.go`, `tmux_cmd.go`,
+  `helpers.go`, `message_cmd.go`, `channel_cmd.go`, `metrics_cmd.go`
+- Verified by `golang-refactor-tester`: 51/51 smoke checks, `go test ./...` 100% green
 
 ### M9 — Project Governance (complete)
 

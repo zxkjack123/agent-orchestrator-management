@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
 )
 
 func TestBuilderBuildReturnsPlaceholderCommand(t *testing.T) {
@@ -81,8 +83,9 @@ func TestBuilderBuildRejectsUnsupportedRealRuntime(t *testing.T) {
 	if err == nil {
 		t.Fatal("Build returned nil error, want unsupported runtime failure")
 	}
-	if !strings.Contains(err.Error(), `does not support runtime "gemini"`) {
-		t.Fatalf("error = %q, want unsupported runtime message", err)
+	// gemini is a named stub provider that returns "not yet implemented"
+	if !strings.Contains(err.Error(), `"gemini"`) {
+		t.Fatalf("error = %q, want error mentioning gemini runtime", err)
 	}
 }
 
@@ -219,3 +222,37 @@ func TestBuilderBuildCodexIgnoresDenyCommands(t *testing.T) {
 		t.Fatalf("command = %q, codex should not contain --disallowed-tools flag", command)
 	}
 }
+
+func TestNewBuilderWithRegistryUsesCustomRegistry(t *testing.T) {
+	// A custom provider that always returns a sentinel command.
+	customProvider := &testProvider{name: "custom", launchCmd: "sh -lc 'exec custom-agent'"}
+	reg := provider.Registry{"custom": customProvider}
+
+	builder := NewBuilderWithRegistry(func(name string) (string, error) {
+		return "/usr/bin/" + name, nil
+	}, reg)
+
+	command, err := builder.Build(SessionSpec{Runtime: "custom"}, LaunchModeReal)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	if command != "sh -lc 'exec custom-agent'" {
+		t.Fatalf("command = %q, want custom-agent exec command", command)
+	}
+}
+
+// testProvider is a minimal provider.Provider implementation for use in tests.
+type testProvider struct {
+	name      string
+	launchCmd string
+}
+
+func (p *testProvider) Name() string            { return p.name }
+func (p *testProvider) IdentityFilename() string { return "" }
+func (p *testProvider) LaunchCommand(_ provider.LaunchSpec, _ func(string) (string, error)) (string, error) {
+	return p.launchCmd, nil
+}
+func (p *testProvider) ResumeInfo() provider.ResumeInfo                         { return provider.ResumeInfo{} }
+func (p *testProvider) MCPConfigStyle() provider.MCPStyle                       { return provider.MCPStyleNone }
+func (p *testProvider) PolicyEnforcementLevel() provider.PolicyEnforcement      { return provider.PolicyEnforcementInstructionOnly }
+func (p *testProvider) NativeSessionDetection() *provider.NativeSessionStrategy { return nil }
