@@ -203,71 +203,76 @@ func (s *Service) EnsureProvisioned(taskID, repoPath string) (*Record, error) {
 
 // Repair tries to recover a persisted worktree mapping that drifted from git
 // registration or the filesystem without changing the task-to-worktree contract.
-func (s *Service) Repair(taskID, repoPath string) (*Record, error) {
+// The first return value reports whether any actual repair action was taken.
+func (s *Service) Repair(taskID, repoPath string) (bool, *Record, error) {
 	taskID = strings.TrimSpace(taskID)
 	if taskID == "" {
-		return nil, fmt.Errorf("task id is required")
+		return false, nil, fmt.Errorf("task id is required")
 	}
 	repoPath = strings.TrimSpace(repoPath)
 	if repoPath == "" {
-		return nil, fmt.Errorf("repo path is required")
+		return false, nil, fmt.Errorf("repo path is required")
 	}
 
 	record, err := s.repo.GetByTaskID(taskID)
 	if err != nil {
-		return nil, err
+		return false, nil, err
 	}
 	if record == nil {
-		return nil, fmt.Errorf("worktree for task %q not found", taskID)
+		return false, nil, fmt.Errorf("worktree for task %q not found", taskID)
 	}
 	if !s.gitAvailable(repoPath) {
-		return nil, fmt.Errorf("project repo %q does not support git worktree repair", repoPath)
+		return false, nil, fmt.Errorf("project repo %q does not support git worktree repair", repoPath)
 	}
 
 	if output, err := s.runGit(repoPath, "worktree", "prune"); err != nil {
-		return nil, fmt.Errorf("prune stale git worktrees: %s", strings.TrimSpace(string(output)))
+		return false, nil, fmt.Errorf("prune stale git worktrees: %s", strings.TrimSpace(string(output)))
 	}
 
 	pathExists, err := s.pathExists(record.WorktreePath)
 	if err != nil {
-		return nil, fmt.Errorf("stat worktree path for task %q: %w", taskID, err)
+		return false, nil, fmt.Errorf("stat worktree path for task %q: %w", taskID, err)
 	}
 	registered, err := s.isRegistered(repoPath, record.WorktreePath)
 	if err != nil {
-		return nil, err
+		return false, nil, err
 	}
 
+	wasRepaired := false
 	switch {
 	case pathExists && !registered:
 		safeToRecreate, err := s.safeToRecreate(record.WorktreePath)
 		if err != nil {
-			return nil, err
+			return false, nil, err
 		}
 		if safeToRecreate {
 			if err := s.removeAll(record.WorktreePath); err != nil {
-				return nil, fmt.Errorf("remove stale worktree path %q: %w", record.WorktreePath, err)
+				return false, nil, fmt.Errorf("remove stale worktree path %q: %w", record.WorktreePath, err)
 			}
 			if err := s.addWorktree(repoPath, record); err != nil {
-				return nil, err
+				return false, nil, err
 			}
+			wasRepaired = true
 			break
 		}
-		return nil, fmt.Errorf("worktree path %q exists but is not registered; manual cleanup is required before repair", record.WorktreePath)
+		return false, nil, fmt.Errorf("worktree path %q exists but is not registered; manual cleanup is required before repair", record.WorktreePath)
 	case !pathExists && !registered:
 		if err := s.mkdirAll(filepath.Dir(record.WorktreePath), 0o755); err != nil {
-			return nil, fmt.Errorf("create worktree parent dir: %w", err)
+			return false, nil, fmt.Errorf("create worktree parent dir: %w", err)
 		}
 		if err := s.addWorktree(repoPath, record); err != nil {
-			return nil, err
+			return false, nil, err
 		}
+		wasRepaired = true
 	}
 
 	record.Status = StatusReady
 	if err := s.repo.Upsert(*record); err != nil {
-		return nil, err
+		return false, nil, err
 	}
 
-	return s.repo.GetByTaskID(taskID)
+	result, err := s.repo.GetByTaskID(taskID)
+	return wasRepaired, result, err
 }
 
 // Reconcile refreshes one persisted worktree mapping from filesystem, git registration,

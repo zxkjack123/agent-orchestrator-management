@@ -121,8 +121,9 @@ Defined in full in `docs/state-machine.md`. Summary:
 | 15 — Merge coordination | Complete |
 | 16 — Communication & feedback upgrade | Complete |
 | 17 — Observability (cross-worktree read, velocity metrics) | Complete |
+| Post-M17 — Bug fixes, UX, merge commit, runtime policy | Complete |
 
-**Immediate next work**: gemini and kiro runtime launch support (2 cases in `internal/runtime/launch.go`); runtime-level policy enforcement (deny_commands currently injected as instructions only, not enforced at runtime).
+**Immediate next work**: gemini and kiro runtime launch support (2 cases in `internal/runtime/launch.go`); agent model selection (`--model` flag per agent in `agents.yaml`).
 
 **Recent additions** (see `docs/current-status.md` for full detail):
 - M13: `aom task link/unlink`, cross-task dependency graph with BFS cycle detection, `--priority` flag, `aom next`
@@ -130,6 +131,7 @@ Defined in full in `docs/state-machine.md`. Summary:
 - M15: `aom merge check/prepare`, `internal/merge` package, `merge-plan.md` artifact
 - M16: `aom message send/read/clear`, `aom task record-result`, `aom session health`, `aom pause-all/resume-all`
 - M17: `aom worktree read-file` (cross-worktree read with path-traversal guard), `aom metrics` (velocity report from log events)
+- Post-M17: `aom merge commit` (executes git merge with guards), `aom task list`, `aom task claim`, `project-board.md` auto-refresh, runtime-level policy enforcement (`--disallowed-tools` for claude), `seedAgentProfiles` bug fix in `Open()`, E2E smoke test script
 
 ---
 

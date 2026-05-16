@@ -268,6 +268,35 @@ All five milestones implemented and committed in sequence.
 - `aom metrics [--days N]` — team velocity report: tasks completed, avg duration, blocked events per agent, bottleneck hint; derived from `log.md` event timestamps and task DB records
 - `internal/cli/metrics.go`: `BuildVelocityReport`, `PrintVelocityReport`, `parseBlockEvents`
 
+### Post-M17 — Bug Fixes, UX Polish & Merge Completion (2026-05-16)
+
+Implemented after E2E simulation revealed gaps:
+
+#### Bug fixes
+- `seedAgentProfiles` bug fixed: was only called during `project init`, not `project open`; agents added to `agents.yaml` after init never received profile files — fixed by calling `seedAgentProfiles` in `Open()` (idempotent, skips existing profiles); all agent identity files now populate correctly at spawn time
+- `aom worktree repair` now returns a `(bool, *Record, error)` triple — `bool` indicates whether a repair actually occurred; CLI distinguishes `"Worktree repaired"` from `"Worktree already healthy, no repair needed"` so health-check runs are non-noisy
+- `aom watch` timeout now exits 0 with an informational message instead of returning an error; `tailLogEvents` and `tailMultiTaskLogEvents` return `nil` on normal timeout; `waitForLogEvent` and `waitForMultiTaskLogEvent` still return errors (polled event detection uses error path as signal)
+- `aom pause-all` shows `"No Working sessions found to pause"` with a note about mock/idle sessions when nothing is paused
+- `aom handoff --to` error now lists all valid agent names and role names so the operator can fix the argument without checking `agents.yaml` manually
+- `aom task approve-request` output includes `"Next: aom task show <task-id>"` to guide next step
+- `aom merge prepare` skips integration step creation when task is already `Done` or `Archived`
+- `aom message send` reads `AOM_ACTOR` env var for sender identity; falls back to `"operator"` when unset; enables AI orchestrator sessions to self-identify in mailbox messages
+
+#### New commands
+- `aom task list` — tabular display of all tasks with columns: TASK, STATUS, PRIORITY, ROLE, AGENT, TITLE; shows `[blocked by: TASK-xxx]` suffix for blocked tasks
+- `aom task claim <task-id> [--agent <name>]` — self-assigns a task to an agent (reads `AOM_ACTOR` env when `--agent` is omitted); refreshes `project-board.md`
+- `aom merge commit <task-id> [--into <branch>]` — executes `git merge --no-ff` of the task branch into the target; requires task status `Done`; requires current branch to match target; requires at least one commit ahead of target (errors with hint if branch is empty); appends `merge.committed` event to task log
+
+#### Guards added to existing commands
+- `aom merge commit` errors when source branch has no commits ahead of target — prevents silent `"Already up to date"` no-ops where agent work was never committed to git
+- `aom task close` warns when the task worktree has uncommitted tracked changes or when the task branch has no commits ahead of the default branch — operator is informed before closing so agent work is not silently lost
+
+#### New features
+- `project-board.md` auto-refresh: `aom/project-board.md` is regenerated after every task mutation (`task create`, `task update`, `task close`, `task link`, `task unlink`, `task claim`, `plan --create`); non-fatal — board failure never blocks the main operation
+- Session spawn now injects a `## Project Board` section into the agent's identity file (`CLAUDE.md` for claude, `AGENTS.md` for codex) with the absolute path to `project-board.md` and a `aom task list` hint
+- Runtime-level policy enforcement: `deny_commands` in `policy.yaml` are now passed as `--disallowed-tools 'Bash(cmd*)'` flags when launching claude sessions; codex has no equivalent flag — identity file injection remains the maximum available enforcement for codex
+- E2E smoke test script: `scripts/e2e-smoke.sh` — covers 43 checks across 12 sections using `--mock` mode; builds binary, creates temp git repo, exercises all major command groups, reports PASS/FAIL per check
+
 ### Six Additional Pre-Gemini/Kiro Features (2026-05-15)
 
 Implemented after M9, before gemini/kiro runtime support:
@@ -295,8 +324,11 @@ Implemented commands:
 - `aom next` (M13)
 - `aom team brief` (M14)
 - `aom merge check` / `aom merge prepare` (M15)
+- `aom merge commit` (Post-M17)
 - `aom message send` / `aom message read` / `aom message clear` (M16)
 - `aom pause-all` / `aom resume-all` (M16)
+- `aom task list` (Post-M17)
+- `aom task claim` (Post-M17)
 - `aom metrics` (M17)
 - `aom worktree repair`
 - `aom worktree read-file` (M17)

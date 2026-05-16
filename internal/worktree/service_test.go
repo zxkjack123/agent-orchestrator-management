@@ -334,7 +334,7 @@ func TestServiceRepairRecreatesMissingRegisteredWorktreeUsingExistingBranch(t *t
 		}
 	}
 
-	repaired, err := service.Repair(record.TaskID, repoRoot)
+	_, repaired, err := service.Repair(record.TaskID, repoRoot)
 	if err != nil {
 		t.Fatalf("Repair failed: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestServiceRepairFailsWhenPathExistsButRegistrationIsMissing(t *testing.T) 
 		return []os.DirEntry{stubDirEntry{name: "README.md"}}, nil
 	}
 
-	_, err = service.Repair(record.TaskID, repoRoot)
+	_, _, err = service.Repair(record.TaskID, repoRoot)
 	if err == nil {
 		t.Fatal("Repair unexpectedly succeeded")
 	}
@@ -469,7 +469,7 @@ func TestServiceRepairRecreatesUnregisteredArtifactOnlyPath(t *testing.T) {
 		}
 	}
 
-	repaired, err := service.Repair(record.TaskID, repoRoot)
+	_, repaired, err := service.Repair(record.TaskID, repoRoot)
 	if err != nil {
 		t.Fatalf("Repair failed: %v", err)
 	}

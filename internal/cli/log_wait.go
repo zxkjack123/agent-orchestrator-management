@@ -56,7 +56,7 @@ func tailLogEvents(out io.Writer, logPath string, timeout time.Duration) error {
 		}
 	}
 
-	return fmt.Errorf("watch timed out after %s", timeout)
+	return nil
 }
 
 func scanLogForEvent(logPath, marker string) (string, bool) {
@@ -104,7 +104,7 @@ func tailMultiTaskLogEvents(out io.Writer, tasks []taskLogEntry, timeout time.Du
 		}
 	}
 
-	return fmt.Errorf("watch timed out after %s", timeout)
+	return nil
 }
 
 // waitForMultiTaskLogEvent polls all task logs until any of them contains a

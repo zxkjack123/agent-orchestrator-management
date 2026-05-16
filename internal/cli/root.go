@@ -136,6 +136,10 @@ func (r Runner) executeTask(args []string) error {
 		return r.executeTaskClose(args[1:])
 	case "show":
 		return r.executeTaskShow(args[1:])
+	case "list":
+		return r.executeTaskList(args[1:])
+	case "claim":
+		return r.executeTaskClaim(args[1:])
 	case "reanalyze":
 		return r.executeTaskReanalyze(args[1:])
 	case "link":
@@ -263,6 +267,8 @@ func (r Runner) executePlan(args []string) error {
 	}, true); err != nil {
 		return err
 	}
+
+	_ = r.refreshProjectBoard(result)
 
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Task created from plan")
@@ -594,21 +600,24 @@ func (r Runner) executeWorktreeRepair(args []string) error {
 	}
 	defer worktreeDB.Close()
 
-	record, err := worktreeService.Repair(taskRecord.ID, result.Project.RepoPath)
+	wasRepaired, record, err := worktreeService.Repair(taskRecord.ID, result.Project.RepoPath)
 	if err != nil {
 		return err
 	}
 
-	if err := r.syncTaskArtifacts(result, taskRecord.ID, artifact.Event{
-		Type:        "worktree.repaired",
-		Actor:       "operator",
-		Summary:     "Worktree continuity was explicitly repaired",
-		StateEffect: fmt.Sprintf("Worktree %s", record.Status),
-	}, false); err != nil {
-		return err
+	if wasRepaired {
+		if err := r.syncTaskArtifacts(result, taskRecord.ID, artifact.Event{
+			Type:        "worktree.repaired",
+			Actor:       "operator",
+			Summary:     "Worktree continuity was explicitly repaired",
+			StateEffect: fmt.Sprintf("Worktree %s", record.Status),
+		}, false); err != nil {
+			return err
+		}
+		fmt.Fprintln(r.stdout, "Worktree repaired")
+	} else {
+		fmt.Fprintln(r.stdout, "Worktree already healthy, no repair needed")
 	}
-
-	fmt.Fprintln(r.stdout, "Worktree repaired")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Task: %s\n", taskRecord.ID)
 	fmt.Fprintf(r.stdout, "Status: %s\n", record.Status)
@@ -785,6 +794,8 @@ func (r Runner) executeTaskCreate(args []string) error {
 		return err
 	}
 
+	_ = r.refreshProjectBoard(result)
+
 	recommendedNext := "confirm the initial step and move the task to Ready"
 	if createResult.Task.PreferredRole != "" || createResult.Task.PreferredAgent != "" {
 		recommendedNext = "confirm the initial step owner and move the task to Ready"
@@ -931,6 +942,8 @@ func (r Runner) executeTaskUpdate(args []string) error {
 		return err
 	}
 
+	_ = r.refreshProjectBoard(result)
+
 	fmt.Fprintln(r.stdout, "Task updated")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Task: %s\n", record.ID)
@@ -970,7 +983,68 @@ func (r Runner) executeTaskClose(args []string) error {
 	}
 	defer sqlDB.Close()
 
-	record, err := taskService.Close(strings.TrimSpace(args[0]))
+	taskID := strings.TrimSpace(args[0])
+
+	// Check current task status before attempting close so we can give an actionable error.
+	current, err := taskService.Get(taskID)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+	if current.Status != "InProgress" && current.Status != "NeedsAttention" {
+		hint := fmt.Sprintf("run: aom task update %s --status in-progress", taskID)
+		return fmt.Errorf("task close requires status InProgress or NeedsAttention (current: %s)\n  hint: %s", current.Status, hint)
+	}
+
+	// Warn about incomplete steps before closing so the operator can make an informed choice.
+	stepService, stepDB, err := r.app.OpenStepService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer stepDB.Close()
+
+	steps, err := stepService.ListByTask(taskID)
+	if err != nil {
+		return err
+	}
+	var incompleteSteps []string
+	for _, s := range steps {
+		if s.Status != "Completed" && s.Status != "Skipped" && s.Status != "Canceled" {
+			incompleteSteps = append(incompleteSteps, fmt.Sprintf("%s (%s)", s.ID, s.Status))
+		}
+	}
+	if len(incompleteSteps) > 0 {
+		fmt.Fprintf(r.stdout, "Warning: %d step(s) are not yet in a terminal state:\n", len(incompleteSteps))
+		for _, s := range incompleteSteps {
+			fmt.Fprintf(r.stdout, "  - %s\n", s)
+		}
+		fmt.Fprintf(r.stdout, "  (closing task anyway; use 'aom step update <step-id> --status completed' to tidy up)\n\n")
+	}
+
+	// Warn if the task worktree has uncommitted changes or no commits ahead of the default branch.
+	view, viewErr := r.loadTaskView(result, taskID)
+	if viewErr == nil && view != nil && view.Worktree != nil {
+		wtPath := view.Worktree.WorktreePath
+		branch := view.Worktree.BranchName
+		defaultBranch := result.Project.DefaultBranch
+
+		// Uncommitted changes (tracked files modified or staged).
+		statusOut, statusErr := exec.Command("git", "-C", wtPath, "status", "--porcelain").Output()
+		if statusErr == nil && strings.TrimSpace(string(statusOut)) != "" {
+			fmt.Fprintf(r.stdout, "Warning: worktree has uncommitted changes — run 'git commit' in %s before merging.\n\n", wtPath)
+		}
+
+		// No commits on the task branch yet.
+		commitsOut, commitsErr := exec.Command("git", "-C", result.Project.RepoPath,
+			"log", "--oneline", defaultBranch+".."+branch).Output()
+		if commitsErr == nil && strings.TrimSpace(string(commitsOut)) == "" {
+			fmt.Fprintf(r.stdout, "Warning: branch %q has no commits ahead of %q — agent work will not appear in git history after merge.\n\n", branch, defaultBranch)
+		}
+	}
+
+	record, err := taskService.Close(taskID)
 	if err != nil {
 		return err
 	}
@@ -984,6 +1058,8 @@ func (r Runner) executeTaskClose(args []string) error {
 		return err
 	}
 
+	_ = r.refreshProjectBoard(result)
+
 	fmt.Fprintln(r.stdout, "Task closed")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Task: %s\n", record.ID)
@@ -996,8 +1072,15 @@ func (r Runner) executeStepList(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("task identifier is required")
 	}
-	if len(args) > 1 {
-		return fmt.Errorf("step list does not accept extra positional arguments in the current milestone")
+
+	taskID := strings.TrimSpace(args[0])
+	idsOnly := false
+	for _, a := range args[1:] {
+		if a == "--ids-only" {
+			idsOnly = true
+		} else {
+			return fmt.Errorf("unknown flag %q", a)
+		}
 	}
 
 	result, err := r.app.Projects.Open(".")
@@ -1011,12 +1094,12 @@ func (r Runner) executeStepList(args []string) error {
 	}
 	defer taskDB.Close()
 
-	taskRecord, err := taskService.Get(strings.TrimSpace(args[0]))
+	taskRecord, err := taskService.Get(taskID)
 	if err != nil {
 		return err
 	}
 	if taskRecord == nil {
-		return fmt.Errorf("task %q not found", strings.TrimSpace(args[0]))
+		return fmt.Errorf("task %q not found", taskID)
 	}
 
 	stepService, stepDB, err := r.app.OpenStepService(result.DBPath)
@@ -1030,6 +1113,13 @@ func (r Runner) executeStepList(args []string) error {
 		return err
 	}
 
+	if idsOnly {
+		for _, item := range steps {
+			fmt.Fprintln(r.stdout, item.ID)
+		}
+		return nil
+	}
+
 	fmt.Fprintln(r.stdout, "Steps")
 	fmt.Fprintln(r.stdout, "")
 	if len(steps) == 0 {
@@ -1040,7 +1130,7 @@ func (r Runner) executeStepList(args []string) error {
 	for _, item := range steps {
 		fmt.Fprintf(
 			r.stdout,
-			"  - %s | type=%s | title=%s | role=%s | agent=%s | status=%s | dependencies=%s\n",
+			"%s | type=%s | title=%s | role=%s | agent=%s | status=%s | dependencies=%s\n",
 			item.ID,
 			item.StepType,
 			item.Title,
@@ -1227,10 +1317,11 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 	}
 
 	if _, err := newLaunchBuilder().Build(aomruntime.SessionSpec{
-		SessionID: "",
-		AgentName: agentRecord.Name,
-		RoleName:  agentRecord.Role,
-		Runtime:   agentRecord.Runtime,
+		SessionID:    "",
+		AgentName:    agentRecord.Name,
+		RoleName:     agentRecord.Role,
+		Runtime:      agentRecord.Runtime,
+		DenyCommands: result.Policy.Policy.DenyCommands,
 	}, params.launchMode); err != nil {
 		return nil, err
 	}
@@ -1286,6 +1377,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		RoleName:       record.RoleName,
 		Runtime:        record.Runtime,
 		AgentSessionID: agentSessionID,
+		DenyCommands:   result.Policy.Policy.DenyCommands,
 	}, params.launchMode)
 	if err != nil {
 		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "session launch validation failed before session became interactive", err)
@@ -2224,19 +2316,19 @@ func (r Runner) executeTaskLink(args []string) error {
 
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
-		case "--blocks":
+		case "--blocked-by":
 			i++
 			if i >= len(args) {
-				return fmt.Errorf("--blocks requires a value")
+				return fmt.Errorf("--blocked-by requires a value")
 			}
 			blockingID = strings.TrimSpace(args[i])
 		default:
-			return fmt.Errorf("unknown flag %q", args[i])
+			return fmt.Errorf("unknown flag %q (use --blocked-by <blocker-task-id>)", args[i])
 		}
 	}
 
 	if blockingID == "" {
-		return fmt.Errorf("--blocks <task-id> is required")
+		return fmt.Errorf("--blocked-by <task-id> is required")
 	}
 
 	result, err := r.app.Projects.Open(".")
@@ -2263,6 +2355,8 @@ func (r Runner) executeTaskLink(args []string) error {
 		return err
 	}
 
+	_ = r.refreshProjectBoard(result)
+
 	fmt.Fprintf(r.stdout, "Linked: %s is blocked by %s\n", dependentID, blockingID)
 	return nil
 }
@@ -2277,19 +2371,19 @@ func (r Runner) executeTaskUnlink(args []string) error {
 
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
-		case "--blocks":
+		case "--blocked-by":
 			i++
 			if i >= len(args) {
-				return fmt.Errorf("--blocks requires a value")
+				return fmt.Errorf("--blocked-by requires a value")
 			}
 			blockingID = strings.TrimSpace(args[i])
 		default:
-			return fmt.Errorf("unknown flag %q", args[i])
+			return fmt.Errorf("unknown flag %q (use --blocked-by <blocker-task-id>)", args[i])
 		}
 	}
 
 	if blockingID == "" {
-		return fmt.Errorf("--blocks <task-id> is required")
+		return fmt.Errorf("--blocked-by <task-id> is required")
 	}
 
 	result, err := r.app.Projects.Open(".")
@@ -2315,6 +2409,8 @@ func (r Runner) executeTaskUnlink(args []string) error {
 	}, false); err != nil {
 		return err
 	}
+
+	_ = r.refreshProjectBoard(result)
 
 	fmt.Fprintf(r.stdout, "Unlinked: %s is no longer blocked by %s\n", dependentID, blockingID)
 	return nil
@@ -2498,6 +2594,10 @@ func (r Runner) executeWatchSingleTask(result *project.OpenResult, taskID, event
 
 		line, err := waitForLogEvent(logPath, eventType, watchTimeout)
 		if err != nil {
+			if strings.Contains(err.Error(), "timed out") {
+				fmt.Fprintf(r.stdout, "Watch timeout reached (%s) — event %q not detected.\n", watchTimeout, eventType)
+				return nil
+			}
 			return err
 		}
 
@@ -2564,6 +2664,11 @@ func (r Runner) executeWatchAllTasks(result *project.OpenResult, eventType strin
 
 		matchedTask, matchedLine, err := waitForMultiTaskLogEvent(entries, eventType, watchTimeout)
 		if err != nil {
+			// Timeout is expected; print a note and exit 0 rather than propagating the error.
+			if strings.Contains(err.Error(), "timed out") {
+				fmt.Fprintf(r.stdout, "Watch timeout reached (%s) — event %q not detected.\n", watchTimeout, eventType)
+				return nil
+			}
 			return err
 		}
 
@@ -2752,10 +2857,11 @@ func (r Runner) executeTaskApproveRequest(args []string) error {
 		return err
 	}
 
-	fmt.Fprintf(r.stdout, "Request approved\n\n")
+	fmt.Fprintf(r.stdout, "Request approved — new task created\n\n")
 	fmt.Fprintf(r.stdout, "Request: %s\n", reqID)
 	fmt.Fprintf(r.stdout, "Task:    %s\n", createResult.Task.ID)
 	fmt.Fprintf(r.stdout, "Title:   %s\n", createResult.Task.Title)
+	fmt.Fprintf(r.stdout, "\nNext: aom task show %s\n", createResult.Task.ID)
 	return nil
 }
 
@@ -2949,7 +3055,7 @@ func (r Runner) executeTeamBrief(args []string) error {
 
 func (r Runner) executeMerge(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("merge subcommand is required (check | prepare)")
+		return fmt.Errorf("merge subcommand is required (check | prepare | commit)")
 	}
 
 	switch args[0] {
@@ -2957,6 +3063,8 @@ func (r Runner) executeMerge(args []string) error {
 		return r.executeMergeCheck(args[1:])
 	case "prepare":
 		return r.executeMergePrepare(args[1:])
+	case "commit":
+		return r.executeMergeCommit(args[1:])
 	default:
 		return fmt.Errorf("unknown merge command %q", args[0])
 	}
@@ -3118,29 +3226,33 @@ func (r Runner) executeMergePrepare(args []string) error {
 		return err
 	}
 
-	// Create an integration step owned by operator role.
-	stepService, stepDB, err := r.app.OpenStepService(result.DBPath)
-	if err != nil {
-		return err
-	}
-	defer stepDB.Close()
+	// Create an integration step only when the task is still active.
+	stepEffect := "merge plan written"
+	if view.Task.Status != "Done" && view.Task.Status != "Archived" {
+		stepService, stepDB, err := r.app.OpenStepService(result.DBPath)
+		if err != nil {
+			return err
+		}
+		defer stepDB.Close()
 
-	_, err = stepService.Create(step.CreateParams{
-		ProjectID: result.Project.ID,
-		TaskID:    taskID,
-		StepType:  "integration",
-		Title:     fmt.Sprintf("Merge %s into %s", sourceBranch, targetBranch),
-		RoleName:  "operator",
-	})
-	if err != nil {
-		return err
+		_, err = stepService.Create(step.CreateParams{
+			ProjectID: result.Project.ID,
+			TaskID:    taskID,
+			StepType:  "integration",
+			Title:     fmt.Sprintf("Merge %s into %s", sourceBranch, targetBranch),
+			RoleName:  "operator",
+		})
+		if err != nil {
+			return err
+		}
+		stepEffect = "integration step created"
 	}
 
 	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
 		Type:        "merge.prepared",
 		Actor:       "operator",
 		Summary:     fmt.Sprintf("Merge plan prepared: %s → %s (score: %s)", sourceBranch, targetBranch, checkResult.Score),
-		StateEffect: "integration step created",
+		StateEffect: stepEffect,
 	}, false); err != nil {
 		return err
 	}
@@ -3151,6 +3263,104 @@ func (r Runner) executeMergePrepare(args []string) error {
 	fmt.Fprintf(r.stdout, "Conflict score: %s\n", checkResult.Score)
 	fmt.Fprintf(r.stdout, "Overlapping files: %d\n", len(checkResult.Overlaps))
 	fmt.Fprintf(r.stdout, "merge-plan.md written to task artifact root.\n")
+	return nil
+}
+
+func (r Runner) executeMergeCommit(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task id is required")
+	}
+
+	taskID := strings.TrimSpace(args[0])
+	intoFlag := ""
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--into":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--into requires a value")
+			}
+			intoFlag = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	view, err := r.loadTaskView(result, taskID)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+	if view.Worktree == nil {
+		return fmt.Errorf("task %q has no worktree", taskID)
+	}
+
+	targetBranch := intoFlag
+	if targetBranch == "" {
+		targetBranch = result.Project.DefaultBranch
+	}
+
+	sourceBranch := view.Worktree.BranchName
+
+	// Safety check: require the task to be Done before merging.
+	if view.Task.Status != "Done" {
+		return fmt.Errorf("task %q is %s; close the task before merging (aom task close %s)", taskID, view.Task.Status, taskID)
+	}
+
+	// Guard: require at least one commit on the source branch ahead of the target.
+	commitsOut, commitsErr := exec.Command("git", "-C", result.Project.RepoPath,
+		"log", "--oneline", targetBranch+".."+sourceBranch).Output()
+	if commitsErr != nil {
+		return fmt.Errorf("check commits on %q: %w", sourceBranch, commitsErr)
+	}
+	if strings.TrimSpace(string(commitsOut)) == "" {
+		return fmt.Errorf(
+			"branch %q has no commits ahead of %q — nothing to merge\n"+
+				"  hint: the agent must commit its work before the branch can be merged",
+			sourceBranch, targetBranch)
+	}
+
+	// Run git merge --no-ff from the repo root.
+	mergeMsg := fmt.Sprintf("Merge %s into %s\n\nTask: %s\n%s", sourceBranch, targetBranch, taskID, view.Task.Title)
+	cmd := exec.Command("git", "merge", "--no-ff", sourceBranch, "-m", mergeMsg)
+	cmd.Dir = result.Project.RepoPath
+
+	// git merge must run on the target branch; verify and switch if needed.
+	headOut, headErr := exec.Command("git", "-C", result.Project.RepoPath, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if headErr != nil {
+		return fmt.Errorf("check current branch: %w", headErr)
+	}
+	currentBranch := strings.TrimSpace(string(headOut))
+	if currentBranch != targetBranch {
+		return fmt.Errorf("current branch is %q but target is %q — check out %q first, then re-run merge commit", currentBranch, targetBranch, targetBranch)
+	}
+
+	out, mergeErr := cmd.CombinedOutput()
+	if mergeErr != nil {
+		return fmt.Errorf("git merge failed:\n%s", strings.TrimSpace(string(out)))
+	}
+
+	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
+		Type:        "merge.committed",
+		Actor:       "operator",
+		Summary:     fmt.Sprintf("Merged %s into %s", sourceBranch, targetBranch),
+		StateEffect: "branch merged",
+	}, false); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(r.stdout, "Merged\n\n")
+	fmt.Fprintf(r.stdout, "Source branch: %s\n", sourceBranch)
+	fmt.Fprintf(r.stdout, "Target branch: %s\n", targetBranch)
+	fmt.Fprintf(r.stdout, "%s\n", strings.TrimSpace(string(out)))
 	return nil
 }
 
@@ -3180,7 +3390,10 @@ func (r Runner) executeMessageSend(args []string) error {
 
 	agentName := strings.TrimSpace(args[0])
 	message := strings.TrimSpace(args[1])
-	fromSender := "operator"
+	fromSender := os.Getenv("AOM_ACTOR")
+	if fromSender == "" {
+		fromSender = "operator"
+	}
 
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
@@ -3535,6 +3748,7 @@ func (r Runner) executePauseAll(args []string) error {
 	}
 	if len(paused) == 0 {
 		fmt.Fprintln(r.stdout, "No Working sessions found to pause.")
+		fmt.Fprintln(r.stdout, "Note: only sessions in Working state can be paused. Mock/idle sessions are unaffected.")
 	}
 	return nil
 }
@@ -4736,11 +4950,13 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom task create <title> [--role <role>] [--agent <agent>] : create a task")
 	fmt.Fprintln(r.stdout, "aom task show <task-id> : inspect task state, artifacts, and ownership")
 	fmt.Fprintln(r.stdout, "aom task update <task-id> [flags] : change task mode, owner, or status")
-	fmt.Fprintln(r.stdout, "aom task close <task-id> : mark a task complete")
+	fmt.Fprintln(r.stdout, "aom task close <task-id> : mark a task complete (task must be InProgress; all steps must be terminal)")
+	fmt.Fprintln(r.stdout, "aom task link <task-id> --blocked-by <blocker-id> : declare that task-id cannot start until blocker-id is done")
+	fmt.Fprintln(r.stdout, "aom task unlink <task-id> --blocked-by <blocker-id> : remove a dependency edge")
 	fmt.Fprintln(r.stdout, "aom review <task-id> [--mock|--real] : prepare or start review flow")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Step")
-	fmt.Fprintln(r.stdout, "aom step list <task-id> : list task steps and their owners/statuses")
+	fmt.Fprintln(r.stdout, "aom step list <task-id> [--ids-only] : list task steps; --ids-only prints one step ID per line for scripting")
 	fmt.Fprintln(r.stdout, "aom step update <step-id> --status <status> : advance one step explicitly")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Session")
@@ -5401,7 +5617,15 @@ func resolveHandoffTarget(result *project.OpenResult, target string) (role strin
 		return target, "", "", nil
 	}
 
-	return "", "", "", fmt.Errorf("handoff target %q did not match a known agent or role", target)
+	var validAgents, validRoles []string
+	for _, a := range result.Agents {
+		validAgents = append(validAgents, a.Name)
+	}
+	for role := range result.RoleConfigs {
+		validRoles = append(validRoles, role)
+	}
+	return "", "", "", fmt.Errorf("handoff target %q not found\n  valid agents: %s\n  valid roles:  %s",
+		target, strings.Join(validAgents, ", "), strings.Join(validRoles, ", "))
 }
 
 func handoffNextAction(taskID, role, agentName string) string {
@@ -5584,6 +5808,27 @@ func materializeAgentContext(result *project.OpenResult, agentRecord *agent.Reco
 
 	if err := artifact.MaterializePolicyConstraints(agentRecord.Name, agentRecord.Runtime, result.Policy.Policy.DenyCommands, worktreePath); err != nil {
 		return fmt.Errorf("materialize policy constraints: %w", err)
+	}
+
+	// Append project-board pointer to the agent's identity file so it knows where to
+	// find the shared task list. Silently skipped when the worktree or identity file is absent.
+	if worktreePath != "" {
+		var identityFile string
+		switch strings.ToLower(agentRecord.Runtime) {
+		case "claude":
+			identityFile = "CLAUDE.md"
+		case "codex":
+			identityFile = "AGENTS.md"
+		}
+		if identityFile != "" {
+			boardPath := filepath.Join(result.Project.RepoPath, ".aom", "project-board.md")
+			note := fmt.Sprintf("\n## Project Board\nFull team task board: %s\nUse `aom task list` to see live task state.\n", boardPath)
+			idPath := filepath.Join(worktreePath, identityFile)
+			if f, err := os.OpenFile(idPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); err == nil {
+				_, _ = f.WriteString(note)
+				_ = f.Close()
+			}
+		}
 	}
 
 	return nil
@@ -6190,4 +6435,163 @@ func (r Runner) loadTaskCount(result *project.OpenResult) (int, error) {
 	defer sqlDB.Close()
 
 	return taskService.CountByProject(result.Project.ID)
+}
+
+// ── M18: task list, project board, task claim ─────────────────────────────────
+
+func (r Runner) executeTaskList(args []string) error {
+	_ = args
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	tasks, err := taskService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	if len(tasks) == 0 {
+		fmt.Fprintln(r.stdout, "No tasks found.")
+		return nil
+	}
+
+	fmt.Fprintf(r.stdout, "%-20s  %-16s  %-8s  %-14s  %-16s  %s\n",
+		"TASK", "STATUS", "PRIORITY", "ROLE", "AGENT", "TITLE")
+	fmt.Fprintf(r.stdout, "%s\n", strings.Repeat("-", 100))
+
+	for _, t := range tasks {
+		blockerIDs, _ := taskService.BlockedBy(t.ID)
+		blockedLabel := ""
+		if len(blockerIDs) > 0 {
+			ids := make([]string, 0, len(blockerIDs))
+			for _, b := range blockerIDs {
+				ids = append(ids, b.ID)
+			}
+			blockedLabel = " [blocked by: " + strings.Join(ids, ",") + "]"
+		}
+		agent := t.PreferredAgent
+		if agent == "" {
+			agent = "-"
+		}
+		role := t.PreferredRole
+		if role == "" {
+			role = "-"
+		}
+		fmt.Fprintf(r.stdout, "%-20s  %-16s  %-8s  %-14s  %-16s  %s%s\n",
+			t.ID, t.Status, task.PriorityLabel(t.Priority), role, agent, t.Title, blockedLabel)
+	}
+
+	return nil
+}
+
+func (r Runner) executeTaskClaim(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task id is required")
+	}
+
+	taskID := strings.TrimSpace(args[0])
+	agentName := os.Getenv("AOM_ACTOR")
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--agent":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--agent requires a value")
+			}
+			agentName = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	if agentName == "" {
+		return fmt.Errorf("agent name is required (--agent <name> or set AOM_ACTOR env var)")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	roleName := ""
+	for _, a := range result.Agents {
+		if a.Name == agentName {
+			roleName = a.Role
+			break
+		}
+	}
+
+	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	updated, err := taskService.AssignOwner(taskID, roleName, agentName)
+	if err != nil {
+		return err
+	}
+
+	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
+		Type:    "task.claimed",
+		Actor:   agentName,
+		Summary: fmt.Sprintf("Task claimed by %s", agentName),
+	}, false); err != nil {
+		return err
+	}
+
+	_ = r.refreshProjectBoard(result)
+
+	fmt.Fprintf(r.stdout, "Task claimed\n\n")
+	fmt.Fprintf(r.stdout, "Task:  %s\n", updated.ID)
+	fmt.Fprintf(r.stdout, "Agent: %s\n", agentName)
+	if roleName != "" {
+		fmt.Fprintf(r.stdout, "Role:  %s\n", roleName)
+	}
+	return nil
+}
+
+// refreshProjectBoard regenerates .aom/project-board.md from the current task state.
+// Non-fatal: errors are silently ignored so they never block the main command.
+func (r Runner) refreshProjectBoard(result *project.OpenResult) error {
+	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	tasks, err := taskService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	briefTasks := make([]artifact.TeamBriefTask, 0, len(tasks))
+	for _, t := range tasks {
+		blockers, _ := taskService.BlockedBy(t.ID)
+		blockerIDs := make([]string, 0, len(blockers))
+		for _, b := range blockers {
+			blockerIDs = append(blockerIDs, b.ID)
+		}
+		briefTasks = append(briefTasks, artifact.TeamBriefTask{
+			ID:        t.ID,
+			Title:     t.Title,
+			Status:    t.Status,
+			Priority:  task.PriorityLabel(t.Priority),
+			Agent:     t.PreferredAgent,
+			BlockedBy: blockerIDs,
+		})
+	}
+
+	svc := artifact.NewService(result.Project.RepoPath, result.StateDir)
+	_, err = svc.WriteProjectBoard(result.Project.Name, briefTasks)
+	return err
 }

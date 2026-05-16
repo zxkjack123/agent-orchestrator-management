@@ -21,7 +21,8 @@ type SessionSpec struct {
 	AgentName      string
 	RoleName       string
 	Runtime        string
-	AgentSessionID string // native vendor session ID; non-empty triggers resume mode
+	AgentSessionID string   // native vendor session ID; non-empty triggers resume mode
+	DenyCommands   []string // commands to block at runtime (claude --disallowed-tools only)
 }
 
 // LookPathFunc resolves a runtime binary path.
@@ -64,22 +65,31 @@ func (b *Builder) realRuntimeShellCommand(spec SessionSpec) (string, error) {
 	runtimeName := strings.TrimSpace(spec.Runtime)
 	switch runtimeName {
 	case "codex":
-		return b.execRuntimeCommand(runtimeName, strings.TrimSpace(spec.AgentSessionID))
+		return b.execRuntimeCommand(spec)
 	case "claude":
-		return b.execRuntimeCommand(runtimeName, strings.TrimSpace(spec.AgentSessionID))
+		return b.execRuntimeCommand(spec)
 	default:
 		return "", fmt.Errorf("real launch mode does not support runtime %q in the current milestone", runtimeName)
 	}
 }
 
-func (b *Builder) execRuntimeCommand(runtimeName, agentSessionID string) (string, error) {
+func (b *Builder) execRuntimeCommand(spec SessionSpec) (string, error) {
+	runtimeName := strings.TrimSpace(spec.Runtime)
+	agentSessionID := strings.TrimSpace(spec.AgentSessionID)
 	if _, err := b.lookPath(runtimeName); err != nil {
 		return "", fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", runtimeName, runtimeName)
 	}
 	switch runtimeName {
 	case "claude":
+		disallowedFlag := buildDisallowedToolsFlag(spec.DenyCommands)
 		if agentSessionID != "" {
+			if disallowedFlag != "" {
+				return fmt.Sprintf("sh -lc 'exec claude --resume %s --dangerously-skip-permissions %s'", agentSessionID, disallowedFlag), nil
+			}
 			return fmt.Sprintf("sh -lc 'exec claude --resume %s --dangerously-skip-permissions'", agentSessionID), nil
+		}
+		if disallowedFlag != "" {
+			return fmt.Sprintf("sh -lc 'exec claude --dangerously-skip-permissions %s'", disallowedFlag), nil
 		}
 		return "sh -lc 'exec claude --dangerously-skip-permissions'", nil
 	case "codex":
@@ -90,6 +100,19 @@ func (b *Builder) execRuntimeCommand(runtimeName, agentSessionID string) (string
 	default:
 		return fmt.Sprintf("sh -lc 'exec %s'", runtimeName), nil
 	}
+}
+
+// buildDisallowedToolsFlag converts deny_commands into a --disallowed-tools flag string.
+// Each command cmd becomes 'Bash(cmd*)'. Returns an empty string when no commands are given.
+func buildDisallowedToolsFlag(denyCommands []string) string {
+	if len(denyCommands) == 0 {
+		return ""
+	}
+	patterns := make([]string, len(denyCommands))
+	for i, cmd := range denyCommands {
+		patterns[i] = fmt.Sprintf("'Bash(%s*)'", cmd)
+	}
+	return "--disallowed-tools " + strings.Join(patterns, " ")
 }
 
 func placeholderShellCommand(spec SessionSpec) string {

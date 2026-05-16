@@ -173,3 +173,49 @@ func TestBuilderBuildFreshStartWhenNoAgentSessionID(t *testing.T) {
 		}
 	}
 }
+
+func TestBuilderBuildClaudeWithDenyCommands(t *testing.T) {
+	builder := NewBuilderWithLookPath(func(name string) (string, error) {
+		if name == "claude" {
+			return "/usr/bin/claude", nil
+		}
+		return "", fmt.Errorf("unexpected lookup %q", name)
+	})
+
+	command, err := builder.Build(SessionSpec{
+		Runtime:      "claude",
+		DenyCommands: []string{"rm -rf", "git push --force"},
+	}, LaunchModeReal)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	if !strings.Contains(command, "--disallowed-tools") {
+		t.Fatalf("command = %q, want --disallowed-tools flag", command)
+	}
+	if !strings.Contains(command, "'Bash(rm -rf*)'") {
+		t.Fatalf("command = %q, want Bash(rm -rf*) pattern", command)
+	}
+	if !strings.Contains(command, "'Bash(git push --force*)'") {
+		t.Fatalf("command = %q, want Bash(git push --force*) pattern", command)
+	}
+}
+
+func TestBuilderBuildCodexIgnoresDenyCommands(t *testing.T) {
+	builder := NewBuilderWithLookPath(func(name string) (string, error) {
+		if name == "codex" {
+			return "/usr/bin/codex", nil
+		}
+		return "", fmt.Errorf("unexpected lookup %q", name)
+	})
+
+	command, err := builder.Build(SessionSpec{
+		Runtime:      "codex",
+		DenyCommands: []string{"rm -rf", "git push --force"},
+	}, LaunchModeReal)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+	if strings.Contains(command, "--disallowed-tools") {
+		t.Fatalf("command = %q, codex should not contain --disallowed-tools flag", command)
+	}
+}

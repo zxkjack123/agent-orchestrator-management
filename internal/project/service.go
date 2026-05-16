@@ -250,6 +250,13 @@ func (s *Service) Open(repoPath string) (*OpenResult, error) {
 		return nil, err
 	}
 
+	// Seed profiles for any agents added to agents.yaml after the initial project init.
+	// seedAgentProfiles is idempotent — it skips agents whose profile file already exists.
+	aomPath := filepath.Join(repoAbsPath, aomDirName)
+	if err := seedAgentProfiles(aomPath, cfg); err != nil {
+		return nil, err
+	}
+
 	agents, err := agentRepo.ListByProjectID(projectID)
 	if err != nil {
 		return nil, err

@@ -675,7 +675,11 @@ func TestExecuteSessionSpawnWithRealClaudeRuntime(t *testing.T) {
 	if len(splitCommands) != 1 {
 		t.Fatalf("len(splitCommands) = %d, want 1", len(splitCommands))
 	}
-	if splitCommands[0] != "sh -lc 'exec claude --dangerously-skip-permissions'" {
+	// The command must launch claude with the permissions flag.
+	// When policy.yaml configures deny_commands the --disallowed-tools flag
+	// will also be present; we check the essential parts rather than exact equality.
+	if !strings.Contains(splitCommands[0], "exec claude") ||
+		!strings.Contains(splitCommands[0], "--dangerously-skip-permissions") {
 		t.Fatalf("split command = %q, want claude exec launch", splitCommands[0])
 	}
 }
@@ -4948,10 +4952,12 @@ func extractLineValue(output, prefix string) string {
 func extractStepID(output string) string {
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "- ") {
+		// Support both old "  - STEP-xxx | ..." and new "STEP-xxx | ..." formats.
+		line = strings.TrimPrefix(line, "- ")
+		if !strings.HasPrefix(line, "STEP-") {
 			continue
 		}
-		parts := strings.SplitN(strings.TrimPrefix(line, "- "), " | ", 2)
+		parts := strings.SplitN(line, " | ", 2)
 		if len(parts) == 0 {
 			continue
 		}
