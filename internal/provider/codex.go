@@ -15,14 +15,20 @@ type codexProvider struct{}
 func (p *codexProvider) Name() string            { return "codex" }
 func (p *codexProvider) IdentityFilename() string { return "AGENTS.md" }
 
-func (p *codexProvider) LaunchCommand(spec LaunchSpec, lookPath func(string) (string, error)) (string, error) {
+func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (string, error)) (ShellSpec, error) {
 	if _, err := lookPath("codex"); err != nil {
-		return "", fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", "codex", "codex")
+		return ShellSpec{}, fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", "codex", "codex")
 	}
+	var execCmd string
 	if spec.AgentSessionID != "" {
-		return fmt.Sprintf("sh -lc 'export AOM_RUNTIME=codex; exec codex resume %s --sandbox workspace-write -a never'", spec.AgentSessionID), nil
+		execCmd = fmt.Sprintf("exec codex resume %s --sandbox workspace-write -a never", spec.AgentSessionID)
+	} else {
+		execCmd = "exec codex --sandbox workspace-write -a never"
 	}
-	return "sh -lc 'export AOM_RUNTIME=codex; exec codex --sandbox workspace-write -a never'", nil
+	return ShellSpec{
+		Preamble: []string{"export AOM_RUNTIME=codex"},
+		ExecCmd:  execCmd,
+	}, nil
 }
 
 func (p *codexProvider) ResumeInfo() ResumeInfo {

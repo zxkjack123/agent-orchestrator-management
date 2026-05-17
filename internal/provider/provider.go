@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// LaunchSpec carries the data needed by LaunchCommand. It mirrors runtime.SessionSpec
+// LaunchSpec carries the data needed by LaunchShellSpec. It mirrors runtime.SessionSpec
 // but lives here so the provider package does not import internal/runtime.
 type LaunchSpec struct {
 	SessionID      string
@@ -14,6 +14,18 @@ type LaunchSpec struct {
 	RoleName       string
 	AgentSessionID string
 	DenyCommands   []string
+}
+
+// ShellSpec is the structured output of LaunchShellSpec. The Builder assembles
+// the final sh -lc command from these parts, injecting any operator-level
+// environment (e.g. PATH) before the provider preamble.
+type ShellSpec struct {
+	// Preamble contains shell statements executed before the main command,
+	// e.g. "export AOM_RUNTIME=codex" or "unset SOME_VAR 2>/dev/null".
+	// Statements must NOT contain trailing semicolons — the Builder joins them.
+	Preamble []string
+	// ExecCmd is the main exec invocation, e.g. "exec claude --dangerously-skip-permissions".
+	ExecCmd string
 }
 
 // ResumeInfo describes session resume support for a runtime.
@@ -47,10 +59,16 @@ type NativeSessionStrategy struct {
 
 // Provider describes the behavioural contract for one agent CLI runtime.
 // All methods must be pure — no I/O, no state.
+//
+// Adding a new provider only requires implementing this interface. Cross-cutting
+// concerns (PATH injection, shell assembly) are handled by runtime.Builder — not
+// here — so new providers never need to repeat that logic.
 type Provider interface {
 	Name() string
 	IdentityFilename() string
-	LaunchCommand(spec LaunchSpec, lookPath func(string) (string, error)) (string, error)
+	// LaunchShellSpec returns the structured shell components for this provider.
+	// The Builder assembles the final sh -lc command, injecting operator env first.
+	LaunchShellSpec(spec LaunchSpec, lookPath func(string) (string, error)) (ShellSpec, error)
 	ResumeInfo() ResumeInfo
 	MCPConfigStyle() MCPStyle
 	PolicyEnforcementLevel() PolicyEnforcement
@@ -90,8 +108,8 @@ type fallbackProvider struct{ name string }
 
 func (p *fallbackProvider) Name() string { return p.name }
 func (p *fallbackProvider) IdentityFilename() string { return "" }
-func (p *fallbackProvider) LaunchCommand(_ LaunchSpec, _ func(string) (string, error)) (string, error) {
-	return "", fmt.Errorf("real launch mode does not support runtime %q in the current milestone", p.name)
+func (p *fallbackProvider) LaunchShellSpec(_ LaunchSpec, _ func(string) (string, error)) (ShellSpec, error) {
+	return ShellSpec{}, fmt.Errorf("real launch mode does not support runtime %q in the current milestone", p.name)
 }
 func (p *fallbackProvider) ResumeInfo() ResumeInfo                         { return ResumeInfo{} }
 func (p *fallbackProvider) MCPConfigStyle() MCPStyle                       { return MCPStyleNone }

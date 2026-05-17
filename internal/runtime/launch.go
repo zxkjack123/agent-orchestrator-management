@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
@@ -25,6 +26,7 @@ type SessionSpec struct {
 	Runtime        string
 	AgentSessionID string   // native vendor session ID; non-empty triggers resume mode
 	DenyCommands   []string // commands to block at runtime (claude --disallowed-tools only)
+	ProjectBin     string   // absolute path to the aom binary; prepended to PATH for all providers
 }
 
 // LookPathFunc resolves a runtime binary path.
@@ -82,13 +84,38 @@ func (b *Builder) Build(spec SessionSpec, mode LaunchMode) (string, error) {
 
 func (b *Builder) realRuntimeShellCommand(spec SessionSpec) (string, error) {
 	p := b.registry.Lookup(spec.Runtime)
-	return p.LaunchCommand(provider.LaunchSpec{
+	shellSpec, err := p.LaunchShellSpec(provider.LaunchSpec{
 		SessionID:      spec.SessionID,
 		AgentName:      spec.AgentName,
 		RoleName:       spec.RoleName,
 		AgentSessionID: spec.AgentSessionID,
 		DenyCommands:   spec.DenyCommands,
 	}, b.lookPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Prepend project bin directory to PATH for all providers. This ensures the
+	// aom binary is reachable inside agent sessions regardless of how the shell
+	// was launched, without requiring each provider to repeat this logic.
+	if spec.ProjectBin != "" {
+		projectDir := filepath.Dir(spec.ProjectBin)
+		shellSpec.Preamble = append(
+			[]string{fmt.Sprintf(`export PATH="%s":$PATH`, projectDir)},
+			shellSpec.Preamble...,
+		)
+	}
+
+	return assembleLoginShellCommand(shellSpec), nil
+}
+
+// assembleLoginShellCommand builds a sh -lc '...' command from a ShellSpec.
+// Preamble statements and ExecCmd are joined with "; ". Single quotes are used
+// for the outer wrapper — providers must not include unescaped single quotes in
+// their components (use double quotes for any internal quoting instead).
+func assembleLoginShellCommand(spec provider.ShellSpec) string {
+	parts := append(spec.Preamble, spec.ExecCmd)
+	return "sh -lc '" + strings.Join(parts, "; ") + "'"
 }
 
 func placeholderShellCommand(spec SessionSpec) string {

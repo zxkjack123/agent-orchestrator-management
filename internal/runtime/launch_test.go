@@ -148,7 +148,7 @@ func TestBuilderBuildResumesCodexSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	want := "sh -lc 'exec codex resume sess-xyz-789 --sandbox workspace-write -a never'"
+	want := "sh -lc 'export AOM_RUNTIME=codex; exec codex resume sess-xyz-789 --sandbox workspace-write -a never'"
 	if command != want {
 		t.Fatalf("command = %q, want %q", command, want)
 	}
@@ -194,10 +194,10 @@ func TestBuilderBuildClaudeWithDenyCommands(t *testing.T) {
 	if !strings.Contains(command, "--disallowed-tools") {
 		t.Fatalf("command = %q, want --disallowed-tools flag", command)
 	}
-	if !strings.Contains(command, "'Bash(rm -rf*)'") {
+	if !strings.Contains(command, `"Bash(rm -rf*)"`) {
 		t.Fatalf("command = %q, want Bash(rm -rf*) pattern", command)
 	}
-	if !strings.Contains(command, "'Bash(git push --force*)'") {
+	if !strings.Contains(command, `"Bash(git push --force*)"`) {
 		t.Fatalf("command = %q, want Bash(git push --force*) pattern", command)
 	}
 }
@@ -223,8 +223,8 @@ func TestBuilderBuildCodexIgnoresDenyCommands(t *testing.T) {
 }
 
 func TestNewBuilderWithRegistryUsesCustomRegistry(t *testing.T) {
-	// A custom provider that always returns a sentinel command.
-	customProvider := &testProvider{name: "custom", launchCmd: "sh -lc 'exec custom-agent'"}
+	// A custom provider that returns a sentinel exec command with no preamble.
+	customProvider := &testProvider{name: "custom", execCmd: "exec custom-agent"}
 	reg := provider.Registry{"custom": customProvider}
 
 	builder := NewBuilderWithRegistry(func(name string) (string, error) {
@@ -242,14 +242,15 @@ func TestNewBuilderWithRegistryUsesCustomRegistry(t *testing.T) {
 
 // testProvider is a minimal provider.Provider implementation for use in tests.
 type testProvider struct {
-	name      string
-	launchCmd string
+	name     string
+	preamble []string
+	execCmd  string
 }
 
 func (p *testProvider) Name() string            { return p.name }
 func (p *testProvider) IdentityFilename() string { return "" }
-func (p *testProvider) LaunchCommand(_ provider.LaunchSpec, _ func(string) (string, error)) (string, error) {
-	return p.launchCmd, nil
+func (p *testProvider) LaunchShellSpec(_ provider.LaunchSpec, _ func(string) (string, error)) (provider.ShellSpec, error) {
+	return provider.ShellSpec{Preamble: p.preamble, ExecCmd: p.execCmd}, nil
 }
 func (p *testProvider) ResumeInfo() provider.ResumeInfo                         { return provider.ResumeInfo{} }
 func (p *testProvider) MCPConfigStyle() provider.MCPStyle                       { return provider.MCPStyleNone }

@@ -167,6 +167,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		agentSessionID, _ = sessionService.LatestVendorSessionID(params.taskID, agentRecord.Name)
 	}
 
+	selfBin, _ := os.Executable()
 	launchCommand, err := newLaunchBuilder().Build(aomruntime.SessionSpec{
 		SessionID:      record.ID,
 		AgentName:      record.AgentName,
@@ -174,6 +175,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		Runtime:        record.Runtime,
 		AgentSessionID: agentSessionID,
 		DenyCommands:   result.Policy.Policy.DenyCommands,
+		ProjectBin:     selfBin,
 	}, params.launchMode)
 	if err != nil {
 		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "session launch validation failed before session became interactive", err)

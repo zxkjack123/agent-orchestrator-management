@@ -13,26 +13,29 @@ type claudeProvider struct{}
 func (p *claudeProvider) Name() string            { return "claude" }
 func (p *claudeProvider) IdentityFilename() string { return "CLAUDE.md" }
 
-// claudeEnvReset clears environment variables that Claude Code sets on its own process.
-// Without this, a nested Claude agent inherits CLAUDECODE=1 and exits immediately
-// thinking it's already running inside a Claude Code session.
-const claudeEnvReset = "unset CLAUDECODE CLAUDE_CODE_SESSION_ID CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH AI_AGENT CLAUDE_CODE_IS_INNER_CLAUDE_CODE 2>/dev/null; "
+// claudeEnvResetPreamble clears environment variables that Claude Code sets on
+// its own process. Without this, a nested Claude agent inherits CLAUDECODE=1
+// and exits immediately thinking it's already running inside a Claude Code session.
+const claudeEnvResetPreamble = "unset CLAUDECODE CLAUDE_CODE_SESSION_ID CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH AI_AGENT CLAUDE_CODE_IS_INNER_CLAUDE_CODE 2>/dev/null"
 
-func (p *claudeProvider) LaunchCommand(spec LaunchSpec, lookPath func(string) (string, error)) (string, error) {
+func (p *claudeProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (string, error)) (ShellSpec, error) {
 	if _, err := lookPath("claude"); err != nil {
-		return "", fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", "claude", "claude")
+		return ShellSpec{}, fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", "claude", "claude")
 	}
 	disallowedFlag := buildDisallowedToolsFlag(spec.DenyCommands)
+	var execCmd string
 	if spec.AgentSessionID != "" {
-		if disallowedFlag != "" {
-			return fmt.Sprintf(`sh -lc "%sexec claude --resume %s --dangerously-skip-permissions %s"`, claudeEnvReset, spec.AgentSessionID, disallowedFlag), nil
-		}
-		return fmt.Sprintf(`sh -lc "%sexec claude --resume %s --dangerously-skip-permissions"`, claudeEnvReset, spec.AgentSessionID), nil
+		execCmd = fmt.Sprintf("exec claude --resume %s --dangerously-skip-permissions", spec.AgentSessionID)
+	} else {
+		execCmd = "exec claude --dangerously-skip-permissions"
 	}
 	if disallowedFlag != "" {
-		return fmt.Sprintf(`sh -lc "%sexec claude --dangerously-skip-permissions %s"`, claudeEnvReset, disallowedFlag), nil
+		execCmd += " " + disallowedFlag
 	}
-	return fmt.Sprintf(`sh -lc "%sexec claude --dangerously-skip-permissions"`, claudeEnvReset), nil
+	return ShellSpec{
+		Preamble: []string{claudeEnvResetPreamble},
+		ExecCmd:  execCmd,
+	}, nil
 }
 
 func (p *claudeProvider) ResumeInfo() ResumeInfo {
@@ -58,7 +61,9 @@ func buildDisallowedToolsFlag(denyCommands []string) string {
 	}
 	patterns := make([]string, len(denyCommands))
 	for i, cmd := range denyCommands {
-		patterns[i] = fmt.Sprintf("'Bash(%s*)'", cmd)
+		// Double quotes are used here so the pattern is compatible with the
+		// single-quoted outer sh -lc wrapper assembled by runtime.Builder.
+		patterns[i] = fmt.Sprintf(`"Bash(%s*)"`, cmd)
 	}
 	return "--disallowed-tools " + strings.Join(patterns, " ")
 }
