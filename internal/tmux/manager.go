@@ -303,6 +303,28 @@ func (m *Manager) SendKeys(paneID, message string) error {
 	return nil
 }
 
+// PaneInAlternateScreen reports whether the given pane is currently showing an
+// alternate-screen buffer (e.g. a TUI overlay like codex /status or a
+// permission prompt). Returns false on any error so callers can proceed safely.
+func (m *Manager) PaneInAlternateScreen(paneID string) bool {
+	availability := m.Availability()
+	if !availability.Available || strings.TrimSpace(paneID) == "" {
+		return false
+	}
+	output, err := m.exec(
+		availability.BinaryPath,
+		"display-message",
+		"-p",
+		"-t",
+		paneID,
+		"#{alternate_on}",
+	)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(output)) == "1"
+}
+
 // PaneExists reports whether the given pane target is still live in tmux.
 func (m *Manager) PaneExists(paneID string) (bool, error) {
 	availability := m.Availability()

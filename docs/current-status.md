@@ -280,6 +280,8 @@ Implemented after E2E simulation revealed gaps:
 - `aom handoff --to` error now lists all valid agent names and role names so the operator can fix the argument without checking `agents.yaml` manually
 - `aom task approve-request` output includes `"Next: aom task show <task-id>"` to guide next step
 - `aom merge prepare` skips integration step creation when task is already `Done` or `Archived`
+- `aom task close` now auto-skips placeholder `integration` steps that are still `Proposed` or `Ready`, so merge-prep bookkeeping no longer blocks a clean close flow
+- `aom merge commit` now auto-completes open `integration` steps after a successful merge so the task does not retain stale merge bookkeeping
 - `aom message send` reads `AOM_ACTOR` env var for sender identity; falls back to `"operator"` when unset; enables AI orchestrator sessions to self-identify in mailbox messages
 
 #### New commands

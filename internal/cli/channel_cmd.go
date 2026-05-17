@@ -21,6 +21,12 @@ func (r Runner) executeChannelAppend(args []string) error {
 				return fmt.Errorf("--agent requires a value")
 			}
 			agentName = strings.TrimSpace(args[i])
+		case "--message":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--message requires a value")
+			}
+			msgParts = append(msgParts, args[i])
 		default:
 			msgParts = append(msgParts, args[i])
 		}

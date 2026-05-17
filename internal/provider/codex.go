@@ -20,9 +20,9 @@ func (p *codexProvider) LaunchCommand(spec LaunchSpec, lookPath func(string) (st
 		return "", fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", "codex", "codex")
 	}
 	if spec.AgentSessionID != "" {
-		return fmt.Sprintf("sh -lc 'exec codex resume %s --sandbox workspace-write'", spec.AgentSessionID), nil
+		return fmt.Sprintf("sh -lc 'exec codex resume %s --sandbox workspace-write -a never'", spec.AgentSessionID), nil
 	}
-	return "sh -lc 'exec codex --sandbox workspace-write'", nil
+	return "sh -lc 'exec codex --sandbox workspace-write -a never'", nil
 }
 
 func (p *codexProvider) ResumeInfo() ResumeInfo {

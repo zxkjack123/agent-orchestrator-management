@@ -309,6 +309,22 @@ func (r Runner) executeTaskClose(args []string) error {
 	if err != nil {
 		return err
 	}
+	autoSkippedSteps, err := autoSkipPlaceholderIntegrationSteps(stepService, steps)
+	if err != nil {
+		return err
+	}
+	if len(autoSkippedSteps) > 0 {
+		fmt.Fprintf(r.stdout, "Auto-skipped %d placeholder integration step(s):\n", len(autoSkippedSteps))
+		for _, s := range autoSkippedSteps {
+			fmt.Fprintf(r.stdout, "  - %s (%s)\n", s.ID, s.Status)
+		}
+		fmt.Fprintln(r.stdout)
+
+		steps, err = stepService.ListByTask(taskID)
+		if err != nil {
+			return err
+		}
+	}
 	var incompleteSteps []string
 	for _, s := range steps {
 		if s.Status != "Completed" && s.Status != "Skipped" && s.Status != "Canceled" {
@@ -391,9 +407,9 @@ func (r Runner) executeTaskReanalyze(args []string) error {
 	nextAction := recommendTaskAction(view.Task.Status, view.Steps, view.Worktree, view.WorktreeDrift, view.UnresolvedReviewItems, view.ReviewOwnerHint, view.ReviewOwnerAmbiguous)
 
 	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
-		Type:    "reanalysis.completed",
-		Actor:   "aom",
-		Summary: fmt.Sprintf("Artifacts re-synchronized from current system state; recommended next action: %s", nextAction),
+		Type:        "reanalysis.completed",
+		Actor:       "aom",
+		Summary:     fmt.Sprintf("Artifacts re-synchronized from current system state; recommended next action: %s", nextAction),
 		StateEffect: fmt.Sprintf("Task %s", view.Task.Status),
 	}, false); err != nil {
 		return err
@@ -528,7 +544,6 @@ func (r Runner) executeTaskUnlink(args []string) error {
 	fmt.Fprintf(r.stdout, "Unlinked: %s is no longer blocked by %s\n", dependentID, blockingID)
 	return nil
 }
-
 
 func (r Runner) executeTaskRequest(args []string) error {
 	if len(args) == 0 {
@@ -779,7 +794,6 @@ func (r Runner) executeTaskRejectRequest(args []string) error {
 	return nil
 }
 
-
 func (r Runner) executeTaskRecordResult(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("task id is required")
@@ -882,7 +896,6 @@ func (r Runner) executeTaskRecordResult(args []string) error {
 	fmt.Fprintf(r.stdout, "Result recorded: %s — %s\n", status, eventSummary)
 	return nil
 }
-
 
 func (r Runner) executeTaskList(args []string) error {
 	_ = args
@@ -1004,4 +1017,3 @@ func (r Runner) executeTaskClaim(args []string) error {
 	}
 	return nil
 }
-

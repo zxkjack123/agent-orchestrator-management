@@ -5,8 +5,8 @@ import (
 	"os/exec"
 	"strings"
 
-	aommerge "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/merge"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/artifact"
+	aommerge "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/merge"
 	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
 )
 
@@ -348,6 +348,21 @@ func (r Runner) executeMergeCommit(args []string) error {
 		out, _ = exec.Command("git", "-C", result.Project.RepoPath, "log", "--oneline", "-1").Output()
 	}
 
+	stepService, stepDB, err := r.app.OpenStepService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer stepDB.Close()
+
+	steps, err := stepService.ListByTask(taskID)
+	if err != nil {
+		return err
+	}
+	completedSteps, err := autoCompleteIntegrationSteps(stepService, steps)
+	if err != nil {
+		return err
+	}
+
 	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
 		Type:        "merge.committed",
 		Actor:       "operator",
@@ -360,6 +375,9 @@ func (r Runner) executeMergeCommit(args []string) error {
 	fmt.Fprintf(r.stdout, "Merged\n\n")
 	fmt.Fprintf(r.stdout, "Source branch: %s\n", sourceBranch)
 	fmt.Fprintf(r.stdout, "Target branch: %s\n", targetBranch)
+	if len(completedSteps) > 0 {
+		fmt.Fprintf(r.stdout, "Integration steps completed: %d\n", len(completedSteps))
+	}
 	fmt.Fprintf(r.stdout, "%s\n", strings.TrimSpace(string(out)))
 	return nil
 }

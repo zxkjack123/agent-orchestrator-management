@@ -287,10 +287,10 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 			} else {
 				spawnedAt := time.Now()
 				fmt.Fprintln(r.stdout, "")
-				fmt.Fprintln(r.stdout, "Detecting native session ID (this may take up to 45s)...")
+				fmt.Fprintln(r.stdout, "Detecting native session ID (this may take up to 90s)...")
 				time.Sleep(3 * time.Second)
 				_ = r.app.Tmux.SendKeys(record.TmuxPane, "2")
-				if sid, _ := strategy.DetectFn(record.WorktreePath, spawnedAt, 45*time.Second); sid != "" {
+				if sid, _ := strategy.DetectFn(record.WorktreePath, spawnedAt, 90*time.Second); sid != "" {
 					if updated, err := sessionService.SetVendorSessionID(record.ID, sid); err == nil {
 						record = updated
 					}
@@ -1214,6 +1214,13 @@ func (r Runner) executeSessionSend(args []string) error {
 
 	// Interpret shell-style escape sequences so callers can embed newlines with \n.
 	message = interpretEscapes(message)
+
+	if r.app.Tmux.PaneInAlternateScreen(sessionRecord.TmuxPane) {
+		fmt.Fprintf(r.stdout, "Warning: pane %s is showing an interactive overlay (e.g. a permission prompt or /status view).\n", sessionRecord.TmuxPane)
+		fmt.Fprintln(r.stdout, "The message will be sent but the agent may not receive it until the overlay is dismissed.")
+		fmt.Fprintln(r.stdout, "Tip: press 'q' or Escape in the pane to close the overlay first.")
+		fmt.Fprintln(r.stdout)
+	}
 
 	if err := r.app.Tmux.SendKeys(sessionRecord.TmuxPane, message); err != nil {
 		return err

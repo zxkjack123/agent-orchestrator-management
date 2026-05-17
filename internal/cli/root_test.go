@@ -599,7 +599,7 @@ func TestExecuteSessionSpawnWithRealRuntime(t *testing.T) {
 	if len(splitCommands) != 1 {
 		t.Fatalf("len(splitCommands) = %d, want 1", len(splitCommands))
 	}
-	if splitCommands[0] != "sh -lc 'exec codex --sandbox workspace-write'" {
+	if !strings.Contains(splitCommands[0], "exec codex --sandbox workspace-write -a never") {
 		t.Fatalf("split command = %q, want codex exec launch", splitCommands[0])
 	}
 }
@@ -3533,7 +3533,7 @@ func TestExecuteSessionReplaceWithRealRuntimeUsesCodexLaunchCommand(t *testing.T
 	if splitCount != 2 {
 		t.Fatalf("splitCount = %d, want 2 pane launches", splitCount)
 	}
-	if splitCommands[len(splitCommands)-1] != "sh -lc 'exec codex --sandbox workspace-write'" {
+	if !strings.Contains(splitCommands[len(splitCommands)-1], "exec codex --sandbox workspace-write -a never") {
 		t.Fatalf("replacement split command = %q, want codex exec launch", splitCommands[len(splitCommands)-1])
 	}
 }

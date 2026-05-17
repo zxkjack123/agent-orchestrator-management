@@ -54,8 +54,8 @@ func TestBuilderBuildReturnsRealCodexCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	if command != "sh -lc 'exec codex --sandbox workspace-write'" {
-		t.Fatalf("command = %q, want codex exec command", command)
+	if !strings.Contains(command, "exec codex --sandbox workspace-write -a never") {
+		t.Fatalf("command = %q, want codex exec command with -a never", command)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestBuilderBuildResumesCodexSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	want := "sh -lc 'exec codex resume sess-xyz-789 --sandbox workspace-write'"
+	want := "sh -lc 'exec codex resume sess-xyz-789 --sandbox workspace-write -a never'"
 	if command != want {
 		t.Fatalf("command = %q, want %q", command, want)
 	}
@@ -164,7 +164,7 @@ func TestBuilderBuildFreshStartWhenNoAgentSessionID(t *testing.T) {
 		wantContain string
 	}{
 		{"claude", "exec claude --dangerously-skip-permissions"},
-		{"codex", "sh -lc 'exec codex --sandbox workspace-write'"},
+		{"codex", "exec codex --sandbox workspace-write -a never"},
 	} {
 		command, err := builder.Build(SessionSpec{Runtime: tc.runtime}, LaunchModeReal)
 		if err != nil {
