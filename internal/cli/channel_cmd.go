@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
 )
 
 func (r Runner) executeChannelAppend(args []string) error {
@@ -37,36 +39,37 @@ func (r Runner) executeChannelAppend(args []string) error {
 		return fmt.Errorf("message is required")
 	}
 
-	result, err := r.app.Projects.Open(".")
+	// Use lightweight root discovery — no DB open required for a channel write.
+	repoPath, err := config.FindProjectRoot(".")
 	if err != nil {
 		return err
 	}
 
-	if err := appendChannelMessage(result.Project.RepoPath, agentName, message, time.Now()); err != nil {
+	if err := appendChannelMessage(repoPath, agentName, message, time.Now()); err != nil {
 		return err
 	}
 
 	fmt.Fprintln(r.stdout, "Message appended to channel")
 	fmt.Fprintf(r.stdout, "Agent: %s\n", agentName)
 	fmt.Fprintf(r.stdout, "Message: %s\n", message)
-	fmt.Fprintf(r.stdout, "Channel: %s\n", channelFilePath(result.Project.RepoPath))
+	fmt.Fprintf(r.stdout, "Channel: %s\n", channelFilePath(repoPath))
 	return nil
 }
 
 func (r Runner) executeChannelRead(args []string) error {
-	result, err := r.app.Projects.Open(".")
+	repoPath, err := config.FindProjectRoot(".")
 	if err != nil {
 		return err
 	}
 
-	content, err := readChannelFile(result.Project.RepoPath)
+	content, err := readChannelFile(repoPath)
 	if err != nil {
 		return err
 	}
 
 	if content == "" {
 		fmt.Fprintln(r.stdout, "Channel is empty")
-		fmt.Fprintf(r.stdout, "Channel: %s\n", channelFilePath(result.Project.RepoPath))
+		fmt.Fprintf(r.stdout, "Channel: %s\n", channelFilePath(repoPath))
 		return nil
 	}
 

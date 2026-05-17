@@ -151,6 +151,12 @@ type OwnerExceptionsConfig struct {
 // This mirrors git's behaviour of finding .git/ from within any subdirectory,
 // which allows agents running inside worktrees to call AOM commands without
 // needing to know the project root explicitly.
+// FindProjectRoot is the exported form of findProjectRoot, for use by CLI
+// commands that need the project root without opening the database.
+func FindProjectRoot(startPath string) (string, error) {
+	return findProjectRoot(startPath)
+}
+
 func findProjectRoot(startPath string) (string, error) {
 	current, err := filepath.Abs(startPath)
 	if err != nil {

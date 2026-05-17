@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
 )
 
 func (r Runner) executeMessageSend(args []string) error {
@@ -32,12 +34,13 @@ func (r Runner) executeMessageSend(args []string) error {
 		}
 	}
 
-	result, err := r.app.Projects.Open(".")
+	// Lightweight root discovery — no DB open required for a mailbox write.
+	repoPath, err := config.FindProjectRoot(".")
 	if err != nil {
 		return err
 	}
 
-	if err := appendMailboxMessage(result.Project.RepoPath, agentName, message, fromSender, time.Now()); err != nil {
+	if err := appendMailboxMessage(repoPath, agentName, message, fromSender, time.Now()); err != nil {
 		return err
 	}
 
@@ -69,12 +72,12 @@ func (r Runner) executeMessageRead(args []string) error {
 		return fmt.Errorf("agent name is required (--agent <name>)")
 	}
 
-	result, err := r.app.Projects.Open(".")
+	repoPath, err := config.FindProjectRoot(".")
 	if err != nil {
 		return err
 	}
 
-	content, err := readMailbox(result.Project.RepoPath, agentName)
+	content, err := readMailbox(repoPath, agentName)
 	if err != nil {
 		return err
 	}
@@ -95,12 +98,12 @@ func (r Runner) executeMessageClear(args []string) error {
 
 	agentName := strings.TrimSpace(args[0])
 
-	result, err := r.app.Projects.Open(".")
+	repoPath, err := config.FindProjectRoot(".")
 	if err != nil {
 		return err
 	}
 
-	if err := clearMailbox(result.Project.RepoPath, agentName); err != nil {
+	if err := clearMailbox(repoPath, agentName); err != nil {
 		return err
 	}
 
