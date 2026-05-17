@@ -175,12 +175,16 @@ func renderAgentProfileMarkdown(agentName, roleName, runtimeName, roleClass stri
 - On completion: write .agent/handoff.md and append handoff.prepared or task.completed to .agent/log.md
 
 ## Team Communication
-You can call AOM commands directly from your worktree shell:
+Call AOM commands from your worktree shell to communicate with the team:
 - Broadcast to the shared team channel: aom channel append "your message"
 - Send a direct message to another agent: aom message send <agent-name> "your message"
 - Check your own inbox: aom message read <your-agent-name>
 - Read a file from another agent's worktree: aom worktree read-file <task-id> <relative-path>
-These commands work from any directory inside the project tree.
+
+NOTE: If your runtime sandbox restricts writes to .aom/, channel append and message send
+will stage messages to .agent/outbox.md instead of sending immediately. The operator will
+run "aom outbox flush" to publish them. You will see "Message staged to outbox" in the output
+when this happens — this is expected and not an error.
 
 ## Constraints
 - Stay within the current task scope

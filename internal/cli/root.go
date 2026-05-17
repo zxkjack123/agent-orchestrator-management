@@ -97,6 +97,8 @@ func (r Runner) Execute(args []string) error {
 		return r.executeResumeAll(args[1:])
 	case "next":
 		return r.executeNext(args[1:])
+	case "outbox":
+		return r.executeOutbox(args[1:])
 	case "team":
 		return r.executeTeam(args[1:])
 	case "task":
@@ -366,6 +368,8 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom message send <agent-name> \"<message>\" [--from <sender>] : write a direct message to an agent's mailbox")
 	fmt.Fprintln(r.stdout, "aom message read <agent-name> : print an agent's unread mailbox messages")
 	fmt.Fprintln(r.stdout, "aom message clear <agent-name> : archive and clear an agent's mailbox")
+	fmt.Fprintln(r.stdout, "aom outbox flush : route all staged outbox messages (from sandbox agents) to channel/mailbox")
+	fmt.Fprintln(r.stdout, "aom outbox list : show pending outbox messages waiting to be flushed")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Worktree")
 	fmt.Fprintln(r.stdout, "aom worktree repair <task-id> : repair a missing or stale task worktree")
