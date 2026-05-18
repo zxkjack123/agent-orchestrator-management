@@ -174,6 +174,14 @@ func (r Runner) materializeAgentContext(result *project.OpenResult, agentRecord 
 					_, _ = f.WriteString(rosterNote)
 				}
 
+				// Channel snapshot — last 10 messages at spawn time so the agent
+				// immediately knows team decisions, API contracts, and broadcast context
+				// without having to fetch channel.md separately.
+				channelNote := buildChannelSnapshotNote(result.Project.RepoPath)
+				if channelNote != "" {
+					_, _ = f.WriteString(channelNote)
+				}
+
 				_ = f.Close()
 			}
 		}
@@ -224,6 +232,26 @@ func (r Runner) buildTeamRosterNote(result *project.OpenResult, selfName string)
 		}
 	}
 	sb.WriteString("\n")
+	return sb.String()
+}
+
+// buildChannelSnapshotNote returns a markdown section with the last 10 channel
+// messages at spawn time. This gives agents immediate visibility into team
+// decisions, API contracts, and broadcast context without reading channel.md.
+func buildChannelSnapshotNote(repoPath string) string {
+	msgs := lastChannelMessages(repoPath, 10)
+	if len(msgs) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n## Team Channel (snapshot at spawn time)\n\n")
+	sb.WriteString("These are the most recent broadcast messages from the team. ")
+	sb.WriteString("Read the full channel: cat .aom/channel.md\n\n")
+	for _, m := range msgs {
+		sb.WriteString(m)
+		sb.WriteString("\n\n")
+	}
 	return sb.String()
 }
 
