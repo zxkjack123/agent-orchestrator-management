@@ -123,7 +123,26 @@ Defined in full in `docs/state-machine.md`. Summary:
 | 17 — Observability (cross-worktree read, velocity metrics) | Complete |
 | Post-M17 — Bug fixes, UX, merge commit, runtime policy | Complete |
 
-**Immediate next work**: gemini and kiro runtime launch support (2 cases in `internal/runtime/launch.go`); agent model selection (`--model` flag per agent in `agents.yaml`).
+**Immediate next work** (see `docs/current-status.md` for full detail and implementation order):
+
+*Cross-platform fixes (partially done — remaining):*
+- `project.yaml.tmpl` → `repo: .` (absolute Windows path breaks Linux binary)
+- gitignore binary artifacts + README WSL setup section
+- `aom task ready <task-id>` command (Planned→Ready in one shot)
+- auto merge check before `aom merge commit`
+
+*Windows/WSL2 E2E feedback — new issues (all unimplemented):*
+- NTFS `mkdir` false-positive in `project init` (`internal/project/service.go:112`)
+- NTFS `index.lock`: agent profile NTFS fallback instruction + `aom doctor` NTFS warning
+- Hook UX: `project init` generate live `on-task-done.sh`; `aom doctor` warn if `.example` not activated
+- Model validation soft-warn before session spawn (`internal/provider/`)
+- `CLAUDE.md` add/add merge conflict: auto-resolve with "ours" in `executeMergeCommit`
+- `aom session send --file -` stdin pipe support
+- `aom task cancel <task-id>` for orphan Draft/Planned/Ready tasks
+- `--prefer-branch` flag for `aom merge commit`
+
+*Deferred:*
+- gemini and kiro runtime launch (`internal/provider/gemini.go`, `internal/provider/kiro.go`) — blocked on confirmed CLI flags
 
 **Recent additions** (see `docs/current-status.md` for full detail):
 - M13: `aom task link/unlink`, cross-task dependency graph with BFS cycle detection, `--priority` flag, `aom next`
