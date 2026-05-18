@@ -158,6 +158,15 @@ func (r Runner) executeDoctor(_ []string) error {
 		}
 	}
 
+	// ── Platform: WSL2/NTFS ──────────────────────────────────────────────────
+	if cfg != nil && strings.HasPrefix(cfg.AOMPath, "/mnt/") {
+		results = append(results, doctorResult{
+			label:   "platform",
+			detail:  "WSL2/NTFS detected (/mnt/ path) — dot-dir creation may fail on some Windows versions; git worktree .git pointer may not resolve. Use 'aom worktree commit <task-id> -m <msg>' instead of 'git commit' from worktrees.",
+			warning: true,
+		})
+	}
+
 	// ── Print results ─────────────────────────────────────────────────────────
 	fmt.Fprintln(r.stdout, "AOM Doctor")
 	fmt.Fprintln(r.stdout, "==========")

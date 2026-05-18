@@ -296,8 +296,16 @@ func (r Runner) executeTaskClose(args []string) error {
 		return fmt.Errorf("task %q not found", taskID)
 	}
 	if current.Status != "InProgress" && current.Status != "NeedsAttention" {
-		hint := fmt.Sprintf("run: aom task update %s --status in-progress", taskID)
-		return fmt.Errorf("task close requires status InProgress or NeedsAttention (current: %s)\n  hint: %s", current.Status, hint)
+		walkPath := taskWalkToInProgress(current.Status)
+		if len(walkPath) == 0 {
+			return fmt.Errorf("task %q (status: %s) cannot be auto-advanced to InProgress for close", taskID, current.Status)
+		}
+		for _, status := range walkPath {
+			if _, err := taskService.Update(taskID, task.UpdateParams{Status: status}); err != nil {
+				return fmt.Errorf("auto-advance to InProgress: %w", err)
+			}
+		}
+		fmt.Fprintf(r.stderr, "Note: auto-advanced task from %s → InProgress before close\n", current.Status)
 	}
 
 	// Warn about incomplete steps before closing so the operator can make an informed choice.
@@ -375,6 +383,8 @@ func (r Runner) executeTaskClose(args []string) error {
 	}, false); err != nil {
 		return err
 	}
+
+	go runHook(result.Project.RepoPath, "on-task-done", record.ID, record.Title, record.Status)
 
 	// Emit task.unblocked events for any dependents whose blockers are all Done.
 	dependents, depErr := taskService.Unblocks(taskID)
@@ -498,6 +508,8 @@ func (r Runner) executeTaskAccept(args []string) error {
 		return err
 	}
 
+	go runHook(result.Project.RepoPath, "on-task-done", taskRecord.ID, taskRecord.Title, taskRecord.Status)
+
 	_ = r.refreshProjectBoard(result)
 
 	fmt.Fprintln(r.stdout, "Task accepted")
@@ -586,6 +598,8 @@ func (r Runner) executeTaskReady(args []string) error {
 		return err
 	}
 
+	go runHook(result.Project.RepoPath, "on-task-ready", taskRecord.ID, taskRecord.Title, taskRecord.Status)
+
 	fmt.Fprintln(r.stdout, "Task ready")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Task:   %s\n", taskRecord.ID)
@@ -614,6 +628,19 @@ func taskWalkToDone(current string) []string {
 	}
 	// NeedsAttention/Blocked can go directly to Done.
 	return []string{"Done"}
+}
+
+// taskWalkToInProgress returns the status transitions needed to reach InProgress
+// from the given current status. Returns nil for statuses that cannot advance.
+func taskWalkToInProgress(current string) []string {
+	switch current {
+	case "Planned":
+		return []string{"Ready", "InProgress"}
+	case "Ready":
+		return []string{"InProgress"}
+	default:
+		return nil
+	}
 }
 
 func (r Runner) executeTaskReanalyze(args []string) error {

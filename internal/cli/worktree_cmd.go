@@ -125,6 +125,126 @@ func (r Runner) executeWorktreeReadFile(args []string) error {
 	return nil
 }
 
+// executeWorktreeCommit stages and commits all changes in a task worktree using
+// explicit GIT_DIR and GIT_WORK_TREE env vars. On WSL2/NTFS the gitdir pointer
+// inside a worktree often fails to resolve; this bypasses that issue entirely.
+func (r Runner) executeWorktreeCommit(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task identifier is required")
+	}
+
+	taskID := strings.TrimSpace(args[0])
+	var commitMsg string
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "-m", "--message":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("-m requires a commit message")
+			}
+			commitMsg = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	if commitMsg == "" {
+		return fmt.Errorf("commit message is required (-m <msg>)")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	worktreeService, wDB, err := r.app.OpenWorktreeService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer wDB.Close()
+
+	mapping, err := worktreeService.GetByTask(taskID)
+	if err != nil {
+		return err
+	}
+	if mapping == nil {
+		return fmt.Errorf("task %q has no worktree", taskID)
+	}
+	if mapping.Status != "Ready" && mapping.Status != "Active" {
+		return fmt.Errorf("worktree for task %q is not available (status: %s)", taskID, mapping.Status)
+	}
+
+	wtPath := mapping.WorktreePath
+	gitDir, err := resolveWorktreeGitDir(result.Project.RepoPath, wtPath)
+	if err != nil {
+		return fmt.Errorf("resolve git dir: %w", err)
+	}
+
+	env := append(os.Environ(),
+		"GIT_DIR="+gitDir,
+		"GIT_WORK_TREE="+wtPath,
+	)
+
+	addCmd := exec.Command("git", "add", "-A")
+	addCmd.Env = env
+	addCmd.Dir = wtPath
+	if out, addErr := addCmd.CombinedOutput(); addErr != nil {
+		return fmt.Errorf("git add: %w\n%s", addErr, strings.TrimSpace(string(out)))
+	}
+
+	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
+	commitCmd.Env = env
+	commitCmd.Dir = wtPath
+	out, err := commitCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git commit: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	fmt.Fprint(r.stdout, string(out))
+	return nil
+}
+
+// resolveWorktreeGitDir finds the GIT_DIR for a git worktree. It first reads
+// the .git pointer file in the worktree; if that fails (WSL2/NTFS issue), it
+// scans .git/worktrees/ for a matching gitdir entry.
+func resolveWorktreeGitDir(repoPath, worktreePath string) (string, error) {
+	gitFile := filepath.Join(worktreePath, ".git")
+	data, err := os.ReadFile(gitFile)
+	if err == nil {
+		line := strings.TrimSpace(string(data))
+		if strings.HasPrefix(line, "gitdir:") {
+			candidate := strings.TrimSpace(line[len("gitdir:"):])
+			if filepath.IsAbs(candidate) {
+				return candidate, nil
+			}
+			return filepath.Clean(filepath.Join(worktreePath, candidate)), nil
+		}
+	}
+
+	// Fallback: scan .git/worktrees/ for an entry whose gitdir points here.
+	worktreesDir := filepath.Join(repoPath, ".git", "worktrees")
+	entries, err := os.ReadDir(worktreesDir)
+	if err != nil {
+		return "", fmt.Errorf("read .git/worktrees: %w", err)
+	}
+	normTarget := filepath.ToSlash(filepath.Clean(worktreePath))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		linkData, err := os.ReadFile(filepath.Join(worktreesDir, entry.Name(), "gitdir"))
+		if err != nil {
+			continue
+		}
+		linkPath := strings.TrimSpace(string(linkData))
+		norm := filepath.ToSlash(filepath.Clean(strings.TrimSuffix(linkPath, "/.git")))
+		if norm == normTarget {
+			return filepath.Join(worktreesDir, entry.Name()), nil
+		}
+	}
+	return "", fmt.Errorf("could not find git worktree entry for %s", worktreePath)
+}
+
 func worktreeHint(taskID string, mapping *worktree.Record, driftKind string) string {
 	if mapping == nil {
 		return ""

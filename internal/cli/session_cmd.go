@@ -326,6 +326,8 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		}
 	}
 
+	go runHook(result.Project.RepoPath, "on-session-spawn", record.ID, record.AgentName, record.TaskID)
+
 	return record, nil
 }
 

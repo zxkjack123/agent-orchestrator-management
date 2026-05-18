@@ -219,6 +219,19 @@ and "message send" will stage to .agent/outbox.md instead. The operator runs
 ## Constraints
 - Stay within the current task scope
 - Do not modify .agent/index.md or .agent/log.md directly — those are AOM-owned
+
+## Model Configuration
+
+This agent uses the provider default model unless model: is set in .aom/agents.yaml.
+
+Configure per-agent model in .aom/agents.yaml:
+  agents:
+    <agent-name>:
+      model: claude-sonnet-4-6   # claude aliases: sonnet, opus, haiku
+      # codex: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex
+      # gemini: gemini-2.5-pro, gemini-2.5-flash
+
+After changing model: re-run "aom session spawn" to apply.
 `,
 		agentName,
 		roleName,

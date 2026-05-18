@@ -155,7 +155,7 @@ func (r Runner) materializeAgentContext(result *project.OpenResult, agentRecord 
 	}
 
 	modelHint := r.registry.Lookup(agentRecord.Runtime).ModelHint()
-	if err := artifact.MaterializeModelHint(agentRecord.Name, agentRecord.Runtime, agentRecord.Model, modelHint, worktreePath); err != nil {
+	if err := artifact.MaterializeModelHint(agentRecord.Name, agentRecord.Runtime, agentRecord.Model, modelHint, worktreePath, result.Project.RepoPath); err != nil {
 		return fmt.Errorf("materialize model hint: %w", err)
 	}
 

@@ -71,6 +71,10 @@ func writeConfigFiles(aomPath, name, repoPath, defaultBranch, sessionPrefix, tem
 		return err
 	}
 
+	if err := ensureHooksDir(aomPath); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -82,31 +86,73 @@ func renderAgentsConfig(data projectTemplateData, templateDir string, agentSelec
 	return filterAgentsConfig(rendered, agentSelections)
 }
 
+var defaultGitignoreEntries = []string{
+	".agent/",
+	"node_modules/",
+	"dist/",
+	"build/",
+	"*.env",
+	".env.*",
+	".DS_Store",
+}
+
 func ensureRootGitignore(repoPath string) error {
 	path := filepath.Join(repoPath, ".gitignore")
-	const entry = ".agent/"
 
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read .gitignore: %w", err)
 	}
-	if strings.Contains(string(data), entry) {
-		return nil
+
+	content := string(data)
+	if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+		content += "\n"
 	}
 
-	var content string
-	if len(data) == 0 {
-		content = entry + "\n"
-	} else {
-		content = string(data)
-		if !strings.HasSuffix(content, "\n") {
-			content += "\n"
+	changed := false
+	for _, entry := range defaultGitignoreEntries {
+		if strings.Contains(content, entry) {
+			continue
 		}
 		content += entry + "\n"
+		changed = true
+	}
+
+	if !changed {
+		return nil
 	}
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write .gitignore: %w", err)
+	}
+	return nil
+}
+
+func ensureHooksDir(aomPath string) error {
+	hooksDir := filepath.Join(aomPath, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		return fmt.Errorf("create hooks dir: %w", err)
+	}
+	example := filepath.Join(hooksDir, "on-task-done.sh.example")
+	if _, err := os.Stat(example); err == nil {
+		return nil
+	}
+	const exampleContent = `#!/bin/bash
+# on-task-done.sh — triggered when a task is closed or accepted
+# Args: $1=task_id  $2=task_title  $3=final_status
+# Env:  AOM_REPO, AOM_HOOK
+#
+# Rename to on-task-done.sh and chmod +x to activate.
+#
+# Example: notify a reviewer session when a backend task completes
+# REVIEW_SESS=$(aom session list 2>/dev/null | grep reviewer | awk '{print $1}' | head -1)
+# if [ -n "$REVIEW_SESS" ]; then
+#   aom session send "$REVIEW_SESS" "Task '$2' ($1) is done. Begin review."
+# fi
+echo "on-task-done: $1 ($2) -> $3"
+`
+	if err := os.WriteFile(example, []byte(exampleContent), 0o644); err != nil {
+		return fmt.Errorf("write hook example: %w", err)
 	}
 	return nil
 }

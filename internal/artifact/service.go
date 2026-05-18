@@ -204,9 +204,15 @@ func MaterializePolicyConstraints(agentName, runtime string, denyCommands []stri
 // MaterializeModelHint appends a ## Model Selection section to the runtime-specific
 // identity file so operators and orchestrator agents can see what model this session
 // is using and what other models are available for this provider.
-// Silently skipped when the provider has no model hint or the worktree is absent.
-func MaterializeModelHint(agentName, runtime, model, modelHint, worktreePath string) error {
-	if strings.TrimSpace(worktreePath) == "" || strings.TrimSpace(modelHint) == "" {
+// When worktreePath is empty, falls back to projectRootPath so orchestrators spawned
+// without a dedicated worktree still see model configuration.
+// Silently skipped when the provider has no model hint or both paths are empty.
+func MaterializeModelHint(agentName, runtime, model, modelHint, worktreePath, projectRootPath string) error {
+	effectivePath := worktreePath
+	if strings.TrimSpace(effectivePath) == "" {
+		effectivePath = projectRootPath
+	}
+	if strings.TrimSpace(effectivePath) == "" || strings.TrimSpace(modelHint) == "" {
 		return nil
 	}
 	targetName := defaultRegistry.Lookup(runtime).IdentityFilename()
@@ -222,9 +228,9 @@ func MaterializeModelHint(agentName, runtime, model, modelHint, worktreePath str
 		b.WriteString("This session is using the provider's default model.\n\n")
 	}
 	fmt.Fprintf(&b, "Available models for this provider: %s\n", modelHint)
-	b.WriteString("\nTo change the model for an agent, set `model:` in `.aom/agents.yaml` and respawn.\n")
+	b.WriteString("\nTo change the model for an agent, set model: in .aom/agents.yaml and respawn.\n")
 
-	targetPath := filepath.Join(worktreePath, targetName)
+	targetPath := filepath.Join(effectivePath, targetName)
 	f, err := os.OpenFile(targetPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
 	if err != nil {
 		return fmt.Errorf("open identity file for model hint (agent %q): %w", agentName, err)
