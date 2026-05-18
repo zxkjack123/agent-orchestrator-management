@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/artifact"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
 )
 
 func (r Runner) executeTaskCreate(args []string) error {
@@ -45,6 +45,12 @@ func (r Runner) executeTaskCreate(args []string) error {
 				return fmt.Errorf("--priority requires a value")
 			}
 			params.priority = args[i]
+		case "--step-type":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--step-type requires a value")
+			}
+			params.stepType = args[i]
 		default:
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
@@ -71,12 +77,13 @@ func (r Runner) executeTaskCreate(args []string) error {
 	}
 
 	createResult, err := taskService.Create(task.CreateParams{
-		ProjectID:      result.Project.ID,
-		Title:          params.title,
-		Mode:           params.mode,
-		Priority:       priority,
-		PreferredRole:  params.role,
-		PreferredAgent: params.agent,
+		ProjectID:       result.Project.ID,
+		Title:           params.title,
+		Mode:            params.mode,
+		Priority:        priority,
+		PreferredRole:   params.role,
+		PreferredAgent:  params.agent,
+		InitialStepType: params.stepType,
 	})
 	if err != nil {
 		return err
@@ -120,6 +127,7 @@ type taskCreateParams struct {
 	role     string
 	agent    string
 	priority string
+	stepType string
 }
 
 func (r Runner) executeTaskShow(args []string) error {

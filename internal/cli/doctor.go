@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
 )
 
 type doctorResult struct {
@@ -27,9 +27,15 @@ func (d doctorResult) prefix() string {
 	return "[FAIL]"
 }
 
-func (r Runner) executeDoctor(_ []string) error {
+func (r Runner) executeDoctor(args []string) error {
+	globalOnly := false
+	for _, arg := range args {
+		if arg == "--global" {
+			globalOnly = true
+		}
+	}
+
 	var results []doctorResult
-	var cfg *config.ProjectConfig
 
 	// ── Environment ──────────────────────────────────────────────────────────
 	avail := r.app.Tmux.Availability()
@@ -45,6 +51,63 @@ func (r Runner) executeDoctor(_ []string) error {
 			detail: "not found in PATH — required for session management",
 		})
 	}
+
+	if globalOnly {
+		// Check all 4 known provider runtimes in PATH.
+		for _, rt := range []string{"claude", "codex", "gemini", "kiro"} {
+			path, err := exec.LookPath(rt)
+			if err != nil {
+				results = append(results, doctorResult{
+					label:  fmt.Sprintf("runtime: %s", rt),
+					detail: "not found in PATH",
+				})
+			} else {
+				results = append(results, doctorResult{
+					label:  fmt.Sprintf("runtime: %s", rt),
+					detail: path,
+					ok:     true,
+				})
+			}
+		}
+
+		// Print results and return early.
+		fmt.Fprintln(r.stdout, "AOM Doctor")
+		fmt.Fprintln(r.stdout, "==========")
+		fmt.Fprintln(r.stdout, "")
+
+		passed, failed, warned := 0, 0, 0
+		for _, res := range results {
+			fmt.Fprintf(r.stdout, "  %-6s %-22s %s\n", res.prefix(), res.label, res.detail)
+			switch {
+			case res.ok:
+				passed++
+			case res.warning:
+				warned++
+			default:
+				failed++
+			}
+		}
+
+		fmt.Fprintln(r.stdout, "")
+		summary := fmt.Sprintf("Summary: %d passed", passed)
+		if warned > 0 {
+			summary += fmt.Sprintf(", %d warning", warned)
+			if warned > 1 {
+				summary += "s"
+			}
+		}
+		if failed > 0 {
+			summary += fmt.Sprintf(", %d failed", failed)
+		}
+		fmt.Fprintln(r.stdout, summary)
+
+		if failed > 0 {
+			return fmt.Errorf("doctor found %d issue(s)", failed)
+		}
+		return nil
+	}
+
+	var cfg *config.ProjectConfig
 
 	// ── Project config ────────────────────────────────────────────────────────
 	aomDir := filepath.Join(".", ".aom")

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
 )
 
 // VelocityRow holds per-agent metrics.

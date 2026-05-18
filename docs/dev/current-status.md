@@ -768,13 +768,53 @@ replace.
 1. gemini/kiro runtime support — fill in `LaunchCommand` in `internal/provider/gemini.go` and `internal/provider/kiro.go` when CLI flags are confirmed; no other files need to change
 2. M9 governance — MCP resource bindings, role skill injection at `session spawn`, policy enforcement
 
+## E2E Feedback Improvements (2026-05-18)
+
+Implemented from real-world usage feedback (`AOM_FEEDBACK.md`):
+
+### Codex runtime fixes
+- **Smart deny-command wrapper** (`internal/provider/codex.go`): multi-word deny entries (e.g. `git push`) now generate a wrapper that intercepts only the specific sub-command and passes everything else through to the real binary — no longer blocks all `git` operations
+- **PYTHONDONTWRITEBYTECODE=1** injected into codex session preamble to suppress `__pycache__` noise in worktrees
+
+### tmux capture improvements
+- **Auto-flush outbox** on `aom capture`: if a project is open, staged outbox messages are flushed before reading pane output
+- **`aom capture --follow` / `--diff`**: `--follow` polls the pane at `--interval` (default 2s) until Ctrl-C; `--diff` prints only new lines since the last capture (no repeated output)
+
+### UX improvements
+- **`aom status --active`**: filters to InProgress/Blocked/NeedsAttention/Ready tasks and non-archived sessions only
+- **`aom status --graph`**: prints an ASCII dependency graph with status symbols (✓/⟳/○/!)
+- **`aom doctor --global`**: checks only tmux + runtime binaries; skips project-local checks — useful before `aom project init`
+- **`aom task create --step-type <type>`**: sets the initial step type (defaults to existing behaviour)
+- **Branch name truncation**: worktree branch names are capped at 80 characters to avoid filesystem limits
+
+### Agent profile system refactor
+- Profile content moved from hardcoded Go strings to embedded `.md.tmpl` template files (`internal/project/templates/project-init/profiles/`)
+- 3-level template lookup at profile seed time: explicit `templateDir` → `.aom/templates/profiles/` → embedded default
+- Built-in role classes with full profiles: `builder`, `frontend`, `reviewer`, `orchestrator`; unknown classes fall back to `default.md.tmpl`
+- Custom classes: drop a `<class>.md.tmpl` file into `.aom/templates/profiles/` — no code change required
+
+### Default agent template
+- Removed `orchestrator-main` from default init template (operator is the orchestrator)
+- Added `frontend-main` (runtime: claude, role: frontend)
+
+### Team building
+- **`aom agent add --class <class>`**: sets the role profile class; if the role already exists, `--class` updates its class; if the role is new, the class is used instead of defaulting to `builder`
+- **Team Building section** in `base.md.tmpl`: every agent profile explains how to add new agents via `aom agent add`, assign tasks, and spawn sessions — agents can build their own team without operator involvement
+- **`--help` operator workflow**: top of `aom --help` now shows Option A (operator as orchestrator) and Option B (delegate to an orchestrator agent) so the operator knows both patterns from day one
+
+### Pending (Windows/WSL2 cross-platform)
+- `project.yaml.tmpl` → `repo: .` (absolute Windows path breaks Linux binary)
+- NTFS `mkdir` false-positive in `project init` (`internal/project/service.go:112`)
+- NTFS `index.lock`: agent profile NTFS fallback instruction + `aom doctor` NTFS warning
+- `CLAUDE.md` add/add merge conflict: auto-resolve with "ours" in `executeMergeCommit`
+- `--prefer-branch` flag for `aom merge commit`
+
 ## Immediate Next Step
 
-Milestones 0–17 are complete. Remaining work before a production-ready release:
+Milestones 0–17 and all E2E feedback improvements are complete. Remaining work:
 
-1. **gemini/kiro runtime support** — fill in `LaunchCommand` in `internal/provider/gemini.go` and `internal/provider/kiro.go`; blocked on confirmed CLI flags; no other files need to change (provider registry handles the rest)
-2. **Runtime-level policy enforcement** — ✓ DONE: claude gets `--disallowed-tools` at the process level; `enforcePolicyDefaults` now prints per-runtime enforcement level at spawn time (runtime-enforced for claude, instruction-only for codex/others); no further work unless a codex enforcement flag becomes available
-3. **Live E2E for M13–M17** — ✓ DONE: smoke test expanded to 51 checks across 12 sections; all M13–M17 commands now covered (task unlink, task claim, task reject-request, merge prepare, session health, pause-all, resume-all)
+1. **gemini/kiro runtime support** — fill in `LaunchCommand` in `internal/provider/gemini.go` and `internal/provider/kiro.go`; blocked on confirmed CLI flags
+2. **Windows/WSL2 cross-platform fixes** — see Pending list in E2E Feedback Improvements section above
 
 ## Refactoring (branch: refactor)
 

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed templates/project-init/*.tmpl
+//go:embed templates/project-init/*.tmpl templates/project-init/profiles/*.md.tmpl
 var projectInitTemplates embed.FS
 
 type projectTemplateData struct {

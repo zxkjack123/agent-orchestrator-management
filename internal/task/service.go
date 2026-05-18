@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
 )
 
 var defaultIDSequence atomic.Int64
@@ -32,12 +32,13 @@ const (
 
 // CreateParams describes the minimum input needed to create a task.
 type CreateParams struct {
-	ProjectID      string
-	Title          string
-	Mode           string
-	Priority       int
-	PreferredRole  string
-	PreferredAgent string
+	ProjectID       string
+	Title           string
+	Mode            string
+	Priority        int
+	PreferredRole   string
+	PreferredAgent  string
+	InitialStepType string
 }
 
 // StepSeed describes one step that should be created with a new task.
@@ -96,8 +97,12 @@ func NewServiceWithGenerators(db *sql.DB, taskIDGen, stepIDGen IDGenerator) *Ser
 
 // Create inserts a new task record and one initial step proposal.
 func (s *Service) Create(params CreateParams) (*CreateResult, error) {
+	stepType := strings.TrimSpace(params.InitialStepType)
+	if stepType == "" {
+		stepType = defaultStepType
+	}
 	initialStep := StepSeed{
-		Type:      defaultStepType,
+		Type:      stepType,
 		Title:     strings.TrimSpace(params.Title),
 		RoleName:  strings.TrimSpace(params.PreferredRole),
 		AgentName: strings.TrimSpace(params.PreferredAgent),

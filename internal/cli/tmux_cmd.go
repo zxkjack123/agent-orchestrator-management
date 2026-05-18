@@ -2,9 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/artifact"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
 )
 
 func (r Runner) executeAttach(args []string) error {
@@ -47,19 +49,89 @@ func (r Runner) executeAttach(args []string) error {
 }
 
 func (r Runner) executeCapture(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("session identifier is required")
-	}
-	if len(args) > 1 {
-		return fmt.Errorf("capture does not accept extra positional arguments in the current milestone")
+	// Parse flags: session identifier (positional), --follow/-f, --diff, --interval <duration>
+	var sessionID string
+	var followMode bool
+	var diffMode bool
+	interval := 2 * time.Second
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--follow", "-f":
+			followMode = true
+		case "--diff":
+			diffMode = true
+		case "--interval":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--interval requires a value")
+			}
+			d, err := time.ParseDuration(args[i])
+			if err != nil {
+				return fmt.Errorf("--interval: %w", err)
+			}
+			interval = d
+		default:
+			if strings.HasPrefix(args[i], "--") {
+				return fmt.Errorf("capture: unknown flag %q", args[i])
+			}
+			if sessionID != "" {
+				return fmt.Errorf("capture does not accept extra positional arguments in the current milestone")
+			}
+			sessionID = strings.TrimSpace(args[i])
+		}
 	}
 
-	sessionRecord, err := r.loadSessionByIdentifier(strings.TrimSpace(args[0]))
+	if sessionID == "" {
+		return fmt.Errorf("session identifier is required")
+	}
+
+	sessionRecord, err := r.loadSessionByIdentifier(sessionID)
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(sessionRecord.TmuxPane) == "" {
 		return fmt.Errorf("session %q does not have a live tmux pane binding", sessionRecord.ID)
+	}
+
+	// P4: Auto-flush outbox before capturing.
+	if projResult, ferr := r.app.Projects.Open("."); ferr == nil {
+		if n, ferr := flushAllOutboxes(projResult.Project.RepoPath); ferr == nil && n > 0 {
+			fmt.Fprintf(r.stdout, "Auto-flushed %d outbox message(s) to channel/mailbox.\n", n)
+		}
+	}
+
+	stateFile := fmt.Sprintf("/tmp/aom-capture-state-%s", sessionRecord.ID)
+
+	if diffMode {
+		prevContent, _ := readStateFile(stateFile)
+		curr, err := r.app.Tmux.CapturePane(sessionRecord.TmuxPane)
+		if err != nil {
+			return err
+		}
+		newContent := newPaneLines(prevContent, curr)
+		if strings.TrimSpace(newContent) != "" {
+			fmt.Fprint(r.stdout, newContent)
+		}
+		_ = os.WriteFile(stateFile, []byte(curr), 0o600)
+		return nil
+	}
+
+	if followMode {
+		fmt.Fprintf(r.stdout, "Capturing %s (--follow, interval %s)\n", sessionRecord.ID, interval)
+		var prev string
+		for {
+			curr, err := r.app.Tmux.CapturePane(sessionRecord.TmuxPane)
+			if err != nil {
+				return err
+			}
+			newContent := newPaneLines(prev, curr)
+			if strings.TrimSpace(newContent) != "" {
+				fmt.Fprint(r.stdout, newContent)
+			}
+			prev = curr
+			time.Sleep(interval)
+		}
 	}
 
 	output, err := r.app.Tmux.CapturePane(sessionRecord.TmuxPane)
@@ -69,6 +141,55 @@ func (r Runner) executeCapture(args []string) error {
 
 	fmt.Fprint(r.stdout, output)
 	return nil
+}
+
+// readStateFile returns the content of a state file, or "" if it doesn't exist.
+func readStateFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
+// newPaneLines returns the lines in curr that appear after the content of prev.
+// Tmux pane content scrolls — new lines appear at the bottom by pushing old
+// ones up. We find the last non-empty line of prev in curr and return
+// everything after it.
+func newPaneLines(prev, curr string) string {
+	if strings.TrimSpace(prev) == "" {
+		return curr
+	}
+	prevLines := strings.Split(strings.TrimRight(prev, "\n"), "\n")
+	currLines := strings.Split(strings.TrimRight(curr, "\n"), "\n")
+
+	// Find the last non-empty line of prev.
+	lastPrevLine := ""
+	for i := len(prevLines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(prevLines[i]) != "" {
+			lastPrevLine = prevLines[i]
+			break
+		}
+	}
+	if lastPrevLine == "" {
+		return curr
+	}
+
+	// Find the last occurrence of lastPrevLine in currLines.
+	lastIdx := -1
+	for i := len(currLines) - 1; i >= 0; i-- {
+		if currLines[i] == lastPrevLine {
+			lastIdx = i
+			break
+		}
+	}
+	if lastIdx < 0 || lastIdx >= len(currLines)-1 {
+		return ""
+	}
+	return strings.Join(currLines[lastIdx+1:], "\n") + "\n"
 }
 
 func (r Runner) executeBroadcast(args []string) error {

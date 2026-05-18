@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/app"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/db"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/tmux"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/app"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/tmux"
 )
 
 func TestAutoSkipPlaceholderIntegrationSteps(t *testing.T) {

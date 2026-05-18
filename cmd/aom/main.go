@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/cli"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/cli"
 )
 
 func main() {

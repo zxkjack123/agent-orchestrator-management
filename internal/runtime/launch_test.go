@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 )
 
 func TestBuilderBuildReturnsPlaceholderCommand(t *testing.T) {
@@ -148,7 +148,7 @@ func TestBuilderBuildResumesCodexSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	want := "sh -lc 'export AOM_RUNTIME=codex; exec codex resume sess-xyz-789 --sandbox workspace-write -a never'"
+	want := "sh -lc 'export AOM_RUNTIME=codex; export PYTHONDONTWRITEBYTECODE=1; exec codex resume sess-xyz-789 --sandbox workspace-write -a never'"
 	if command != want {
 		t.Fatalf("command = %q, want %q", command, want)
 	}
@@ -243,7 +243,18 @@ func TestBuilderBuildCodexWrapsDenyCommands(t *testing.T) {
 	if !strings.Contains(command, wantPathExport) {
 		t.Fatalf("command = %q, want PATH export %q", command, wantPathExport)
 	}
-	// Duplicate base commands are deduplicated (rm -rf and rm would produce one wrapper).
+
+	// P2: git has only multi-word deny entries, so it gets a smart wrapper (not full-block).
+	// The smart wrapper checks $1 and passes through for non-matching args.
+	if !strings.Contains(command, "push") {
+		t.Fatalf("command = %q, want git smart wrapper to contain 'push' subcommand check", command)
+	}
+	// Smart wrapper uses pass-through via PATH stripping.
+	if !strings.Contains(command, "PATH") || !strings.Contains(command, "exec env") {
+		t.Fatalf("command = %q, want git smart wrapper to contain pass-through logic (PATH/exec env)", command)
+	}
+
+	// Duplicate base commands: rm -rf and rm /tmp produce ONE wrapper that handles both subargs.
 	wantDedupSpec := SessionSpec{
 		SessionID:    "SESS-dedup-456",
 		Runtime:      "codex",
@@ -254,11 +265,17 @@ func TestBuilderBuildCodexWrapsDenyCommands(t *testing.T) {
 		t.Fatalf("Build failed: %v", err)
 	}
 	rmCount := strings.Count(dedupCmd, "/tmp/aom-policy-SESS-dedup-456/bin/rm")
-	// mkdir creates the dir (contains /bin/rm as subpath), plus one wrapper creation.
-	// Count exact wrapper path references to check deduplication.
+	// Count exact wrapper creation references to check deduplication (one wrapper for rm).
 	wantWrapper := `/tmp/aom-policy-SESS-dedup-456/bin/rm" && chmod`
 	if count := strings.Count(dedupCmd, wantWrapper); count != 1 {
 		t.Fatalf("command = %q, want exactly 1 rm wrapper, got %d (rmCount=%d)", dedupCmd, count, rmCount)
+	}
+	// The single rm wrapper should contain checks for both -rf and /tmp subargs.
+	if !strings.Contains(dedupCmd, "-rf") {
+		t.Fatalf("dedupCmd = %q, want rm wrapper to contain '-rf' check", dedupCmd)
+	}
+	if !strings.Contains(dedupCmd, "/tmp") {
+		t.Fatalf("dedupCmd = %q, want rm wrapper to contain '/tmp' check", dedupCmd)
 	}
 }
 

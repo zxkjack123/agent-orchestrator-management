@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/agent"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/db"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
 	"gopkg.in/yaml.v3"
 )
 
@@ -125,7 +125,7 @@ func (s *Service) Init(params InitParams) (*InitResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := seedAgentProfiles(aomPath, cfg); err != nil {
+	if err := seedAgentProfiles(aomPath, cfg, templateDir); err != nil {
 		return nil, err
 	}
 
@@ -261,7 +261,7 @@ func (s *Service) Open(repoPath string) (*OpenResult, error) {
 
 	// Seed profiles for any agents added to agents.yaml after the initial project init.
 	// seedAgentProfiles is idempotent — it skips agents whose profile file already exists.
-	if err := seedAgentProfiles(aomPath, cfg); err != nil {
+	if err := seedAgentProfiles(aomPath, cfg, ""); err != nil {
 		return nil, err
 	}
 

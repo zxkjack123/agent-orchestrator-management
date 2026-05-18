@@ -10,12 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/app"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
-	aomruntime "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/runtime"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/tmux"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/worktree"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/app"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
+	aomruntime "github.com/lattapon-aek/agents-orchestrator-management-private/internal/runtime"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/tmux"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/worktree"
 )
 
 func TestExecuteProjectInitCreatesAOMStructure(t *testing.T) {
@@ -193,7 +193,7 @@ func TestExecuteProjectInitInteractiveSupportsInlineAgentSelection(t *testing.T)
 
 	runner := Runner{
 		app:    app.New(),
-		stdin:  strings.NewReader("orchestrator-main,frontend-main:builder:codex\n"),
+		stdin:  strings.NewReader("backend-main,custom-agent:builder:codex\n"),
 		stdout: &stdout,
 		stderr: &stderr,
 		isTTY: func(io.Reader) bool {
@@ -210,8 +210,8 @@ func TestExecuteProjectInitInteractiveSupportsInlineAgentSelection(t *testing.T)
 		t.Fatalf("ReadFile(agents.yaml) failed: %v", err)
 	}
 	content := string(agentsData)
-	if !strings.Contains(content, "frontend-main:") || !strings.Contains(content, "runtime: codex") || !strings.Contains(content, "role: builder") {
-		t.Fatalf("agents.yaml = %q, want inline frontend agent", content)
+	if !strings.Contains(content, "custom-agent:") || !strings.Contains(content, "runtime: codex") || !strings.Contains(content, "role: builder") {
+		t.Fatalf("agents.yaml = %q, want inline custom agent", content)
 	}
 	if !strings.Contains(stdout.String(), "name:role:runtime") {
 		t.Fatalf("stdout = %q, want inline syntax hint", stdout.String())
@@ -254,7 +254,7 @@ func TestExecuteProjectInitInteractiveBlankSelectionKeepsDefaultAgents(t *testin
 		t.Fatalf("ReadFile(agents.yaml) failed: %v", err)
 	}
 	content := string(agentsData)
-	if !strings.Contains(content, "backend-main:") || !strings.Contains(content, "reviewer-main:") || !strings.Contains(content, "orchestrator-main:") {
+	if !strings.Contains(content, "backend-main:") || !strings.Contains(content, "reviewer-main:") || !strings.Contains(content, "frontend-main:") {
 		t.Fatalf("agents.yaml = %q, want default full agent set", content)
 	}
 }
@@ -875,7 +875,7 @@ func TestExecuteSessionSpawnWithTaskRealMaterializesClaudeIdentityFile(t *testin
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Execute([]string{"task", "create", "Materialize orchestrator identity", "--role", "orchestrator", "--agent", "orchestrator-main"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"task", "create", "Materialize frontend identity", "--role", "frontend", "--agent", "frontend-main"}, &stdout, &stderr); err != nil {
 		t.Fatalf("task create failed: %v", err)
 	}
 	taskID := extractEntityID(stdout.String(), "Task: ")
@@ -885,7 +885,7 @@ func TestExecuteSessionSpawnWithTaskRealMaterializesClaudeIdentityFile(t *testin
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Execute([]string{"session", "spawn", "orchestrator-main", "--task", taskID, "--real"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"session", "spawn", "frontend-main", "--task", taskID, "--real"}, &stdout, &stderr); err != nil {
 		t.Fatalf("session spawn failed: %v", err)
 	}
 	sessionID := extractSessionID(stdout.String())
@@ -907,8 +907,8 @@ func TestExecuteSessionSpawnWithTaskRealMaterializesClaudeIdentityFile(t *testin
 	if err != nil {
 		t.Fatalf("ReadFile(CLAUDE.md) failed: %v", err)
 	}
-	if !strings.Contains(string(identityData), "Agent: orchestrator-main") {
-		t.Fatalf("CLAUDE.md = %q, want orchestrator profile content", string(identityData))
+	if !strings.Contains(string(identityData), "Agent: frontend-main") {
+		t.Fatalf("CLAUDE.md = %q, want frontend profile content", string(identityData))
 	}
 }
 

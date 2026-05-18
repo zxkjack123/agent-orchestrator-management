@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/db"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
 )
 
 func TestRepositorySyncUpsertsAgents(t *testing.T) {

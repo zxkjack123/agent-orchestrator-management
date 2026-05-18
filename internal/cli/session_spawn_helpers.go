@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/agent"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/artifact"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
-	aomruntime "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/runtime"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/session"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/worktree"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
+	aomruntime "github.com/lattapon-aek/agents-orchestrator-management-private/internal/runtime"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/session"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/worktree"
 )
 
 func (r Runner) ensurePlannedWorktree(result *project.OpenResult, taskRecord task.Record) (*worktree.Record, error) {

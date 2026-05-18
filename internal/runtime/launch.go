@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 )
 
 // LaunchMode controls how AOM starts a pane process for one session.

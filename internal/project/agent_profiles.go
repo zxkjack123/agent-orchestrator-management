@@ -1,12 +1,14 @@
 package project
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,11 +45,13 @@ func WriteAgentProfile(aomPath, agentName, content string) error {
 type AddAgentParams struct {
 	Name    string
 	Role    string
+	Class   string // role class for profile template; defaults to "builder" when empty
 	Runtime string
 }
 
 // AddAgentToConfig adds a new agent entry to agents.yaml and seeds its profile.
-// If the role does not exist, it is auto-created with builder-class defaults.
+// If the role does not exist, it is auto-created. Class controls the profile template
+// used; when empty, an existing role's class is preserved, or "builder" is used for new roles.
 func AddAgentToConfig(aomPath string, params AddAgentParams) error {
 	agentsPath := filepath.Join(aomPath, "agents.yaml")
 	data, err := os.ReadFile(agentsPath)
@@ -70,8 +74,15 @@ func AddAgentToConfig(aomPath string, params AddAgentParams) error {
 		return fmt.Errorf("agent %q already exists in agents.yaml", params.Name)
 	}
 
-	if _, exists := cfg.Roles[params.Role]; !exists {
-		cfg.Roles[params.Role] = defaultInlineRoleConfig()
+	if existing, exists := cfg.Roles[params.Role]; !exists {
+		roleCfg := defaultInlineRoleConfig()
+		if params.Class != "" {
+			roleCfg.Class = params.Class
+		}
+		cfg.Roles[params.Role] = roleCfg
+	} else if params.Class != "" && existing.Class != params.Class {
+		existing.Class = params.Class
+		cfg.Roles[params.Role] = existing
 	}
 
 	cfg.Agents[params.Name] = config.AgentConfig{
@@ -89,7 +100,10 @@ func AddAgentToConfig(aomPath string, params AddAgentParams) error {
 	}
 
 	roleCfg := cfg.Roles[params.Role]
-	content := renderAgentProfileMarkdown(params.Name, params.Role, params.Runtime, roleCfg.Class)
+	content, err := renderAgentProfile(params.Name, params.Role, params.Runtime, roleCfg.Class, "", aomPath)
+	if err != nil {
+		return fmt.Errorf("render agent profile %q: %w", params.Name, err)
+	}
 	return WriteAgentProfile(aomPath, params.Name, content)
 }
 
@@ -127,7 +141,7 @@ func UpdateProfileSection(profile, section, newContent string) string {
 	return strings.Join(updated, "\n")
 }
 
-func seedAgentProfiles(aomPath string, cfg *config.ProjectConfig) error {
+func seedAgentProfiles(aomPath string, cfg *config.ProjectConfig, templateDir string) error {
 	if cfg == nil {
 		return fmt.Errorf("project config is required")
 	}
@@ -149,7 +163,10 @@ func seedAgentProfiles(aomPath string, cfg *config.ProjectConfig) error {
 			return fmt.Errorf("create agent profile dir %q: %w", filepath.Dir(profilePath), err)
 		}
 
-		content := renderAgentProfileMarkdown(agentName, agentCfg.Role, agentCfg.Runtime, roleCfg.Class)
+		content, err := renderAgentProfile(agentName, agentCfg.Role, agentCfg.Runtime, roleCfg.Class, templateDir, aomPath)
+		if err != nil {
+			return fmt.Errorf("render agent profile %q: %w", agentName, err)
+		}
 		if err := os.WriteFile(profilePath, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("write agent profile %q: %w", profilePath, err)
 		}
@@ -158,97 +175,87 @@ func seedAgentProfiles(aomPath string, cfg *config.ProjectConfig) error {
 	return nil
 }
 
-func renderAgentProfileMarkdown(agentName, roleName, runtimeName, roleClass string) string {
-	return fmt.Sprintf(`# Agent Identity
-
-## Identity
-- Agent: %s
-- Role: %s
-- Runtime: %s
-
-## Responsibilities
-- %s
-
-## AOM Workflow
-
-### Starting a session
-1. Read .agent/task.md — understand goal, scope, and pipeline position
-2. Read .agent/state.md — see current progress and remaining steps
-3. Read .agent/log.md — review history and last checkpoint
-
-### During work
-- Update .agent/state.md as step progress changes
-- Create checkpoints every ~30 minutes or after significant milestones
-
-### Completing work
-1. git add -A && git commit -m "..."  (always commit before signaling)
-   If git commit fails with "index.lock: Read-only file system" (NTFS/WSL2):
-   use: aom worktree commit <task-id> -m "your message"
-2. Choose the right signal:
-   - Task fully done → append event "task.completed" to .agent/log.md
-   - Handing off to another agent → append event "handoff.prepared" to .agent/log.md
-3. Update .agent/state.md to reflect final status
-
-### Valid log events
-| Event             | Use when                                          |
-|-------------------|---------------------------------------------------|
-| task.completed    | Work is done; ready for operator to close         |
-| handoff.prepared  | Passing work to another agent to continue         |
-| checkpoint.created| Saving progress mid-task                          |
-| step.completed    | A sub-step finished                               |
-
-### Waiting for another session to finish
-  aom session wait <session-id> --event task.completed
-  aom session wait <session-id> --event handoff.prepared
-  (default timeout: 30m — override with --timeout 2h)
-
-### Seeing what tasks are ready to work on
-  aom next                   # unblocked tasks sorted by priority
-  aom next --format json     # machine-readable output for scripting
-
-## Team Communication
-
-Call AOM commands from your worktree shell to coordinate with teammates:
-- Broadcast to team channel:       aom channel append "your message"
-- Direct message a teammate:       aom message send <agent-name> "your message"
-- Check your inbox:                aom message read <your-agent-name>
-- Read a file from another worktree: aom worktree read-file <task-id> <relative-path>
-
-NOTE: If your runtime sandbox restricts writes outside your worktree, "channel append"
-and "message send" will stage to .agent/outbox.md instead. The operator runs
-"aom outbox flush" to publish them. Seeing "Message staged to outbox" is expected.
-
-## Constraints
-- Stay within the current task scope
-- Do not modify .agent/index.md or .agent/log.md directly — those are AOM-owned
-
-## Model Configuration
-
-This agent uses the provider default model unless model: is set in .aom/agents.yaml.
-
-Configure per-agent model in .aom/agents.yaml:
-  agents:
-    <agent-name>:
-      model: claude-sonnet-4-6   # claude aliases: sonnet, opus, haiku
-      # codex: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex
-      # gemini: gemini-2.5-pro, gemini-2.5-flash
-
-After changing model: re-run "aom session spawn" to apply.
-`,
-		agentName,
-		roleName,
-		runtimeName,
-		defaultResponsibility(roleClass),
-	)
+// profileTemplateData holds the variables injected into base.md.tmpl.
+type profileTemplateData struct {
+	AgentName   string
+	RoleName    string
+	RuntimeName string
+	RoleSection string
 }
 
-func defaultResponsibility(roleClass string) string {
-	switch strings.TrimSpace(roleClass) {
-	case "reviewer":
-		return "Review implementation work against the task artifacts and record actionable findings"
-	case "orchestrator":
-		return "Coordinate task flow, handoffs, and next actions according to the project artifacts"
-	default:
-		return "Implement the assigned task work according to the task artifacts and current session state"
+// renderAgentProfile renders a profile.md for an agent by composing the role-specific
+// section template with the common base template.
+//
+// Lookup order for each template file:
+//  1. templateDir/profiles/<file> — explicit override passed at init time
+//  2. {aomPath}/templates/profiles/<file> — project-local override (for aom agent add)
+//  3. Embedded default (templates/project-init/profiles/<file>)
+func renderAgentProfile(agentName, roleName, runtimeName, roleClass, templateDir, aomPath string) (string, error) {
+	roleSection, err := loadProfileSection(roleClass, templateDir, aomPath)
+	if err != nil {
+		return "", err
 	}
+
+	baseSrc, err := loadProfileTemplate("base.md.tmpl", templateDir, aomPath)
+	if err != nil {
+		return "", err
+	}
+
+	tmpl, err := template.New("profile").Parse(string(baseSrc))
+	if err != nil {
+		return "", fmt.Errorf("parse base profile template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, profileTemplateData{
+		AgentName:   agentName,
+		RoleName:    roleName,
+		RuntimeName: runtimeName,
+		RoleSection: roleSection,
+	}); err != nil {
+		return "", fmt.Errorf("render profile for agent %q: %w", agentName, err)
+	}
+	return buf.String(), nil
 }
+
+// loadProfileSection loads the role-specific markdown section for a given role class.
+// Falls back to default.md.tmpl when no class-specific file exists.
+func loadProfileSection(roleClass, templateDir, aomPath string) (string, error) {
+	fileName := strings.TrimSpace(strings.ToLower(roleClass)) + ".md.tmpl"
+	data, err := loadProfileTemplate(fileName, templateDir, aomPath)
+	if err != nil {
+		// Class-specific file not found — use default.
+		data, err = loadProfileTemplate("default.md.tmpl", templateDir, aomPath)
+		if err != nil {
+			return "", fmt.Errorf("load default profile section: %w", err)
+		}
+	}
+	return string(data), nil
+}
+
+// loadProfileTemplate reads a profile template file, checking custom directories
+// before falling back to the embedded defaults.
+func loadProfileTemplate(fileName, templateDir, aomPath string) ([]byte, error) {
+	// 1. Explicit templateDir (from project init --template-dir)
+	if templateDir != "" {
+		p := filepath.Join(templateDir, "profiles", fileName)
+		if data, err := os.ReadFile(p); err == nil {
+			return data, nil
+		}
+	}
+	// 2. Project-local .aom/templates/profiles/ (used by aom agent add after init)
+	if aomPath != "" {
+		p := filepath.Join(aomPath, "templates", "profiles", fileName)
+		if data, err := os.ReadFile(p); err == nil {
+			return data, nil
+		}
+	}
+	// 3. Embedded default.
+	embeddedPath := "templates/project-init/profiles/" + fileName
+	data, err := projectInitTemplates.ReadFile(embeddedPath)
+	if err != nil {
+		return nil, fmt.Errorf("profile template %q not found: %w", fileName, err)
+	}
+	return data, nil
+}
+

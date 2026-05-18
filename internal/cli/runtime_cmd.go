@@ -5,8 +5,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 )
 
 func (r Runner) executeRuntime(args []string) error {

@@ -16,6 +16,8 @@ const (
 	StatusNeedsRepair = "NeedsRepair"
 )
 
+const maxBranchSegmentLen = 80
+
 const (
 	DriftNone                         = ""
 	DriftMissingPath                  = "MissingPath"
@@ -491,11 +493,18 @@ func reconciledStatus(current string, pathExists, registered, hasActiveSession b
 }
 
 func plannedBranchName(taskID, taskTitle string) string {
-	return "aom/" + sanitizeSegment(taskID) + "-" + sanitizeSegment(taskTitle)
+	full := "aom/" + sanitizeSegment(taskID) + "-" + sanitizeSegment(taskTitle)
+	if len(full) > maxBranchSegmentLen {
+		full = strings.TrimRight(full[:maxBranchSegmentLen], "-")
+	}
+	return full
 }
 
 func plannedWorktreePath(repoPath, taskID, taskTitle string) string {
 	dirName := sanitizeSegment(taskID) + "-" + sanitizeSegment(taskTitle)
+	if len(dirName) > maxBranchSegmentLen {
+		dirName = strings.TrimRight(dirName[:maxBranchSegmentLen], "-")
+	}
 	return filepath.Join(repoPath, ".aom", "worktrees", dirName)
 }
 

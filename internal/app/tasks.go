@@ -3,9 +3,9 @@ package app
 import (
 	"database/sql"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/db"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
 )
 
 // OpenTaskService opens the project database and returns a task service bound to it.

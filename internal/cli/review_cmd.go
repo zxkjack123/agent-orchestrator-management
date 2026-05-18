@@ -5,13 +5,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/agent"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/artifact"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
-	aomruntime "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/runtime"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/session"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
+	aomruntime "github.com/lattapon-aek/agents-orchestrator-management-private/internal/runtime"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/session"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
 )
 
 type reviewParams struct {

@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/app"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
-	aomruntime "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/runtime"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/app"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
+	aomruntime "github.com/lattapon-aek/agents-orchestrator-management-private/internal/runtime"
 )
 
 var newApp = app.New
@@ -309,12 +309,22 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "AOM is a project-local control plane for agent sessions, tasks, worktrees, and durable markdown artifacts.")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Operator workflow")
-	fmt.Fprintln(r.stdout, "1. aom task create \"work summary\" --role <role> --agent <agent>")
-	fmt.Fprintln(r.stdout, "2. aom step list <task-id> ; aom step update <step-id> --status confirmed")
-	fmt.Fprintln(r.stdout, "3. aom session spawn <agent> --task <task-id> --mock|--real")
-	fmt.Fprintln(r.stdout, "4. aom session send <session-id> \"brief for the worker\"")
-	fmt.Fprintln(r.stdout, "5. aom capture <session-id>")
-	fmt.Fprintln(r.stdout, "6. aom task close <task-id>")
+	fmt.Fprintln(r.stdout, "The operator drives the project — you can orchestrate directly or delegate to an agent.")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintln(r.stdout, "  Option A: operator as orchestrator (no orchestrator agent needed)")
+	fmt.Fprintln(r.stdout, "  1. aom agent add <name> --role <role> --class <class> --runtime <runtime>")
+	fmt.Fprintln(r.stdout, "  2. aom task create \"work summary\" --role <role> --agent <agent>")
+	fmt.Fprintln(r.stdout, "  3. aom step list <task-id> ; aom step update <step-id> --status confirmed")
+	fmt.Fprintln(r.stdout, "  4. aom session spawn <agent> --task <task-id> --mock|--real")
+	fmt.Fprintln(r.stdout, "  5. aom session send <session-id> \"brief for the worker\"")
+	fmt.Fprintln(r.stdout, "  6. aom capture <session-id>")
+	fmt.Fprintln(r.stdout, "  7. aom task close <task-id>")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintln(r.stdout, "  Option B: spawn an orchestrator agent and let it manage the team")
+	fmt.Fprintln(r.stdout, "  1. aom agent add orchestrator --role orchestrator --class orchestrator --runtime claude")
+	fmt.Fprintln(r.stdout, "  2. aom task create \"build <feature>\" --agent orchestrator")
+	fmt.Fprintln(r.stdout, "  3. aom session spawn orchestrator --task <task-id> --real")
+	fmt.Fprintln(r.stdout, "     (the orchestrator agent will add sub-agents and assign tasks autonomously)")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Project")
 	fmt.Fprintln(r.stdout, "aom project init <name> --repo <path> : create .aom config, db, and starter agents")
@@ -326,7 +336,9 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Agent")
 	fmt.Fprintln(r.stdout, "aom agent list : list all configured agents with role, runtime, and profile path")
-	fmt.Fprintln(r.stdout, "aom agent add <name> --role <role> --runtime <runtime> : add a new agent and seed its profile")
+	fmt.Fprintln(r.stdout, "aom agent add <name> --role <role> --class <class> --runtime <runtime> : add agent and seed role profile")
+	fmt.Fprintln(r.stdout, "  --class controls which profile template is used (.aom/templates/profiles/<class>.md.tmpl)")
+	fmt.Fprintln(r.stdout, "  built-in classes: builder, frontend, reviewer, orchestrator  (add your own by dropping a .md.tmpl file)")
 	fmt.Fprintln(r.stdout, "aom agent show <name> : show agent config and full profile content")
 	fmt.Fprintln(r.stdout, "aom agent profile show <name> : print agent profile markdown")
 	fmt.Fprintln(r.stdout, "aom agent profile update <name> [--responsibilities <text>] [--constraints <text>] : update profile sections")

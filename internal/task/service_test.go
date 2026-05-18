@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/db"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
 )
 
 func TestServiceCreateCreatesTaskAndInitialStep(t *testing.T) {

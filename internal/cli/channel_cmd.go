@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
 )
 
 func (r Runner) executeChannelAppend(args []string) error {

@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/artifact"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/plan"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/plan"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/session"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
 )
 
 func (r Runner) executePlan(args []string) error {
@@ -404,13 +405,31 @@ func (r Runner) executeOpen(args []string) error {
 }
 
 func (r Runner) executeStatus(args []string) error {
-	if len(args) > 0 {
-		return fmt.Errorf("status does not accept positional arguments in the current milestone")
+	activeOnly := false
+	graphMode := false
+	for _, arg := range args {
+		switch arg {
+		case "--active":
+			activeOnly = true
+		case "--graph":
+			graphMode = true
+		default:
+			return fmt.Errorf("unknown flag %q", arg)
+		}
 	}
 
 	result, err := r.app.Projects.Open(".")
 	if err != nil {
 		return err
+	}
+
+	if graphMode {
+		taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+		if err != nil {
+			return err
+		}
+		defer sqlDB.Close()
+		return printTaskGraph(r.stdout, taskService, result.Project.ID)
 	}
 
 	sessions, err := r.loadProjectSessions(result)
@@ -428,7 +447,220 @@ func (r Runner) executeStatus(args []string) error {
 		return err
 	}
 
+	if activeOnly {
+		taskViews = filterActiveTaskViews(taskViews)
+		sessions = filterActiveSessions(sessions)
+	}
+
 	r.printProjectSummary("Project status", result, nil, sessions, taskCount, taskViews)
+	return nil
+}
+
+var activeTaskStatuses = map[string]bool{
+	"InProgress": true, "Blocked": true, "NeedsAttention": true, "Ready": true,
+}
+
+func filterActiveTaskViews(views []taskView) []taskView {
+	var out []taskView
+	for _, v := range views {
+		if activeTaskStatuses[v.Task.Status] {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func filterActiveSessions(sessions []session.Record) []session.Record {
+	var out []session.Record
+	for _, s := range sessions {
+		if s.Status != "Archived" && s.Status != "Terminated" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// printTaskGraph prints an ASCII dependency graph of tasks for a project.
+func printTaskGraph(out io.Writer, taskService *task.Service, projectID string) error {
+	allTasks, err := taskService.ListByProject(projectID)
+	if err != nil {
+		return err
+	}
+
+	if len(allTasks) == 0 {
+		fmt.Fprintln(out, "No tasks to display.")
+		return nil
+	}
+
+	// Build map by task ID for quick lookup.
+	taskByID := make(map[string]task.Record, len(allTasks))
+	for _, t := range allTasks {
+		taskByID[t.ID] = t
+	}
+
+	// Build adjacency: blocker → list of tasks it blocks (blocker→dependent edges).
+	// Also build reverse: task → its blockers.
+	blockedBy := make(map[string][]string) // taskID → blocker IDs
+	blocks := make(map[string][]string)    // blockerID → dependent IDs
+
+	for _, t := range allTasks {
+		blockers, err := taskService.BlockedBy(t.ID)
+		if err != nil {
+			continue
+		}
+		for _, b := range blockers {
+			blockedBy[t.ID] = append(blockedBy[t.ID], b.ID)
+			blocks[b.ID] = append(blocks[b.ID], t.ID)
+		}
+	}
+
+	// Topological sort using Kahn's algorithm.
+	inDegree := make(map[string]int, len(allTasks))
+	for _, t := range allTasks {
+		inDegree[t.ID] = len(blockedBy[t.ID])
+	}
+
+	var queue []string
+	for _, t := range allTasks {
+		if inDegree[t.ID] == 0 {
+			queue = append(queue, t.ID)
+		}
+	}
+
+	var topoOrder []string
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		topoOrder = append(topoOrder, cur)
+		for _, dep := range blocks[cur] {
+			inDegree[dep]--
+			if inDegree[dep] == 0 {
+				queue = append(queue, dep)
+			}
+		}
+	}
+	// Add any remaining tasks not in topoOrder (cycles or disconnected).
+	inTopo := make(map[string]bool, len(topoOrder))
+	for _, id := range topoOrder {
+		inTopo[id] = true
+	}
+	for _, t := range allTasks {
+		if !inTopo[t.ID] {
+			topoOrder = append(topoOrder, t.ID)
+		}
+	}
+
+	// Build linear chains: start from tasks with no blockers, follow blocks edges.
+	visited := make(map[string]bool)
+	var chains [][]string
+	for _, id := range topoOrder {
+		if visited[id] {
+			continue
+		}
+		if len(blockedBy[id]) > 0 {
+			continue // not a chain start
+		}
+		// Walk forward.
+		chain := []string{id}
+		visited[id] = true
+		cur := id
+		for {
+			deps := blocks[cur]
+			if len(deps) == 0 {
+				break
+			}
+			// Pick first unvisited dependent.
+			next := ""
+			for _, d := range deps {
+				if !visited[d] {
+					next = d
+					break
+				}
+			}
+			if next == "" {
+				break
+			}
+			chain = append(chain, next)
+			visited[next] = true
+			cur = next
+		}
+		chains = append(chains, chain)
+	}
+	// Collect any tasks not reached by chain walking.
+	var loose []string
+	for _, id := range topoOrder {
+		if !visited[id] {
+			loose = append(loose, id)
+			visited[id] = true
+		}
+	}
+	if len(loose) > 0 {
+		chains = append(chains, loose)
+	}
+
+	// Status symbol helper.
+	statusSymbol := func(status string) string {
+		switch status {
+		case "Done":
+			return "✓"
+		case "InProgress":
+			return "⟳"
+		case "Planned", "Ready":
+			return "○"
+		case "NeedsAttention", "Blocked":
+			return "!"
+		default:
+			return "·"
+		}
+	}
+
+	// Format a node label: [SYMBOL ID: title_truncated_to_20]
+	formatNode := func(t task.Record) string {
+		title := t.Title
+		if len(title) > 20 {
+			title = title[:20]
+		}
+		return fmt.Sprintf("[%s %s: %s]", statusSymbol(t.Status), t.ID, title)
+	}
+
+	fmt.Fprintln(out, "Task Dependency Graph")
+	fmt.Fprintln(out, "=====================")
+	fmt.Fprintln(out, "")
+
+	for _, chain := range chains {
+		if len(chain) == 0 {
+			continue
+		}
+		// Build node strings and status strings.
+		var nodes []string
+		var statuses []string
+		for _, id := range chain {
+			t, ok := taskByID[id]
+			if !ok {
+				continue
+			}
+			nodes = append(nodes, formatNode(t))
+			statuses = append(statuses, t.Status)
+		}
+
+		// Print chain line with arrows between nodes.
+		fmt.Fprintln(out, strings.Join(nodes, " → "))
+
+		// Print status line padded to match node widths.
+		var statusParts []string
+		for i, nodeStr := range nodes {
+			nodeWidth := len(nodeStr)
+			st := statuses[i]
+			if len(st) > nodeWidth {
+				st = st[:nodeWidth]
+			}
+			// Pad status to node width.
+			statusParts = append(statusParts, fmt.Sprintf("%-*s", nodeWidth, st))
+		}
+		fmt.Fprintln(out, strings.Join(statusParts, "   "))
+		fmt.Fprintln(out, "")
+	}
+
 	return nil
 }
 

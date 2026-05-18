@@ -42,7 +42,7 @@ func TestServiceOpenSyncsConfigToDB(t *testing.T) {
 		t.Fatalf("state dir = %q, want %q", result.StateDir, "tasks")
 	}
 
-	for _, agentName := range []string{"orchestrator-main", "backend-main", "reviewer-main"} {
+	for _, agentName := range []string{"backend-main", "frontend-main", "reviewer-main"} {
 		path := filepath.Join(repoRoot, ".aom", "agents", agentName, "profile.md")
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -143,7 +143,7 @@ func TestServiceInitFiltersSelectedAgents(t *testing.T) {
 		t.Fatalf("agent count = %d, want 2", len(result.Agents))
 	}
 	for _, agentRecord := range result.Agents {
-		if agentRecord.Name == "orchestrator-main" {
+		if agentRecord.Name == "frontend-main" {
 			t.Fatalf("unexpected filtered-out agent still present: %q", agentRecord.Name)
 		}
 	}
@@ -167,8 +167,8 @@ func TestServicePreviewInitAgentsReturnsTemplateAgents(t *testing.T) {
 	if options[0].Name != "backend-main" {
 		t.Fatalf("first option = %q, want backend-main", options[0].Name)
 	}
-	if options[1].Name != "orchestrator-main" {
-		t.Fatalf("second option = %q, want orchestrator-main", options[1].Name)
+	if options[1].Name != "frontend-main" {
+		t.Fatalf("second option = %q, want frontend-main", options[1].Name)
 	}
 	if options[2].Name != "reviewer-main" {
 		t.Fatalf("third option = %q, want reviewer-main", options[2].Name)

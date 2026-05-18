@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/artifact"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/task"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
 )
 
 func (r Runner) executeNext(args []string) error {

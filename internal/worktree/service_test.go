@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/db"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
 )
 
 func TestServiceCreatePlannedCreatesMapping(t *testing.T) {
@@ -488,6 +488,17 @@ func TestServiceRepairRecreatesUnregisteredArtifactOnlyPath(t *testing.T) {
 	}
 	if len(addCall) == 0 {
 		t.Fatalf("calls = %#v, want worktree add", calls)
+	}
+}
+
+func TestPlannedBranchNameTruncatesLongTitle(t *testing.T) {
+	longTitle := strings.Repeat("a", 200)
+	branch := plannedBranchName("TASK-001", longTitle)
+	if len(branch) > maxBranchSegmentLen {
+		t.Fatalf("branch name length = %d, want <= %d: %q", len(branch), maxBranchSegmentLen, branch)
+	}
+	if strings.HasSuffix(branch, "-") {
+		t.Fatalf("branch name should not end with a hyphen: %q", branch)
 	}
 }
 

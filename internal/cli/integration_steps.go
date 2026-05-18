@@ -1,6 +1,6 @@
 package cli
 
-import "github.com/lattapon-aek/Agents-Orchestfator-Management/internal/step"
+import "github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
 
 func autoSkipPlaceholderIntegrationSteps(stepService *step.Service, steps []step.Record) ([]step.Record, error) {
 	eligible := map[string]bool{

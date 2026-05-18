@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
 )
 
 // Record is the persisted agent model for Milestone 1.

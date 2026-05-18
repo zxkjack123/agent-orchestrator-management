@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/agent"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 )
 
 func (r Runner) executeAgent(args []string) error {
@@ -66,7 +66,7 @@ func (r Runner) executeAgentAdd(args []string) error {
 		return fmt.Errorf("agent name is required")
 	}
 
-	var role, runtime string
+	var role, class, runtime string
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--role":
@@ -75,6 +75,12 @@ func (r Runner) executeAgentAdd(args []string) error {
 				return fmt.Errorf("--role requires a value")
 			}
 			role = strings.TrimSpace(args[i])
+		case "--class":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--class requires a value")
+			}
+			class = strings.TrimSpace(args[i])
 		case "--runtime":
 			i++
 			if i >= len(args) {
@@ -110,6 +116,7 @@ func (r Runner) executeAgentAdd(args []string) error {
 	if err := project.AddAgentToConfig(result.AOMPath, project.AddAgentParams{
 		Name:    name,
 		Role:    role,
+		Class:   class,
 		Runtime: runtime,
 	}); err != nil {
 		return err
@@ -124,6 +131,9 @@ func (r Runner) executeAgentAdd(args []string) error {
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Name:    %s\n", name)
 	fmt.Fprintf(r.stdout, "Role:    %s\n", role)
+	if class != "" {
+		fmt.Fprintf(r.stdout, "Class:   %s\n", class)
+	}
 	fmt.Fprintf(r.stdout, "Runtime: %s\n", runtime)
 	fmt.Fprintf(r.stdout, "Profile: %s\n", project.AgentProfilePath(result.AOMPath, name))
 	fmt.Fprintln(r.stdout, "")

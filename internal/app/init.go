@@ -1,9 +1,9 @@
 package app
 
 import (
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/config"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/project"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/provider"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 )
 
 func init() {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/agent"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
 )
 
 // Params describes one orchestrator planning request.

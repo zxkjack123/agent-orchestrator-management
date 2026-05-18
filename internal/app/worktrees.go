@@ -3,8 +3,8 @@ package app
 import (
 	"database/sql"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/db"
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/worktree"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/worktree"
 )
 
 // OpenWorktreeService opens the project database and returns a worktree service bound to it.

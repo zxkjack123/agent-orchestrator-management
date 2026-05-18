@@ -3,7 +3,7 @@ package plan
 import (
 	"testing"
 
-	"github.com/lattapon-aek/Agents-Orchestfator-Management/internal/agent"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
 )
 
 func TestBuildDefaultsToDirectMode(t *testing.T) {

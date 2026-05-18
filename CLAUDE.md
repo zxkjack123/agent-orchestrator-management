@@ -123,34 +123,28 @@ Defined in full in `docs/state-machine.md`. Summary:
 | 17 — Observability (cross-worktree read, velocity metrics) | Complete |
 | Post-M17 — Bug fixes, UX, merge commit, runtime policy | Complete |
 
-**Immediate next work** (see `docs/current-status.md` for full detail and implementation order):
+**Immediate next work** (see `docs/dev/current-status.md` for full detail):
 
-*Cross-platform fixes (partially done — remaining):*
+*Windows/WSL2 cross-platform (still pending):*
 - `project.yaml.tmpl` → `repo: .` (absolute Windows path breaks Linux binary)
-- gitignore binary artifacts + README WSL setup section
-- `aom task ready <task-id>` command (Planned→Ready in one shot)
-- auto merge check before `aom merge commit`
-
-*Windows/WSL2 E2E feedback — new issues (all unimplemented):*
 - NTFS `mkdir` false-positive in `project init` (`internal/project/service.go:112`)
 - NTFS `index.lock`: agent profile NTFS fallback instruction + `aom doctor` NTFS warning
-- Hook UX: `project init` generate live `on-task-done.sh`; `aom doctor` warn if `.example` not activated
-- Model validation soft-warn before session spawn (`internal/provider/`)
 - `CLAUDE.md` add/add merge conflict: auto-resolve with "ours" in `executeMergeCommit`
-- `aom session send --file -` stdin pipe support
-- `aom task cancel <task-id>` for orphan Draft/Planned/Ready tasks
 - `--prefer-branch` flag for `aom merge commit`
 
 *Deferred:*
 - gemini and kiro runtime launch (`internal/provider/gemini.go`, `internal/provider/kiro.go`) — blocked on confirmed CLI flags
 
-**Recent additions** (see `docs/current-status.md` for full detail):
+**Recent additions** (see `docs/dev/current-status.md` for full detail):
 - M13: `aom task link/unlink`, cross-task dependency graph with BFS cycle detection, `--priority` flag, `aom next`
 - M14: `aom task request/list-requests/approve-request/reject-request`, `aom team brief` (`.aom/team-brief.md`)
 - M15: `aom merge check/prepare`, `internal/merge` package, `merge-plan.md` artifact
 - M16: `aom message send/read/clear`, `aom task record-result`, `aom session health`, `aom pause-all/resume-all`
 - M17: `aom worktree read-file` (cross-worktree read with path-traversal guard), `aom metrics` (velocity report from log events)
-- Post-M17: `aom merge commit` (executes git merge with guards), `aom task list`, `aom task claim`, `project-board.md` auto-refresh, runtime-level policy enforcement (`--disallowed-tools` for claude), `seedAgentProfiles` bug fix in `Open()`, E2E smoke test script
+- Post-M17: `aom merge commit`, `aom task list/claim/cancel/accept/ready`, runtime-level policy enforcement (`--disallowed-tools` for claude), `project-board.md` auto-refresh
+- E2E feedback: smart codex deny-command wrapper, `aom capture --follow/--diff`, `aom status --active/--graph`, `aom doctor --global`, `--step-type` flag, branch name truncation, auto-flush outbox on capture
+- Agent profile system: profiles moved from hardcoded Go strings to embedded `.md.tmpl` template files with 3-level lookup (templateDir → `.aom/templates/profiles/` → embedded); built-in classes: builder, frontend, reviewer, orchestrator
+- Team building: `aom agent add --class <class>`, Team Building section in all agent profiles, operator workflow in `--help` with Option A (operator-as-orchestrator) and Option B (delegate to orchestrator agent)
 
 ---
 
@@ -168,6 +162,6 @@ Read these before reviewing or advising on any area:
 | `docs/project-structure.md` | Package organization and dependency rules |
 | `docs/engineering-guidelines.md` | Code style, patterns, and guardrails |
 | `docs/project-config.md` | `.aom/` config file layout and schemas |
-| `docs/current-status.md` | Handoff document — current implementation progress |
+| `docs/dev/current-status.md` | Handoff document — current implementation progress |
 | `docs/system-diagrams.md` | Mermaid diagrams — architecture, state machines, flows |
 | `AGENTS.md` | Working guidelines for all implementation partners |
