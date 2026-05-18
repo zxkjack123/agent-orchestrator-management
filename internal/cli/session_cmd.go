@@ -1223,11 +1223,23 @@ func (r Runner) executeSessionSend(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("session identifier is required")
 	}
-	if len(args) == 1 {
-		return fmt.Errorf("message is required")
+
+	sessionID := strings.TrimSpace(args[0])
+	var filePath string
+	var msgArgs []string
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--file" {
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--file requires a path")
+			}
+			filePath = args[i]
+		} else {
+			msgArgs = append(msgArgs, args[i])
+		}
 	}
 
-	sessionRecord, err := r.loadSessionByIdentifier(strings.TrimSpace(args[0]))
+	sessionRecord, err := r.loadSessionByIdentifier(sessionID)
 	if err != nil {
 		return err
 	}
@@ -1235,9 +1247,21 @@ func (r Runner) executeSessionSend(args []string) error {
 		return fmt.Errorf("session %q does not have a live tmux pane binding", sessionRecord.ID)
 	}
 
-	message := strings.TrimSpace(strings.Join(args[1:], " "))
+	var message string
+	if filePath != "" {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("read --file %q: %w", filePath, err)
+		}
+		message = strings.TrimSpace(string(data))
+		if len(msgArgs) > 0 {
+			return fmt.Errorf("--file and inline message are mutually exclusive")
+		}
+	} else {
+		message = strings.TrimSpace(strings.Join(msgArgs, " "))
+	}
 	if message == "" {
-		return fmt.Errorf("message is required")
+		return fmt.Errorf("message is required (use --file <path> or pass message directly)")
 	}
 
 	// Interpret shell-style escape sequences so callers can embed newlines with \n.

@@ -2,3 +2,6 @@
 .aom/
 bin/
 .tmp/
+aom
+aom.exe
+aom-linux

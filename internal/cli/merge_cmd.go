@@ -278,6 +278,11 @@ func (r Runner) executeMergeCommit(args []string) error {
 		}
 	}
 
+	// Auto-run merge check before committing so conflicts are caught early.
+	if err := r.executeMergeCheck([]string{taskID}); err != nil {
+		return fmt.Errorf("pre-merge check: %w", err)
+	}
+
 	result, err := r.app.Projects.Open(".")
 	if err != nil {
 		return err
@@ -339,9 +344,25 @@ func (r Runner) executeMergeCommit(args []string) error {
 		// Auto-resolve conflicts that are exclusively in .agent/ (task artifact files).
 		// These are per-worktree metadata and should never block a code merge.
 		if resolved, resolveErr := resolveAgentArtifactConflicts(result.Project.RepoPath); resolveErr != nil {
-			return fmt.Errorf("git merge failed:\n%s", strings.TrimSpace(string(out)))
+			return fmt.Errorf(
+				"git merge failed — conflicts detected:\n%s\n\n"+
+					"Resolve conflicts manually:\n"+
+					"  1. Edit conflicting files and remove the conflict markers (<<<<< / ===== / >>>>>)\n"+
+					"  2. git add <resolved-files>\n"+
+					"  3. aom merge continue %s    ← commit the resolved merge\n"+
+					"     OR: aom merge abort %s   ← discard and start over",
+				strings.TrimSpace(string(out)), taskID, taskID,
+			)
 		} else if !resolved {
-			return fmt.Errorf("git merge failed:\n%s", strings.TrimSpace(string(out)))
+			return fmt.Errorf(
+				"git merge failed — conflicts detected:\n%s\n\n"+
+					"Resolve conflicts manually:\n"+
+					"  1. Edit conflicting files and remove the conflict markers (<<<<< / ===== / >>>>>)\n"+
+					"  2. git add <resolved-files>\n"+
+					"  3. aom merge continue %s    ← commit the resolved merge\n"+
+					"     OR: aom merge abort %s   ← discard and start over",
+				strings.TrimSpace(string(out)), taskID, taskID,
+			)
 		}
 		// Conflicts were only in .agent/ and have been auto-resolved; read the
 		// commit summary for the success message.
@@ -379,5 +400,94 @@ func (r Runner) executeMergeCommit(args []string) error {
 		fmt.Fprintf(r.stdout, "Integration steps completed: %d\n", len(completedSteps))
 	}
 	fmt.Fprintf(r.stdout, "%s\n", strings.TrimSpace(string(out)))
+	return nil
+}
+
+// executeMergeContinue completes a merge that was paused by conflicts.
+// The operator must have resolved all conflicts and staged them (git add) before calling this.
+func (r Runner) executeMergeContinue(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task id is required")
+	}
+
+	taskID := strings.TrimSpace(args[0])
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	// Verify we are actually in a MERGING state.
+	mergeHeadOut, mergeHeadErr := exec.Command("git", "-C", result.Project.RepoPath,
+		"rev-parse", "-q", "--verify", "MERGE_HEAD").Output()
+	if mergeHeadErr != nil || strings.TrimSpace(string(mergeHeadOut)) == "" {
+		return fmt.Errorf("no merge in progress in %q — nothing to continue", result.Project.RepoPath)
+	}
+
+	view, err := r.loadTaskView(result, taskID)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+	if view.Worktree == nil {
+		return fmt.Errorf("task %q has no worktree", taskID)
+	}
+
+	targetBranch := result.Project.DefaultBranch
+	sourceBranch := view.Worktree.BranchName
+
+	mergeMsg := fmt.Sprintf("Merge %s into %s\n\nTask: %s\n%s (conflict resolution)",
+		sourceBranch, targetBranch, taskID, view.Task.Title)
+
+	out, commitErr := exec.Command("git", "-C", result.Project.RepoPath,
+		"commit", "--no-edit", "-m", mergeMsg).CombinedOutput()
+	if commitErr != nil {
+		return fmt.Errorf("git commit failed:\n%s\nIf there are still unresolved conflicts, fix them first (git add <file>)", strings.TrimSpace(string(out)))
+	}
+
+	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
+		Type:        "merge.committed",
+		Actor:       "operator",
+		Summary:     fmt.Sprintf("Merged %s into %s (after conflict resolution)", sourceBranch, targetBranch),
+		StateEffect: "branch merged",
+	}, false); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(r.stdout, "Merge completed\n\n")
+	fmt.Fprintf(r.stdout, "Source branch: %s\n", sourceBranch)
+	fmt.Fprintf(r.stdout, "Target branch: %s\n", targetBranch)
+	fmt.Fprintf(r.stdout, "%s\n", strings.TrimSpace(string(out)))
+	return nil
+}
+
+// executeMergeAbort aborts a merge that was paused by conflicts and restores HEAD.
+func (r Runner) executeMergeAbort(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task id is required")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	// Verify we are actually in a MERGING state.
+	mergeHeadOut, mergeHeadErr := exec.Command("git", "-C", result.Project.RepoPath,
+		"rev-parse", "-q", "--verify", "MERGE_HEAD").Output()
+	if mergeHeadErr != nil || strings.TrimSpace(string(mergeHeadOut)) == "" {
+		return fmt.Errorf("no merge in progress in %q — nothing to abort", result.Project.RepoPath)
+	}
+
+	out, abortErr := exec.Command("git", "-C", result.Project.RepoPath, "merge", "--abort").CombinedOutput()
+	if abortErr != nil {
+		return fmt.Errorf("git merge --abort failed:\n%s", strings.TrimSpace(string(out)))
+	}
+
+	fmt.Fprintln(r.stdout, "Merge aborted — working tree restored to pre-merge state")
+	fmt.Fprintf(r.stdout, "Task %s branch was not merged. Re-run \"aom merge commit %s\" when ready.\n",
+		strings.TrimSpace(args[0]), strings.TrimSpace(args[0]))
 	return nil
 }

@@ -149,6 +149,8 @@ func (r Runner) executeTask(args []string) error {
 		return r.executeTaskUnlink(args[1:])
 	case "record-result":
 		return r.executeTaskRecordResult(args[1:])
+	case "ready":
+		return r.executeTaskReady(args[1:])
 	case "request":
 		return r.executeTaskRequest(args[1:])
 	case "list-requests":
@@ -257,6 +259,10 @@ func (r Runner) executeMerge(args []string) error {
 		return r.executeMergePrepare(args[1:])
 	case "commit":
 		return r.executeMergeCommit(args[1:])
+	case "continue":
+		return r.executeMergeContinue(args[1:])
+	case "abort":
+		return r.executeMergeAbort(args[1:])
 	default:
 		return fmt.Errorf("unknown merge command %q", args[0])
 	}
@@ -329,6 +335,7 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom task create <title> [--role <role>] [--agent <agent>] : create a task")
 	fmt.Fprintln(r.stdout, "aom task show <task-id> : inspect task state, artifacts, and ownership")
 	fmt.Fprintln(r.stdout, "aom task update <task-id> [flags] : change task mode, owner, or status")
+	fmt.Fprintln(r.stdout, "aom task ready <task-id> : confirm all Proposed steps and transition Planned task to Ready in one shot")
 	fmt.Fprintln(r.stdout, "aom task close <task-id> : mark a task complete (task must be InProgress; all steps must be terminal)")
 	fmt.Fprintln(r.stdout, "aom task accept <task-id> : accept agent work — complete all pending steps and close the task in one shot")
 	fmt.Fprintln(r.stdout, "aom task link <task-id> --blocked-by <blocker-id> : declare that task-id cannot start until blocker-id is done")
@@ -342,7 +349,8 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "Session")
 	fmt.Fprintln(r.stdout, "aom session spawn <agent> [--task <task-id>] [--mock|--real] [--fresh] : start a worker session")
 	fmt.Fprintln(r.stdout, "  --fresh : force a new context even when a previous native session exists for this task")
-	fmt.Fprintln(r.stdout, "aom session send <session-id> <message> : deliver a prompt into a live session")
+	fmt.Fprintln(r.stdout, "aom session send <session-id> <message> [--file <path>] : deliver a prompt into a live session (--file reads message from file, avoids shell escaping)")
+
 	fmt.Fprintln(r.stdout, "aom session list : list known sessions")
 	fmt.Fprintln(r.stdout, "aom session show <session-id> : inspect one session and its bindings")
 	fmt.Fprintln(r.stdout, "aom session stop <session-id> : stop a live session and keep continuity state")
@@ -373,6 +381,13 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Worktree")
 	fmt.Fprintln(r.stdout, "aom worktree repair <task-id> : repair a missing or stale task worktree")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintln(r.stdout, "Merge")
+	fmt.Fprintln(r.stdout, "aom merge check <task-id> : check for conflicts before merging")
+	fmt.Fprintln(r.stdout, "aom merge prepare <task-id> : generate a merge plan artifact")
+	fmt.Fprintln(r.stdout, "aom merge commit <task-id> [--into <branch>] : merge task branch; runs merge check first")
+	fmt.Fprintln(r.stdout, "aom merge continue <task-id> : complete a merge paused by conflicts (after git add of resolved files)")
+	fmt.Fprintln(r.stdout, "aom merge abort <task-id> : abort a conflicted merge and restore HEAD")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Key rules")
 	fmt.Fprintln(r.stdout, "- Never edit .aom/ files directly; use the CLI so state changes stay canonical.")

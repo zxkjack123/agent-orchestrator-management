@@ -511,6 +511,93 @@ func (r Runner) executeTaskAccept(args []string) error {
 	return nil
 }
 
+// executeTaskReady transitions a Planned task to Ready in one shot:
+// confirms all Proposed steps, then moves the task to Ready.
+func (r Runner) executeTaskReady(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task identifier is required")
+	}
+	if len(args) > 1 {
+		return fmt.Errorf("task ready takes exactly one argument")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	stepService, stepDB, err := r.app.OpenStepService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer stepDB.Close()
+
+	taskID := strings.TrimSpace(args[0])
+
+	current, err := taskService.Get(taskID)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+	if current.Status == "Ready" {
+		fmt.Fprintf(r.stdout, "Task %s is already Ready\n", taskID)
+		return nil
+	}
+	if current.Status != "Planned" {
+		return fmt.Errorf("task %q is %s; task ready only works on Planned tasks", taskID, current.Status)
+	}
+
+	// Confirm all Proposed steps.
+	steps, err := stepService.ListByTask(taskID)
+	if err != nil {
+		return err
+	}
+	var confirmedCount int
+	for _, s := range steps {
+		if s.Status != "Proposed" {
+			continue
+		}
+		if _, err := stepService.Update(s.ID, step.UpdateParams{Status: "Confirmed"}); err != nil {
+			return fmt.Errorf("confirm step %s: %w", s.ID, err)
+		}
+		confirmedCount++
+	}
+
+	// Transition task Planned → Ready.
+	taskRecord, err := taskService.Update(taskID, task.UpdateParams{Status: "Ready"})
+	if err != nil {
+		return fmt.Errorf("task transition to Ready: %w", err)
+	}
+
+	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
+		Type:        "task.readied",
+		Actor:       "operator",
+		Summary:     fmt.Sprintf("Task readied: %d step(s) confirmed", confirmedCount),
+		StateEffect: "Task Ready",
+	}, false); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Task ready")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Task:   %s\n", taskRecord.ID)
+	fmt.Fprintf(r.stdout, "Status: %s\n", taskRecord.Status)
+	if confirmedCount > 0 {
+		fmt.Fprintf(r.stdout, "Steps confirmed: %d\n", confirmedCount)
+	}
+	fmt.Fprintf(r.stdout, "\nNext: aom session spawn --task %s --agent <name>\n", taskID)
+
+	return nil
+}
+
 // taskWalkToDone returns the ordered status transitions needed to reach Done
 // from the given current status, inclusive of Done itself.
 func taskWalkToDone(current string) []string {
