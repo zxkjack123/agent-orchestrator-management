@@ -327,6 +327,7 @@ Implemented commands:
 - `aom team brief` (M14)
 - `aom merge check` / `aom merge prepare` (M15)
 - `aom merge commit` (Post-M17)
+- `aom merge continue` / `aom merge abort`
 - `aom message send` / `aom message read` / `aom message clear` (M16)
 - `aom pause-all` / `aom resume-all` (M16)
 - `aom task list [--status <value>] [--format json]` (Post-M17, enhanced 2026-05-18)
@@ -626,20 +627,20 @@ Implemented based on feedback from live login-app multi-agent pipeline:
 - **Pipeline Position** added to `task.md` artifact: lists which tasks block the current task and which tasks it unblocks when done, with agent assignments and current status — agent understands its place in the workflow without asking
 - **AOM Workflow Guide** expanded in `profile.md` template: replaces the 3-bullet "Working Protocol" with a full guide covering session start sequence, mid-task checkpointing, completion signaling (valid log events with descriptions), `session wait` usage, and `aom next` for discovering what to work on
 
-### Planned Next: Cross-Platform UX & Merge Conflict Fixes (2026-05-18)
+### Cross-Platform UX & Merge Conflict Fixes (2026-05-18)
 
-From a second round of live feedback (Windows 11 + WSL, login-app pipeline). **Not yet implemented** — planned for next session.
+From a second round of live feedback (Windows 11 + WSL, login-app pipeline).
 
-#### What needs fixing
+#### Status
 
-| Priority | Issue | File | Fix |
-|---|---|---|---|
-| Critical | `project.yaml` stores absolute Windows path — Linux binary fails to read it | `internal/project/templates/project-init/project.yaml.tmpl` | Change `repo: {{ .RepoPath }}` → `repo: .` (relative; `validateProject` already resolves it) |
-| Critical | `aom` binary committed to repo is Windows PE — WSL operators must build Linux binary manually | `.gitignore`, `README.md` | Gitignore binary artifacts; add WSL setup section to README |
-| High | `aom merge commit` when conflict: returns raw git error, leaves repo in conflict state, no guidance | `internal/cli/merge_cmd.go` | Better error message with step-by-step; add `aom merge continue <task>` and `aom merge abort <task>` |
-| Medium | Planned→Ready requires 3 commands (`step list`, `step update confirmed`, `task update ready`) | `internal/cli/task_cmd.go`, `internal/cli/root.go` | Add `aom task ready <task-id>` — confirms all steps + transitions to Ready in one shot |
-| Low | `aom session send` shell-escaping issues for long messages | `internal/cli/session_cmd.go` | Add `--file <path>` flag — reads message from file |
-| Low | `aom merge commit` does not auto-run merge check first | `internal/cli/merge_cmd.go` | Call `executeMergeCheck` at start of `executeMergeCommit` |
+| Priority | Issue | Status |
+|---|---|---|
+| Critical | `project.yaml` stores absolute Windows path — Linux binary fails to read it | **NOT DONE** |
+| Critical | `aom` binary committed to repo is Windows PE — WSL operators must build manually | **NOT DONE** |
+| High | `aom merge commit` conflict: raw git error, no guidance | **DONE** — `aom merge continue` + `aom merge abort` added |
+| Medium | Planned→Ready requires 3 commands | **NOT DONE** — `aom task ready` still missing |
+| Low | `aom session send` shell-escaping for long messages | **DONE** — `--file <path>` flag added |
+| Low | `aom merge commit` does not auto-run merge check first | **NOT DONE** |
 
 #### What was verified as already working (no fix needed)
 
@@ -647,15 +648,67 @@ From a second round of live feedback (Windows 11 + WSL, login-app pipeline). **N
 - **Channel content at spawn**: already injected via `materializeAgentContext()` from session before
 - **Team roster at spawn**: already injected via `buildTeamRosterNote()`
 
-#### Implementation order (next session)
+#### Remaining work (next session)
 
 1. `project.yaml.tmpl` → `repo: .` (1-line, zero risk)
 2. `.gitignore` + README WSL section (docs only)
-3. `aom session send --file` (isolated)
-4. `aom task ready` command (medium)
-5. merge conflict error message improvement
-6. `aom merge continue` + `aom merge abort` subcommands
-7. auto merge check before commit
+3. `aom task ready` command
+4. auto merge check before commit
+
+---
+
+### Windows/WSL2 Multi-Agent E2E Feedback — Planned Fixes (2026-05-18)
+
+From a full live run of the login-app pipeline on Windows 11 + WSL2 (3 agents: orchestrator-main claude-haiku, backend-main×2 codex gpt-5.5, reviewer-main claude-haiku). All 4 tasks completed successfully, but significant friction was identified. **Not yet implemented** — planned for next session.
+
+#### Hook System Analysis
+
+There are two hook layers in AOM. This explains why "agents didn't use hooks":
+
+**Layer 1 — AOM Shell Hooks** (`.aom/hooks/*.sh`, fired by `runHook()` in `internal/cli/hooks.go`):
+- Fires on `on-session-spawn`, `on-task-ready`, `on-task-done` events
+- Only runs if the `.sh` file exists (not `.sh.example`)
+- In the live test, only `on-task-done.sh.example` was present — never renamed → hooks never fired
+- Fix: `project init` should generate a working `on-task-done.sh` by default, not `.example`; `aom doctor` should warn when `.example` files exist without a live `.sh` counterpart
+
+**Layer 2 — Agent-Initiated AOM Calls** (agents call `aom` CLI directly):
+- `profile.md` template instructs agents to call `aom task checkpoint`, `aom worktree commit`, etc.
+- On NTFS mount, `git commit` fails with `index.lock: Read-only file system`, breaking the automation loop
+- Agents did the work correctly but couldn't signal completion via git
+
+#### New Issues Found
+
+| Priority | Issue | Cause | Fix Plan |
+|---|---|---|---|
+| **P0** | `project init` fails with `mkdir .aom: file exists` on NTFS mount | `os.MkdirAll` returns false-positive "file exists" on WSL2→NTFS | Retry with stat-check: if `MkdirAll` fails but dir exists, treat as success; add NTFS hint in error message |
+| **P0** | Agents can't `git commit` — `index.lock: Read-only file system` on NTFS | git lock files are read-only on NTFS via WSL2 | (a) Add NTFS fallback instruction to agent profile template; (b) `aom watch`/`aom capture` auto-detect `task.completed` in `log.md` and trigger `aom worktree commit`; (c) `aom doctor` detect NTFS mount and warn |
+| **P0** | AOM hooks never fire — `.sh.example` not renamed | Operator doesn't know activation requires rename | `project init` generates `on-task-done.sh` (live, not example); `aom doctor` warns if `.example` exists without `.sh` |
+| **P1** | Model spawn fails silently — error appears after spawn | No model slug validation before session spawn | Add known model list per provider (claude/codex); soft-warn at spawn if model not in list |
+| **P2** | `CLAUDE.md` written by Claude agents → add/add merge conflict | `MaterializeMCPConfig` + `MaterializePolicyConstraints` write `CLAUDE.md` into worktree | Option A: add `CLAUDE.md` to worktree `.gitignore` template; Option B: `executeMergeCommit` auto-resolve `CLAUDE.md` conflicts with "ours" strategy |
+| **P2** | `--file /dev/stdin` permission denied in WSL2 | WSL2 sandbox blocks `/dev/stdin` | Detect `--file -` or `--file /dev/stdin` and read from `os.Stdin` instead |
+| **P3** | No `task cancel` — orphan Draft/Planned tasks accumulate | No cancel/delete path in task state machine | Add `aom task cancel <task-id>` for Draft/Planned/Ready tasks → transition to Archived |
+| **P3** | Skeleton files from T1 cause add/add conflict when T2/T3 merge | git can't resolve add/add without a strategy hint | Add `--prefer-branch` flag to `aom merge commit` — auto-resolve add/add conflicts using branch version; `aom merge check` detect this pattern and suggest the flag |
+
+#### What Worked Well (no fix needed)
+
+- `aom doctor` — clear environment diagnosis from the start
+- `aom worktree commit` — essential workaround for NTFS, works correctly
+- `aom session spawn` output — model, worktree path, native session ID all visible
+- `aom merge check` — Green/Yellow/Red score is useful and accurate
+- `aom task link --blocked-by` — dependency chain worked correctly
+- `aom task accept` / `aom capture` / session resume — all functioned as designed
+- Policy enforcement (`--disallowed-tools`) — enforced correctly for both claude and codex
+
+#### Implementation Order (next session)
+
+1. NTFS `mkdir` error handling (`internal/project/service.go:112`) — stat-check fallback + better error message
+2. NTFS fallback instruction in agent profile template (`templates/project-init/`)
+3. `project init` generate live `on-task-done.sh` (not `.example`); `aom doctor` hook warning
+4. Model validation soft-warn at spawn (`internal/runtime/launch.go`, `internal/provider/`)
+5. `CLAUDE.md` conflict auto-resolve in `executeMergeCommit` (`internal/cli/merge_cmd.go`)
+6. `--file -` stdin support (`internal/cli/session_cmd.go`)
+7. `aom task cancel` command (`internal/cli/task_cmd.go`, `internal/task/service.go`)
+8. `--prefer-branch` flag for `aom merge commit` + `aom merge check` pattern detection
 
 ## What Is Intentionally Not Done Yet
 
