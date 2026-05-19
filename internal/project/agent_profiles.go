@@ -107,6 +107,39 @@ func AddAgentToConfig(aomPath string, params AddAgentParams) error {
 	return WriteAgentProfile(aomPath, params.Name, content)
 }
 
+// SetAgentModel updates only the model field for a named agent in agents.yaml,
+// preserving all other fields and sections. Use this instead of manually editing
+// agents.yaml to avoid accidentally removing required fields like role or runtime.
+func SetAgentModel(aomPath, agentName, model string) error {
+	agentsPath := filepath.Join(aomPath, "agents.yaml")
+	data, err := os.ReadFile(agentsPath)
+	if err != nil {
+		return fmt.Errorf("read agents.yaml: %w", err)
+	}
+
+	var cfg config.AgentsFile
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("parse agents.yaml: %w", err)
+	}
+
+	agent, ok := cfg.Agents[agentName]
+	if !ok {
+		return fmt.Errorf("agent %q not found in agents.yaml", agentName)
+	}
+
+	agent.Model = model
+	cfg.Agents[agentName] = agent
+
+	out, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return fmt.Errorf("marshal agents.yaml: %w", err)
+	}
+	if err := os.WriteFile(agentsPath, out, 0o644); err != nil {
+		return fmt.Errorf("write agents.yaml: %w", err)
+	}
+	return nil
+}
+
 // UpdateProfileSection replaces a named markdown section (## Heading) with new content.
 // Returns the updated profile string. If the section is not found, it is appended.
 func UpdateProfileSection(profile, section, newContent string) string {

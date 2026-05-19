@@ -922,6 +922,45 @@ Two targeted improvements to session operator UX:
   4. No recovery path → prints `aom session archive` hint
 - `resumeSessionNative` in `session_cmd.go`: creates a new pane using the stored `VendorSessionID`, updates session record, renames window, emits `session.resumed` log event
 
+### E2E Feedback — Fourth Round Fixes (2026-05-19)
+
+Fixes derived from live login-demo workflow with backend-main (Codex), frontend-main (Claude Haiku), and reviewer-main (Claude Haiku).
+
+#### Codex commit loop root cause fix
+
+- `session_cmd.go` commit reminder now instructs codex to run `git add -A && git commit` **synchronously in the foreground** (not in a background terminal)
+- Fallback changed from NTFS-only to **any failure**: "If that fails for ANY reason, use: `aom worktree commit <task-id>`"
+- Explicit prohibition: "Do NOT use timeout wrappers, perl alarms, or retry loops"
+- `base.md.tmpl` AGENTS.md template updated to match — expands NTFS-only fallback to all failure types
+- `artifact/service.go` task.md Success Criteria updated to reference `aom worktree commit` fallback
+
+#### DB permissions fix (P0)
+
+- `internal/db/db.go`: pre-creates `sessions.db` with `0o664` permissions before `sql.Open`
+- Previously created by the SQLite driver with default `0o644`, blocking Codex sandbox writes (`attempt to write a readonly database`)
+
+#### `aom doctor` improvements
+
+- Added **`aom in PATH`** check (warn if binary not findable by agents)
+- Improved **database** check: now tests write access with `os.OpenFile(O_WRONLY)` instead of just `os.Stat`; prints `chmod 664` fix hint when not writable
+
+#### `aom agent set-model <name> <model>`
+
+- New command that safely updates only the `model:` field in `agents.yaml` without touching other required fields (`role`, `runtime`, `enabled`)
+- Prevents accidental full-overwrite of `agents.yaml` that previously caused `unknown role ""` errors
+- Validates model slug against provider's known list and warns with ChatGPT-vs-API distinction for codex
+- `internal/project/agent_profiles.go`: new `SetAgentModel(aomPath, agentName, model)` function
+
+#### Codex model slug warning clarity
+
+- `internal/provider/codex.go` `ModelHint()`: explicitly notes that `gpt-4.x` series (gpt-4o, gpt-4.1, gpt-4.1-mini) requires an **OpenAI API account**, not a ChatGPT account
+
+#### Builder profile: sandbox network constraint
+
+- `profiles/builder.md.tmpl`: added **Sandbox Constraints** section
+- Instructs agents: if npm/pip/go install fails with a network error, write a stub, note "requires npm install post-merge" in `state.md`, and continue — do not retry in a loop
+- Also instructs agents to always `cd` to the correct subdirectory before running package manager commands
+
 ## Immediate Next Step
 
 Milestones 0–17, all E2E feedback improvements, and cross-platform polish are complete. Only deferred work remains:

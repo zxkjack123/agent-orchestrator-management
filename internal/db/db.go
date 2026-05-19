@@ -28,6 +28,16 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 
+	// Pre-create the file with group-writable permissions (0664) so that sandboxed
+	// runtimes (e.g. codex) running as a non-owner can still write to the DB.
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o664)
+		if err != nil {
+			return nil, fmt.Errorf("create database file: %w", err)
+		}
+		_ = f.Close()
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)

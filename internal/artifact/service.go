@@ -536,7 +536,8 @@ runs "aom outbox flush" to publish. Seeing "Message staged to outbox" is expecte
 - Planned steps are completed or explicitly resolved
 - Task status reflects the final operator decision
 - Relevant verification is captured before closure
-- All modified files are committed to the worktree branch before signaling completion (git add -A && git commit)
+- All modified files are committed synchronously before signaling completion:
+  run git add -A && git commit in the foreground; if it fails for any reason, use aom worktree commit <task-id>
 `,
 		params.Task.ID,
 		params.Task.Title,

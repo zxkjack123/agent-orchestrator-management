@@ -11,3 +11,11 @@
 - Never commit secrets, credentials, or environment config — use environment variables
 - Prefer explicit error handling; no silent failures or broad catch-all blocks
 - Remove dead code and unused imports before each commit
+
+## Sandbox Constraints
+- Your runtime sandbox may restrict outbound network access (e.g. codex restricts it by default)
+- If npm install / pip install / go get fails with a network error: do NOT retry in a loop
+  Instead: write stub/placeholder code, note "requires: npm install post-merge" in .agent/state.md,
+  and continue with the task — the operator will run package installation after merge
+- Always cd into the correct subdirectory before running npm/pip/go commands to avoid
+  creating stray package files at the repo root

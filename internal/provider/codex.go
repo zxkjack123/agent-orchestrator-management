@@ -165,7 +165,8 @@ func (p *codexProvider) PolicyEnforcementLevel() PolicyEnforcement { return Poli
 func (p *codexProvider) StartupDialogResponse() string { return "1" }
 
 func (p *codexProvider) ModelHint() string {
-	return "Known slugs: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.2. " +
+	return "Known slugs for ChatGPT account: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-5.2. " +
+		"Note: gpt-4.x series (gpt-4o, gpt-4.1, gpt-4.1-mini) require an OpenAI API account, not a ChatGPT account. " +
 		"Full list cached at ~/.codex/models_cache.json (auto-refreshed by codex on startup)."
 }
 

@@ -13,7 +13,7 @@ import (
 
 func (r Runner) executeAgent(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("agent subcommand is required: list, add, show, profile")
+		return fmt.Errorf("agent subcommand is required: list, add, show, profile, set-model")
 	}
 	switch args[0] {
 	case "list":
@@ -24,6 +24,8 @@ func (r Runner) executeAgent(args []string) error {
 		return r.executeAgentShow(args[1:])
 	case "profile":
 		return r.executeAgentProfile(args[1:])
+	case "set-model":
+		return r.executeAgentSetModel(args[1:])
 	default:
 		return fmt.Errorf("unknown agent subcommand %q", args[0])
 	}
@@ -308,6 +310,56 @@ func (r Runner) executeAgentProfileUpdate(args []string) error {
 	if constraints != "" {
 		fmt.Fprintln(r.stdout, "Constraints: updated")
 	}
+	return nil
+}
+
+func (r Runner) executeAgentSetModel(args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: aom agent set-model <agent-name> <model>")
+	}
+	name := strings.TrimSpace(args[0])
+	model := strings.TrimSpace(args[1])
+	if name == "" {
+		return fmt.Errorf("agent name is required")
+	}
+	if model == "" {
+		return fmt.Errorf("model is required")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	var found *agent.Record
+	for i := range result.Agents {
+		if result.Agents[i].Name == name {
+			found = &result.Agents[i]
+			break
+		}
+	}
+	if found == nil {
+		return fmt.Errorf("agent %q not found", name)
+	}
+
+	p := provider.DefaultRegistry().Lookup(found.Runtime)
+	known := p.KnownModels()
+	if len(known) > 0 && !sliceContains(known, model) {
+		fmt.Fprintf(r.stderr, "Warning: model %q is not in the known model list for %s — verify the slug is correct (%s)\n",
+			model, found.Runtime, p.ModelHint())
+	}
+
+	if err := project.SetAgentModel(result.AOMPath, name, model); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.stdout, "Model updated")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Agent:   %s\n", name)
+	fmt.Fprintf(r.stdout, "Runtime: %s\n", found.Runtime)
+	fmt.Fprintf(r.stdout, "Model:   %s\n", model)
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintln(r.stdout, "Next: aom session spawn "+name+" (to apply on next session)")
 	return nil
 }
 

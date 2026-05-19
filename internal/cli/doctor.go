@@ -54,6 +54,20 @@ func (r Runner) executeDoctor(args []string) error {
 		})
 	}
 
+	if aomPath, err := exec.LookPath("aom"); err != nil {
+		results = append(results, doctorResult{
+			label:   "aom in PATH",
+			detail:  "not found — agents cannot run \"aom\" commands; add the binary to your PATH or symlink to /usr/local/bin/aom",
+			warning: true,
+		})
+	} else {
+		results = append(results, doctorResult{
+			label:  "aom in PATH",
+			detail: aomPath,
+			ok:     true,
+		})
+	}
+
 	if globalOnly {
 		// Check all 4 known provider runtimes in PATH.
 		for _, rt := range []string{"claude", "codex", "gemini", "kiro"} {
@@ -215,11 +229,21 @@ func (r Runner) executeDoctor(args []string) error {
 				warning: true,
 			})
 		} else {
-			results = append(results, doctorResult{
-				label:  "database",
-				detail: "sessions.db present",
-				ok:     true,
-			})
+			f, werr := os.OpenFile(dbPath, os.O_WRONLY, 0)
+			if werr != nil {
+				results = append(results, doctorResult{
+					label:   "database",
+					detail:  fmt.Sprintf("sessions.db not writable — agent sandbox commands will fail (fix: chmod 664 %s)", dbPath),
+					warning: true,
+				})
+			} else {
+				_ = f.Close()
+				results = append(results, doctorResult{
+					label:  "database",
+					detail: "sessions.db present and writable",
+					ok:     true,
+				})
+			}
 		}
 	}
 

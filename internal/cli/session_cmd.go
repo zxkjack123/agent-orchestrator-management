@@ -358,8 +358,12 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 	// startup dialog loop to avoid interfering with the "1" response keys.
 	if record.Runtime == "codex" && params.taskID != "" && params.launchMode == aomruntime.LaunchModeReal {
 		commitReminder := fmt.Sprintf(
-			"IMPORTANT: when you have finished all work for this task, run: git add -A && git commit -m \"implement %s\" — then append task.completed to .agent/log.md",
-			params.taskID,
+			"IMPORTANT: when finished, commit synchronously in the foreground (NOT in a background terminal):\n"+
+				"  git add -A && git commit -m \"implement %s\"\n"+
+				"  If that fails for ANY reason, use: aom worktree commit %s -m \"implement %s\"\n"+
+				"  Do NOT use timeout wrappers, perl alarms, or retry loops — use aom worktree commit instead.\n"+
+				"Then append task.completed to .agent/log.md",
+			params.taskID, params.taskID, params.taskID,
 		)
 		_ = r.app.Tmux.SendKeys(record.TmuxPane, commitReminder)
 	}

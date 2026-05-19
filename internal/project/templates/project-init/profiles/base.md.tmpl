@@ -18,9 +18,11 @@
 - Create checkpoints every ~30 minutes or after significant milestones
 
 ### Completing work
-1. git add -A && git commit -m "..."  (always commit before signaling)
-   If git commit fails with "index.lock: Read-only file system" (NTFS/WSL2 mount),
+1. Run synchronously in the foreground (NOT in a background terminal):
+   git add -A && git commit -m "..."
+   If git commit fails for ANY reason (index.lock, timeout, permission, NTFS/WSL2):
    use instead: aom worktree commit <task-id> -m "your message"
+   Do NOT use timeout wrappers (timeout, gtimeout, perl alarm) or retry loops — use aom worktree commit.
 2. Choose the right signal:
    - Task fully done → append event "task.completed" to .agent/log.md
    - Handing off to another agent → append event "handoff.prepared" to .agent/log.md
