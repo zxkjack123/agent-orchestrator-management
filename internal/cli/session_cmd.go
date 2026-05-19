@@ -12,6 +12,7 @@ import (
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 	aomruntime "github.com/lattapon-aek/agents-orchestrator-management-private/internal/runtime"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/session"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
@@ -134,6 +135,24 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		return nil, err
 	}
 	defer sqlDB.Close()
+
+	// Guard: refuse if agent already has an active session for the same task to prevent
+	// RAM/process pile-up when operators accidentally spawn twice.
+	// Skip sessions being replaced (ignoreSessionID) — those are intentional handoffs.
+	if params.taskID != "" {
+		existing, checkErr := sessionService.ActiveByAgent(result.Project.ID, agentRecord.Name)
+		if checkErr != nil {
+			return nil, fmt.Errorf("check active sessions: %w", checkErr)
+		}
+		for _, s := range existing {
+			if s.TaskID == params.taskID && s.ID != params.ignoreSessionID {
+				return nil, fmt.Errorf(
+					"agent %q already has an active session %s (status: %s) for this task\nstop it first:  aom session stop %s",
+					agentRecord.Name, s.ID, s.Status, s.ID,
+				)
+			}
+		}
+	}
 
 	record, err := sessionService.Create(session.CreateParams{
 		ProjectID:       result.Project.ID,
@@ -644,6 +663,13 @@ func (r Runner) stopSessionRecord(result *project.OpenResult, record session.Rec
 		}
 	}
 
+	// Clean up any policy-wrapper processes and /tmp artefacts left behind by
+	// codex's PATH-based enforcement. Safe to call for all runtimes: the
+	// function is a no-op when the session's policy directory does not exist.
+	if err := provider.CleanupSession(record.ID); err != nil && warning == "" {
+		warning = fmt.Sprintf("policy dir cleanup warning: %v", err)
+	}
+
 	stopped, err := sessionService.Stop(record)
 	if err != nil {
 		return nil, warning, err
@@ -687,6 +713,11 @@ func (r Runner) archiveSessionRecord(result *project.OpenResult, record session.
 		return nil, err
 	}
 	defer sqlDB.Close()
+
+	// Defensive cleanup: remove any remaining /tmp artefacts. The policy dir
+	// was already removed by stopSessionRecord in most paths, but archive can
+	// be called directly so we clean up here too.
+	_ = provider.CleanupSession(record.ID)
 
 	archived, err := sessionService.Archive(record)
 	if err != nil {
@@ -1322,5 +1353,89 @@ func (r Runner) executeSessionSend(args []string) error {
 	fmt.Fprintf(r.stdout, "Session: %s\n", sessionRecord.ID)
 	fmt.Fprintf(r.stdout, "Pane: %s\n", sessionRecord.TmuxPane)
 	fmt.Fprintf(r.stdout, "Message: %s\n", message)
+	return nil
+}
+
+// executeSessionCleanup scans /tmp for stale aom-policy-* directories and
+// capture state files whose sessions are no longer active, terminates any
+// lingering wrapper processes, and removes the directories. Accepts an
+// optional --stale flag (default behaviour) and --dry-run to report without
+// removing anything.
+func (r Runner) executeSessionCleanup(args []string) error {
+	dryRun := false
+	for _, arg := range args {
+		switch arg {
+		case "--stale":
+			// default — accepted for script friendliness
+		case "--dry-run":
+			dryRun = true
+		default:
+			return fmt.Errorf("unknown flag %q (usage: aom session cleanup [--stale] [--dry-run])", arg)
+		}
+	}
+
+	// Determine which sessions are still active (live pane or non-terminal status).
+	activeIDs := make(map[string]bool)
+	if result, err := r.app.Projects.Open("."); err == nil {
+		if sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath); err == nil {
+			defer sqlDB.Close()
+			if sessions, err := sessionService.ListByProject(result.Project.ID); err == nil {
+				for _, s := range sessions {
+					switch s.Status {
+					case "Booting", "Idle", "Working", "WaitingApproval", "WaitingHandoff", "Blocked", "NeedsAttention":
+						activeIDs[s.ID] = true
+					}
+				}
+			}
+		}
+	}
+
+	staleDirs, err := provider.ScanStalePolicyDirs(activeIDs)
+	if err != nil {
+		return fmt.Errorf("scan stale policy dirs: %w", err)
+	}
+
+	if len(staleDirs) == 0 {
+		fmt.Fprintln(r.stdout, "Session cleanup")
+		fmt.Fprintln(r.stdout, "")
+		fmt.Fprintln(r.stdout, "No stale policy dirs found.")
+		return nil
+	}
+
+	fmt.Fprintln(r.stdout, "Session cleanup")
+	fmt.Fprintln(r.stdout, "")
+	if dryRun {
+		fmt.Fprintf(r.stdout, "Dry run — %d stale policy dir(s) would be removed:\n", len(staleDirs))
+	} else {
+		fmt.Fprintf(r.stdout, "Removing %d stale policy dir(s):\n", len(staleDirs))
+	}
+	fmt.Fprintln(r.stdout, "")
+
+	cleaned, failed := 0, 0
+	for _, dir := range staleDirs {
+		if dryRun {
+			fmt.Fprintf(r.stdout, "  would remove: %s\n", dir)
+			cleaned++
+			continue
+		}
+		if cleanErr := provider.CleanupStaleDir(dir); cleanErr != nil {
+			fmt.Fprintf(r.stdout, "  failed: %s (%v)\n", dir, cleanErr)
+			failed++
+		} else {
+			fmt.Fprintf(r.stdout, "  removed: %s\n", dir)
+			cleaned++
+		}
+	}
+
+	fmt.Fprintln(r.stdout, "")
+	if dryRun {
+		fmt.Fprintf(r.stdout, "Dry run complete: %d dir(s) identified\n", cleaned)
+		fmt.Fprintln(r.stdout, "Run without --dry-run to remove them.")
+	} else {
+		fmt.Fprintf(r.stdout, "Cleaned: %d  Failed: %d\n", cleaned, failed)
+		if failed > 0 {
+			return fmt.Errorf("session cleanup: %d dir(s) could not be removed", failed)
+		}
+	}
 	return nil
 }

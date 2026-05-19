@@ -185,6 +185,12 @@ func (s *Service) Stop(record Record) (*Record, error) {
 	return s.Save(record)
 }
 
+// ActiveByAgent returns non-terminal sessions for a specific agent, used to detect
+// duplicate spawns before a new session is created.
+func (s *Service) ActiveByAgent(projectID, agentName string) ([]Record, error) {
+	return s.repo.ActiveByAgent(projectID, agentName)
+}
+
 // IsVendorSessionIDActive returns true when the native CLI session ID is already
 // registered to a live session in the project, preventing duplicate assignment
 // when two sessions are spawned close together.

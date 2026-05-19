@@ -11,6 +11,7 @@ import (
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/plan"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/session"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
@@ -298,7 +299,18 @@ func (r Runner) reconcileSessionRecord(sessionService *session.Service, record s
 		return nil, err
 	}
 
-	return sessionService.ReconcileBinding(record, paneExists)
+	updated, err := sessionService.ReconcileBinding(record, paneExists)
+	if err != nil {
+		return nil, err
+	}
+
+	// When a session's pane just disappeared, kill any lingering agent processes
+	// (claude/codex may survive a kill-pane if they ignore HUP or run in a sub-shell).
+	if record.Status != "Detached" && updated.Status == "Detached" {
+		_ = provider.CleanupSession(updated.ID)
+	}
+
+	return updated, nil
 }
 
 func (r Runner) loadTaskCount(result *project.OpenResult) (int, error) {

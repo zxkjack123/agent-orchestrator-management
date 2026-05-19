@@ -190,6 +190,56 @@ ORDER BY created_at, id
 	return records, nil
 }
 
+// ActiveByAgent returns non-terminal sessions for a specific agent within the project,
+// ordered by creation time. Used to detect duplicate spawns before starting a new session.
+func (r *Repository) ActiveByAgent(projectID, agentName string) ([]Record, error) {
+	if projectID == "" || agentName == "" {
+		return nil, nil
+	}
+	rows, err := r.db.Query(`
+SELECT
+	id,
+	project_id,
+	COALESCE(agent_id, ''),
+	agent_name,
+	role_name,
+	COALESCE(task_id, ''),
+	runtime,
+	model,
+	status,
+	repo_path,
+	worktree_path,
+	tmux_session_name,
+	tmux_window,
+	tmux_pane,
+	vendor_session_id,
+	last_seen_at,
+	created_at,
+	updated_at
+FROM sessions
+WHERE project_id = ? AND agent_name = ?
+  AND status NOT IN ('Stopped', 'Failed', 'Archived', 'Detached')
+ORDER BY created_at, id
+`, projectID, agentName)
+	if err != nil {
+		return nil, fmt.Errorf("list active sessions for agent %q: %w", agentName, err)
+	}
+	defer rows.Close()
+
+	var records []Record
+	for rows.Next() {
+		record, err := scanRecord(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan session row: %w", err)
+		}
+		records = append(records, *record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session rows: %w", err)
+	}
+	return records, nil
+}
+
 // IsVendorSessionIDActive returns true when the given native CLI session ID is
 // already registered to a live (non-terminal) session within the project.
 // Used during detection to skip session files that belong to a sibling session.

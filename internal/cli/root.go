@@ -34,7 +34,6 @@ func Execute(args []string, stdout, stderr io.Writer) error {
 		isTTY:    isTTYReader,
 		registry: provider.DefaultRegistry(),
 	}
-
 	return r.Execute(args)
 }
 
@@ -211,6 +210,8 @@ func (r Runner) executeSession(args []string) error {
 		return r.executeSessionWait(args[1:])
 	case "health":
 		return r.executeSessionHealth(args[1:])
+	case "cleanup":
+		return r.executeSessionCleanup(args[1:])
 	default:
 		return fmt.Errorf("unknown session command %q", strings.Join(args, " "))
 	}
@@ -376,6 +377,7 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom session replace <session-id> --agent <agent> --reason <why> [--mock|--real] : spawn a replacement in the same context")
 	fmt.Fprintln(r.stdout, "aom session set-agent-id <session-id> <native-id> : register the agent CLI's own session ID for resume on next spawn")
 	fmt.Fprintln(r.stdout, "aom session wait <session-id> --event <type> [--timeout 30m] : block until event appears in task log (e.g. handoff.prepared, task.completed)")
+	fmt.Fprintln(r.stdout, "aom session cleanup --stale [--dry-run] : remove orphan policy wrapper dirs and capture state files for inactive sessions")
 	fmt.Fprintln(r.stdout, "aom task reanalyze <task-id> : refresh task artifacts from current state and print recommended next action")
 	fmt.Fprintln(r.stdout, "aom capture <session-id> : read worker output through AOM")
 	fmt.Fprintln(r.stdout, "aom attach <session-id> : attach manually and log operator intervention")

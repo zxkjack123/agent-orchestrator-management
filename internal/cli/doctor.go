@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 )
 
 type doctorResult struct {
@@ -253,6 +254,47 @@ func (r Runner) executeDoctor(args []string) error {
 						ok:     true,
 					})
 				}
+			}
+		}
+	}
+
+	// ── Stale policy dirs + session count ────────────────────────────────────
+	if cfg != nil && dbPath != "" {
+		sessService, sessDB, sessErr := r.app.OpenSessionService(dbPath)
+		if sessErr == nil {
+			defer sessDB.Close()
+			activeIDs := make(map[string]bool)
+			if sessions, listErr := sessService.ListByProject(sanitizeProjectID(cfg.Project.Name)); listErr == nil {
+				for _, s := range sessions {
+					switch s.Status {
+					case "Booting", "Idle", "Working", "WaitingApproval", "WaitingHandoff", "Blocked", "NeedsAttention":
+						activeIDs[s.ID] = true
+					}
+				}
+			}
+			if staleDirs, scanErr := provider.ScanStalePolicyDirs(activeIDs); scanErr == nil && len(staleDirs) > 0 {
+				results = append(results, doctorResult{
+					label:   "policy-dirs",
+					detail:  fmt.Sprintf("%d stale policy dir(s) in /tmp — run \"aom session cleanup --stale\" to remove", len(staleDirs)),
+					warning: true,
+				})
+			}
+
+			// Warn when active sessions outnumber enabled agents — a sign that orphan
+			// sessions are accumulating and consuming RAM/CPU unnecessarily.
+			enabledAgents := 0
+			for _, a := range cfg.Agents.Agents {
+				if a.Enabled {
+					enabledAgents++
+				}
+			}
+			activeSessCount := len(activeIDs)
+			if enabledAgents > 0 && activeSessCount > enabledAgents {
+				results = append(results, doctorResult{
+					label:   "session-count",
+					detail:  fmt.Sprintf("%d active session(s) for %d enabled agent(s) — possible orphans; run \"aom session list\" then \"aom session stop <id>\" for any unneeded sessions", activeSessCount, enabledAgents),
+					warning: true,
+				})
 			}
 		}
 	}
