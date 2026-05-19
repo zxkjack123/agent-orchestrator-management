@@ -19,8 +19,7 @@
 
 ### Completing work
 1. git add -A && git commit -m "..."  (always commit before signaling)
-   If git commit fails with "index.lock: Read-only file system" (NTFS/WSL2):
-   use: aom worktree commit <task-id> -m "your message"
+   If git commit fails, use: aom worktree commit <task-id> -m "your message"
 2. Choose the right signal:
    - Task fully done → append event "task.completed" to .agent/log.md
    - Handing off to another agent → append event "handoff.prepared" to .agent/log.md

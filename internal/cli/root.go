@@ -405,7 +405,7 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "Worktree")
 	fmt.Fprintln(r.stdout, "aom worktree repair <task-id> : repair a missing or stale task worktree")
 	fmt.Fprintln(r.stdout, "aom worktree read-file <task-id> <path> : read a file from another task's worktree (cross-worktree read)")
-	fmt.Fprintln(r.stdout, "aom worktree commit <task-id> -m <msg> : stage all changes and commit using explicit GIT_DIR (WSL2/NTFS safe)")
+	fmt.Fprintln(r.stdout, "aom worktree commit <task-id> -m <msg> : stage all changes and commit using explicit GIT_DIR")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Hooks (automation)")
 	fmt.Fprintln(r.stdout, ".aom/hooks/on-task-done.sh     — called when a task is closed or accepted; args: task_id task_title status")

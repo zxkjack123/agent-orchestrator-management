@@ -112,16 +112,10 @@ func (s *Service) Init(params InitParams) (*InitResult, error) {
 
 	aomPath := filepath.Join(repoAbsPath, aomDirName)
 	if err := os.MkdirAll(aomPath, 0o755); err != nil {
-		// On NTFS mounts (WSL2) MkdirAll can return an error even when the
-		// directory was created successfully. Accept the error if the path exists.
+		// MkdirAll can return an error even when the directory was created
+		// successfully on some filesystems. Accept the error if the path exists.
 		if fi, statErr := os.Stat(aomPath); statErr != nil || !fi.IsDir() {
-			return nil, fmt.Errorf(
-				"create .aom directory: %w\n"+
-					"NTFS/WSL2 fix: pre-create the directory from PowerShell then retry:\n"+
-					"  powershell.exe -Command \"New-Item -ItemType Directory -Path '.aom' -Force\"\n"+
-					"Or move the repo to a Linux ext4 filesystem to avoid NTFS issues entirely.",
-				err,
-			)
+			return nil, fmt.Errorf("create .aom directory: %w", err)
 		}
 	}
 

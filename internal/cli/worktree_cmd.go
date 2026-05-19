@@ -128,8 +128,8 @@ func (r Runner) executeWorktreeReadFile(args []string) error {
 }
 
 // executeWorktreeCommit stages and commits all changes in a task worktree using
-// explicit GIT_DIR and GIT_WORK_TREE env vars. On WSL2/NTFS the gitdir pointer
-// inside a worktree often fails to resolve; this bypasses that issue entirely.
+// explicit GIT_DIR and GIT_WORK_TREE env vars, bypassing the .git pointer file
+// so the commit works correctly regardless of how the worktree was provisioned.
 func (r Runner) executeWorktreeCommit(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("task identifier is required")
@@ -196,7 +196,7 @@ func (r Runner) executeWorktreeCommit(args []string) error {
 	addCmd.Dir = wtPath
 	if out, addErr := addCmd.CombinedOutput(); addErr != nil {
 		if addCtx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("git add timed out after %s (NTFS/WSL2 may be causing git to hang — use aom worktree commit from the Linux side)", gitTimeout)
+			return fmt.Errorf("git add timed out after %s", gitTimeout)
 		}
 		return fmt.Errorf("git add: %w\n%s", addErr, strings.TrimSpace(string(out)))
 	}
@@ -209,7 +209,7 @@ func (r Runner) executeWorktreeCommit(args []string) error {
 	out, err := commitCmd.CombinedOutput()
 	if err != nil {
 		if commitCtx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("git commit timed out after %s (NTFS/WSL2 may be causing git to hang — use aom worktree commit from the Linux side)", gitTimeout)
+			return fmt.Errorf("git commit timed out after %s", gitTimeout)
 		}
 		return fmt.Errorf("git commit: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
@@ -218,8 +218,8 @@ func (r Runner) executeWorktreeCommit(args []string) error {
 }
 
 // resolveWorktreeGitDir finds the GIT_DIR for a git worktree. It first reads
-// the .git pointer file in the worktree; if that fails (WSL2/NTFS issue), it
-// scans .git/worktrees/ for a matching gitdir entry.
+// the .git pointer file in the worktree; if that fails it falls back to
+// scanning .git/worktrees/ for a matching gitdir entry.
 func resolveWorktreeGitDir(repoPath, worktreePath string) (string, error) {
 	gitFile := filepath.Join(worktreePath, ".git")
 	data, err := os.ReadFile(gitFile)
