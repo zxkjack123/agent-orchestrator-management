@@ -177,6 +177,9 @@ func (s *Service) Stop(record Record) (*Record, error) {
 	if strings.TrimSpace(record.ID) == "" {
 		return nil, fmt.Errorf("session id is required")
 	}
+	if record.Status == "Stopped" {
+		return &record, nil
+	}
 	if !canStop(record.Status) {
 		return nil, fmt.Errorf("session %q cannot transition from %s to Stopped", record.ID, record.Status)
 	}

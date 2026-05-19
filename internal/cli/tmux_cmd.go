@@ -199,6 +199,7 @@ func (r Runner) executeBroadcast(args []string) error {
 
 	var sessionIDs []string
 	var msgParts []string
+	var filePath string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--sessions":
@@ -211,14 +212,33 @@ func (r Runner) executeBroadcast(args []string) error {
 					sessionIDs = append(sessionIDs, trimmed)
 				}
 			}
+		case "--file":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--file requires a path")
+			}
+			filePath = args[i]
 		default:
 			msgParts = append(msgParts, args[i])
 		}
 	}
 
-	message := strings.TrimSpace(strings.Join(msgParts, " "))
+	var message string
+	if filePath != "" {
+		if len(msgParts) > 0 {
+			return fmt.Errorf("--file and inline message are mutually exclusive")
+		}
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("read --file %q: %w", filePath, err)
+		}
+		message = strings.TrimSpace(string(data))
+	} else {
+		message = strings.TrimSpace(strings.Join(msgParts, " "))
+	}
+
 	if message == "" {
-		return fmt.Errorf("message is required")
+		return fmt.Errorf("message is required (use --file <path> or pass message directly)")
 	}
 	if len(sessionIDs) == 0 {
 		return fmt.Errorf("--sessions is required (e.g. --sessions SESS-001,SESS-002)")

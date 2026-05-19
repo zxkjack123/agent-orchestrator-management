@@ -271,7 +271,7 @@ func writeCodexMCPConfig(agentName string, servers []config.ResolvedMCPServer, w
 	}
 
 	dir := filepath.Join(worktreePath, ".codex")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureDir(dir); err != nil {
 		return fmt.Errorf("create .codex dir for agent %q: %w", agentName, err)
 	}
 	dst := filepath.Join(dir, "mcp.json")
@@ -320,7 +320,7 @@ func (s *Service) RefreshTaskArtifacts(params SyncParams) error {
 // If an existing file belongs to a different task (stale content), it is overwritten.
 func (s *Service) EnsureReviewNotesTemplate(params SyncParams, reviewer, sessionID string) error {
 	dir := s.taskDir(params)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureDir(dir); err != nil {
 		return fmt.Errorf("create artifact dir %q: %w", dir, err)
 	}
 
@@ -357,7 +357,7 @@ func reviewNotesTaskID(content string) string {
 // EnsureHandoffTemplate creates a structured handoff.md template for one task-bound session.
 func (s *Service) EnsureHandoffTemplate(params SyncParams, activeSession session.Record) error {
 	dir := s.taskDir(params)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureDir(dir); err != nil {
 		return fmt.Errorf("create artifact dir %q: %w", dir, err)
 	}
 
@@ -399,7 +399,7 @@ func (s *Service) writeArtifacts(params SyncParams) error {
 	}
 
 	dir := s.taskDir(params)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureDir(dir); err != nil {
 		return fmt.Errorf("create artifact dir %q: %w", dir, err)
 	}
 
@@ -973,7 +973,7 @@ func (s *Service) ensureLogFile(params SyncParams) error {
 		return fmt.Errorf("stat log.md: %w", err)
 	}
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureDir(dir); err != nil {
 		return fmt.Errorf("create artifact dir %q: %w", dir, err)
 	}
 	if err := os.WriteFile(path, []byte("# Task Log\n\n## Events\n"), 0o644); err != nil {
@@ -1240,7 +1240,7 @@ type MergePlanOverlap struct {
 // WriteMergePlan writes merge-plan.md into the task's canonical artifact root.
 func (s *Service) WriteMergePlan(params SyncParams, plan MergePlanParams) error {
 	dir := s.taskDir(params)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := ensureDir(dir); err != nil {
 		return fmt.Errorf("create artifact dir: %w", err)
 	}
 
@@ -1313,7 +1313,7 @@ type TeamBriefParams struct {
 // GenerateTeamBrief writes .aom/team-brief.md and returns its path.
 func (s *Service) GenerateTeamBrief(params TeamBriefParams) (string, error) {
 	path := filepath.Join(s.repoPath, ".aom", "team-brief.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := ensureDir(filepath.Dir(path)); err != nil {
 		return "", fmt.Errorf("create team brief dir: %w", err)
 	}
 
@@ -1391,11 +1391,20 @@ func (s *Service) renderTeamBriefMarkdown(params TeamBriefParams) string {
 	return b.String()
 }
 
+// ensureDir creates the directory and forces 0755 permissions regardless of umask.
+// Directories in worktrees need execute bits so agents can cd into them and write files.
+func ensureDir(path string) error {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o755)
+}
+
 // WriteProjectBoard writes .aom/project-board.md with a snapshot of all project tasks.
 // Agents can read this file to understand team-wide task state.
 func (s *Service) WriteProjectBoard(projectName string, tasks []TeamBriefTask) (string, error) {
 	path := filepath.Join(s.repoPath, ".aom", "project-board.md")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := ensureDir(filepath.Dir(path)); err != nil {
 		return "", fmt.Errorf("create project board dir: %w", err)
 	}
 

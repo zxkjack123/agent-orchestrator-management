@@ -96,6 +96,8 @@ func (r Runner) Execute(args []string) error {
 		return r.executeResumeAll(args[1:])
 	case "next":
 		return r.executeNext(args[1:])
+	case "policy":
+		return r.executePolicy(args[1:])
 	case "outbox":
 		return r.executeOutbox(args[1:])
 	case "team":
@@ -393,7 +395,8 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "Team collaboration")
 	fmt.Fprintln(r.stdout, "aom watch [--task <task-id>] [--event <type>] [--timeout 30m] : stream log events across all active tasks (or one task with --task)")
 
-	fmt.Fprintln(r.stdout, "aom broadcast \"<message>\" --sessions <id,id,...> : deliver the same prompt to multiple sessions at once")
+	fmt.Fprintln(r.stdout, "aom broadcast \"<message>\" --sessions <id,id,...> [--file <path>] : deliver the same prompt to multiple sessions at once")
+	fmt.Fprintln(r.stdout, "aom policy list [--task <task-id>] : show project deny_commands and enforcement level; add --task to see per-task agent enforcement")
 	fmt.Fprintln(r.stdout, "aom channel append \"<message>\" [--agent <name>] : append a message to the shared .aom/channel.md")
 	fmt.Fprintln(r.stdout, "aom channel read : print current shared channel contents")
 	fmt.Fprintln(r.stdout, "aom message send <agent-name> \"<message>\" [--from <sender>] : write a direct message to an agent's mailbox")

@@ -1022,6 +1022,10 @@ func TestExecuteSessionSpawnRejectsConflictingLaunchFlags(t *testing.T) {
 
 func TestExecuteSessionSpawnWithTaskRefreshesArtifacts(t *testing.T) {
 	repoRoot := t.TempDir()
+	// Resolve symlinks so path comparisons work on macOS (/var → /private/var).
+	if resolved, err := filepath.EvalSymlinks(repoRoot); err == nil {
+		repoRoot = resolved
+	}
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd failed: %v", err)

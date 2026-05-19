@@ -267,8 +267,13 @@ func (r Runner) executeWatchAllTasks(result *project.OpenResult, eventType strin
 	}
 
 	if len(entries) == 0 {
-		fmt.Fprintln(r.stdout, "No active tasks to watch.")
-		return nil
+		fmt.Fprintf(r.stdout, "No active tasks found. Polling until tasks become active (timeout %s)...\n\n", watchTimeout)
+		entries = r.waitForActiveTasks(result, watchTimeout)
+		if len(entries) == 0 {
+			fmt.Fprintln(r.stdout, "No active tasks appeared within timeout.")
+			return nil
+		}
+		fmt.Fprintf(r.stdout, "%d active task(s) detected. Starting stream...\n\n", len(entries))
 	}
 
 	if eventType != "" {
@@ -305,6 +310,51 @@ func (r Runner) executeWatchAllTasks(result *project.OpenResult, eventType strin
 	return tailMultiTaskLogEvents(r.stdout, entries, watchTimeout)
 }
 
+// waitForActiveTasks polls every 5 seconds until at least one active task is found or
+// the timeout elapses. Returns the entries slice (may be empty on timeout).
+func (r Runner) waitForActiveTasks(result *project.OpenResult, timeout time.Duration) []taskLogEntry {
+	activeStatuses := map[string]bool{
+		"InProgress":     true,
+		"Blocked":        true,
+		"NeedsAttention": true,
+		"Ready":          true,
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(5 * time.Second)
+
+		taskService, taskDB, err := r.app.OpenTaskService(result.DBPath)
+		if err != nil {
+			continue
+		}
+		allTasks, err := taskService.ListByProject(result.Project.ID)
+		taskDB.Close()
+		if err != nil {
+			continue
+		}
+
+		worktreeService, worktreeDB, err := r.app.OpenWorktreeService(result.DBPath)
+		if err != nil {
+			continue
+		}
+		var entries []taskLogEntry
+		for _, t := range allTasks {
+			if !activeStatuses[t.Status] {
+				continue
+			}
+			mapping, _ := worktreeService.GetByTask(t.ID)
+			logPath := taskArtifactLogPath(result.Project.RepoPath, result.StateDir, t.ID, mapping)
+			entries = append(entries, taskLogEntry{TaskID: t.ID, LogPath: logPath})
+		}
+		worktreeDB.Close()
+
+		if len(entries) > 0 {
+			return entries
+		}
+	}
+	return nil
+}
 
 // ── M14: task request / team brief ──────────────────────────────────────────
 

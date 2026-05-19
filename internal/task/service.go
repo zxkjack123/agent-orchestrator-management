@@ -286,7 +286,44 @@ func (s *Service) Update(id string, params UpdateParams) (*Record, error) {
 		return nil, err
 	}
 
+	if next.Status == "Done" && record.Status != "Done" {
+		s.promoteUnblockedDependents(next.ID)
+	}
+
 	return s.repo.GetByID(next.ID)
+}
+
+// promoteUnblockedDependents transitions any Planned tasks whose every blocker is now
+// Done or Archived to the Ready state. Errors are silently ignored so a Done transition
+// never fails due to a dependent-promotion issue.
+func (s *Service) promoteUnblockedDependents(doneTaskID string) {
+	dependentIDs, err := s.repo.UnblocksIDs(doneTaskID)
+	if err != nil {
+		return
+	}
+	for _, depID := range dependentIDs {
+		dep, err := s.repo.GetByID(depID)
+		if err != nil || dep == nil || dep.Status != "Planned" {
+			continue
+		}
+		blockerIDs, err := s.repo.BlockedByIDs(depID)
+		if err != nil {
+			continue
+		}
+		allDone := true
+		for _, bID := range blockerIDs {
+			b, err := s.repo.GetByID(bID)
+			if err != nil || b == nil || (b.Status != "Done" && b.Status != "Archived") {
+				allDone = false
+				break
+			}
+		}
+		if allDone {
+			next := *dep
+			next.Status = "Ready"
+			_ = s.repo.Upsert(next)
+		}
+	}
 }
 
 // Close explicitly marks a task Done when allowed by the state machine.

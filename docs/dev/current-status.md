@@ -354,9 +354,10 @@ Implemented commands:
 - `aom review close`
 - `aom session rebind`
 - `aom project resources`
-- `aom doctor`
+- `aom doctor [--fix]`
 - `aom runtime list`
 - `aom runtime inspect`
+- `aom policy list [--task <task-id>]`
 
 Current behavior notes:
 - `open` ensures tmux workspace and fails clearly when tmux is unavailable
@@ -960,6 +961,56 @@ Fixes derived from live login-demo workflow with backend-main (Codex), frontend-
 - `profiles/builder.md.tmpl`: added **Sandbox Constraints** section
 - Instructs agents: if npm/pip/go install fails with a network error, write a stub, note "requires npm install post-merge" in `state.md`, and continue — do not retry in a loop
 - Also instructs agents to always `cd` to the correct subdirectory before running package manager commands
+
+### E2E Feedback — Fifth Round Fixes (2026-05-19)
+
+Fixes derived from live login-demo workflow (AOM-FEEDBACK.md — second full E2E run with backend-main/Codex, frontend-main/Claude Haiku, reviewer-main/Claude Haiku).
+
+#### P1 — `.agent/` directory permission fix
+
+- `internal/artifact/service.go`: new `ensureDir(path)` helper that calls `os.MkdirAll` then `os.Chmod(0755)` — forces execute bits regardless of process umask
+- All `os.MkdirAll(dir, 0o755)` call sites in the artifact service replaced with `ensureDir(dir)` (covers `.agent/`, `.codex/`, `.aom/team-brief.md`, `.aom/project-board.md`)
+- **Root cause**: `os.MkdirAll` respects the caller's umask; a strict umask (e.g. `0113`) strips the execute bit from newly created directories, leaving `.agent/` at `drw-rw-r--` (0664) — which prevents `ls`, `cd`, or file writes inside it
+- **Effect**: `.agent/` is always created with `drwxr-xr-x` (0755); agents can write task artifacts without manual `chmod` workarounds
+
+#### P3 — `aom watch` no longer returns immediately when no active tasks
+
+- `executeWatchAllTasks` in `internal/cli/observability_cmd.go`: instead of printing "No active tasks to watch." and returning, now calls `waitForActiveTasks(result, timeout)` which polls every 5 seconds until at least one active task appears or the timeout elapses
+- New `waitForActiveTasks` helper polls task + worktree service in a loop; starts streaming as soon as active tasks are found
+- **Fix**: `aom watch --timeout 8m` launched before tasks are started now blocks and begins streaming when tasks enter InProgress/Blocked/NeedsAttention/Ready
+
+#### P5 — `aom policy list [--task <task-id>]`
+
+- New command in `internal/cli/policy_cmd.go`; wired in `internal/cli/root.go` (`case "policy"`)
+- Without `--task`: prints project-level `deny_commands` (BLOCK list), `require_approval` (GATE list), yolo mode, and approval scope
+- With `--task <id>`: additionally shows the assigned agent, its runtime, and the enforcement level (`--disallowed-tools` flag, PATH wrapper scripts, or instruction-only) so agents can see exactly what is blocked without reading `policy.yaml`
+
+#### P6 — `aom session stop` idempotent
+
+- `internal/session/service.go` `Stop()`: returns no-op (`&record, nil`) when session status is already `"Stopped"` instead of returning an error
+- **Fix**: scripts that run `stop` + `accept` in sequence no longer need error handling for the double-stop case
+
+#### P7 — Dependent tasks auto-transition to Ready when all blockers Done
+
+- `internal/task/service.go` `Update()`: after a task transitions to `Done`, calls new `promoteUnblockedDependents(taskID)` method
+- `promoteUnblockedDependents` iterates all tasks that depend on the completed task via `UnblocksIDs`; for each `Planned` dependent whose every blocker is `Done` or `Archived`, transitions it to `Ready`
+- Errors are swallowed so a Done transition never fails due to a dependent-promotion failure
+- **Fix**: review tasks (and any task with all blockers done) automatically become `Ready` without requiring a manual `aom task ready` call
+
+#### `aom doctor --fix`
+
+- `internal/cli/doctor.go`: new `--fix` flag triggers `executeDoctorFix()` instead of the diagnostic run
+- Fixes: `sessions.db` → `chmod 664`; all `.agent/` directories in `.aom/worktrees/` → `chmod 755`; all `.agent/*.md` files → `chmod 664`
+- Reports `FIXED <path> → <mode>` per item and `Fixed: N  Failed: M` summary
+
+#### `aom broadcast --file <path>`
+
+- `internal/cli/tmux_cmd.go` `executeBroadcast`: added `--file <path>` flag that reads message content from a file instead of an inline string argument
+- Mutually exclusive with inline message; enables sending detailed Markdown briefs (e.g. `aom broadcast --file .aom/team-brief.md --sessions ...`)
+
+#### macOS test fix
+
+- `internal/cli/root_test.go` `TestExecuteSessionSpawnWithTaskRefreshesArtifacts`: `filepath.EvalSymlinks(repoRoot)` applied at test start so path comparisons work correctly on macOS where `/var` is a symlink to `/private/var`
 
 ## Immediate Next Step
 
