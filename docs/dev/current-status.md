@@ -909,7 +909,7 @@ Three spec-defined gaps implemented:
 
 ## Planned Next Work
 
-Milestones 0–17 and all E2E feedback improvements are complete. The following is the verified remaining work — checked against the actual source code to confirm nothing listed here already exists. Implement groups in order (A → B → C → D).
+Milestones 0–17 and all E2E feedback improvements are complete. The following is the verified remaining work — checked against the actual source code to confirm nothing listed here already exists. Implement groups in order (A → B → C → D → E).
 
 ---
 
@@ -994,9 +994,49 @@ Milestones 0–17 and all E2E feedback improvements are complete. The following 
 
 ---
 
+### Group E — Session Reliability
+
+These items address silent failure modes and friction in the session resume path. Particularly important for AI orchestrators running unattended.
+
+#### E1. `aom session resume` — help text clarification
+
+- **File**: `internal/cli/session_cmd.go` → usage/short description of the `resume` subcommand
+- **Change**: add one line to the help text: `"rebinds an idle session to a new task — does not restart the native agent process; native conversation continues unaffected"`
+- **Why**: the name "resume" implies native session continuation to most users; the clarification prevents operators from using this command when they actually need `session spawn --real` to resume the agent context
+
+#### E2. Stale `vendor_session_id` graceful fallback
+
+- **Problem**: if Claude/Codex's own session DB no longer has the stored UUID (reinstall, new machine, expired session), AOM still passes `--resume <stale-uuid>` → the runtime silently starts a fresh context with no warning to the operator or orchestrator; the agent has no task context and the issue is invisible
+- **Detection**: after a real-mode spawn, poll `log.md` via the existing `waitForLogEvent` mechanism (`internal/cli/log_wait.go`) for a `session.ready` event within a short window (15s); if the pane exits early OR no event arrives, treat as resume failure
+- **Fallback on failure**:
+  1. Call `session.Service.SetVendorSessionID(sessionID, "")` to clear the stale ID from DB
+  2. Append `session.resume_failed` event to `log.md` (include the stale UUID for audit)
+  3. Print `[warn] native session resume failed — starting fresh; stale session ID cleared`
+  4. Spawn continues (agent is already running fresh); operator is informed
+- **Files**: `internal/cli/session_spawn_helpers.go` (post-spawn resume validation); `internal/session/repository.go` + `internal/session/service.go` (support clearing via `SetVendorSessionID` with empty string)
+
+#### E3. `aom session recover --execute` / `--dry-run`
+
+- **Problem**: `aom session recover` is diagnose-only; AI orchestrators must parse text output and run the suggested command as a second step — a 2-step pattern that breaks unattended loops
+- **File**: `internal/cli/session_cmd.go` → `executeSessionRecover`
+- **Add flags**:
+  - `--dry-run`: print what would be executed without doing it (makes current default behavior explicit)
+  - `--execute`: after diagnosis, automatically run the recommended single-path action (rebind / replace --real / spawn --real / archive); print each step before executing
+- **Safety rule**: only auto-executes when diagnosis produces exactly one unambiguous recommended action; if multiple possible actions exist or the situation is unclear, `--execute` prints the options and exits non-zero — operator must choose
+
+#### E4. Lightweight pane liveness check in `aom status`
+
+- **Problem**: `aom status` reads session state from DB without checking whether the tmux pane still exists; dead panes appear as "Working" until explicitly reconciled via `aom open` or `aom session recover`; this makes `aom status` and the planned `aom tui` (D3) show stale/misleading data
+- **File**: `internal/cli/status_format.go` (or the session list builder that feeds it)
+- **Change**: when rendering the session rows, call `tmux.Manager.PaneExists(pane)` for each non-terminal session (skip Detached / Stopped / Archived / Failed — already settled); if the pane is dead and the DB status is Working / Idle / WaitingHandoff / WaitingApproval, append `[pane dead]` in red to the session row
+- **Display-only**: do NOT write to DB from this path — state transition still requires explicit `aom session recover` or `aom open`; this is purely a visual reconciliation so the operator sees accurate data immediately
+- **Performance**: `tmux has-session -t <pane>` is a fast local check; only runs for sessions that have a `tmux_pane` binding
+
+---
+
 ## Immediate Next Step
 
-Start with **Group A** (1 targeted change in doctor.go + profile templates), then B → C → D.
+Start with **Group A** (1 targeted change in doctor.go + profile templates), then B → C → D → E.
 
 Gemini/Kiro runtime support remains deferred:
 

@@ -141,6 +141,12 @@ Defined in full in `docs/state-machine.md`. Summary:
 - `aom tui` — live-refresh terminal dashboard (2s, ANSI-only, no external lib); new `tui_cmd.go`
 - Session staleness warning — `aom status` / `aom session health` / `aom doctor` warn when Working session has no checkpoint in >4h (configurable `stale_session_hours` in `policy.yaml`)
 
+*Group E — Session reliability (new, verified missing):*
+- `aom session resume` help text: add 1-line clarification that it rebinds task assignment only, not native agent context
+- Stale `vendor_session_id` fallback: post-spawn resume validation via `waitForLogEvent`; on failure clear stale ID + log `session.resume_failed` + warn operator (`session_spawn_helpers.go`)
+- `aom session recover --execute` / `--dry-run`: auto-run single-path recovery action for AI orchestrator loops; safety: refuse `--execute` when diagnosis is ambiguous
+- Lightweight pane liveness in `aom status`: call `tmux.Manager.PaneExists` per non-terminal session at render time; show `[pane dead]` in red when pane is gone but DB shows Working/Idle; display-only, no DB writes
+
 *Deferred:*
 - gemini and kiro runtime launch (`internal/provider/gemini.go`, `internal/provider/kiro.go`) — blocked on confirmed CLI flags
 
