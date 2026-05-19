@@ -47,10 +47,12 @@ type InitParams struct {
 
 // InitResult describes project init output.
 type InitResult struct {
-	ProjectName string
-	RepoPath    string
-	AOMPath     string
-	DBPath      string
+	ProjectName      string
+	RepoPath         string
+	AOMPath          string
+	DBPath           string
+	GitInitialized   bool
+	GitInitialCommit bool
 }
 
 // OpenResult describes a reconciled project state for Milestone 1.
@@ -135,6 +137,11 @@ func (s *Service) Init(params InitParams) (*InitResult, error) {
 		return nil, err
 	}
 
+	gitInit, gitCommit, gitErr := ensureGitReady(repoAbsPath)
+	if gitErr != nil {
+		return nil, fmt.Errorf("git setup: %w", gitErr)
+	}
+
 	dbPath := filepath.Join(aomPath, "sessions.db")
 	sqlDB, err := db.Open(dbPath)
 	if err != nil {
@@ -159,10 +166,12 @@ func (s *Service) Init(params InitParams) (*InitResult, error) {
 	}
 
 	return &InitResult{
-		ProjectName: name,
-		RepoPath:    repoAbsPath,
-		AOMPath:     aomPath,
-		DBPath:      dbPath,
+		ProjectName:      name,
+		RepoPath:         repoAbsPath,
+		AOMPath:          aomPath,
+		DBPath:           dbPath,
+		GitInitialized:   gitInit,
+		GitInitialCommit: gitCommit,
 	}, nil
 }
 
@@ -288,6 +297,52 @@ func (s *Service) Open(repoPath string) (*OpenResult, error) {
 		TerminalDriver: cfg.Project.Runtime.Terminal,
 		SessionPrefix:  cfg.Project.Runtime.SessionPrefix,
 	}, nil
+}
+
+// ensureGitReady ensures the repo at repoPath is a git repository and has at
+// least one commit. It initializes git and creates an initial commit if needed.
+// Returns (gitInitialized, gitInitialCommit, error). Silently skips if git is
+// not in PATH.
+// aomGit returns an exec.Cmd for a git operation with credential prompting and
+// GPG signing disabled — preventing hangs in automated/test environments.
+func aomGit(repoPath string, args ...string) *exec.Cmd {
+	fullArgs := append([]string{
+		"-C", repoPath,
+		"-c", "credential.helper=",
+		"-c", "commit.gpgsign=false",
+	}, args...)
+	cmd := exec.Command("git", fullArgs...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	return cmd
+}
+
+func ensureGitReady(repoPath string) (gitInitialized, gitInitialCommit bool, err error) {
+	if _, lookErr := exec.LookPath("git"); lookErr != nil {
+		return false, false, nil
+	}
+
+	out, insideErr := aomGit(repoPath, "rev-parse", "--is-inside-work-tree").Output()
+	if insideErr != nil || strings.TrimSpace(string(out)) != "true" {
+		initOut, initErr := aomGit(repoPath, "init", "-b", "main").CombinedOutput()
+		if initErr != nil {
+			return false, false, fmt.Errorf("git init: %w\n%s", initErr, initOut)
+		}
+		gitInitialized = true
+	}
+
+	if _, headErr := aomGit(repoPath, "rev-parse", "--verify", "HEAD").Output(); headErr != nil {
+		commitCmd := aomGit(repoPath,
+			"-c", "user.email=aom@aom",
+			"-c", "user.name=AOM",
+			"commit", "--allow-empty", "-m", "initial commit [aom init]",
+		)
+		if commitOut, commitErr := commitCmd.CombinedOutput(); commitErr != nil {
+			return gitInitialized, false, fmt.Errorf("git initial commit: %w\n%s", commitErr, commitOut)
+		}
+		gitInitialCommit = true
+	}
+
+	return gitInitialized, gitInitialCommit, nil
 }
 
 func detectDefaultBranch(repoPath string) string {

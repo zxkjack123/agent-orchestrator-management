@@ -51,6 +51,12 @@ func (r Runner) executeTaskCreate(args []string) error {
 				return fmt.Errorf("--step-type requires a value")
 			}
 			params.stepType = args[i]
+		case "--description":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--description requires a value")
+			}
+			params.description = args[i]
 		default:
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
@@ -79,6 +85,7 @@ func (r Runner) executeTaskCreate(args []string) error {
 	createResult, err := taskService.Create(task.CreateParams{
 		ProjectID:       result.Project.ID,
 		Title:           params.title,
+		Description:     params.description,
 		Mode:            params.mode,
 		Priority:        priority,
 		PreferredRole:   params.role,
@@ -113,6 +120,9 @@ func (r Runner) executeTaskCreate(args []string) error {
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Task: %s\n", createResult.Task.ID)
 	fmt.Fprintf(r.stdout, "Title: %s\n", createResult.Task.Title)
+	if createResult.Task.Description != "" {
+		fmt.Fprintf(r.stdout, "Description: %s\n", createResult.Task.Description)
+	}
 	fmt.Fprintf(r.stdout, "Mode: %s\n", createResult.Task.Mode)
 	fmt.Fprintf(r.stdout, "Status: %s\n", createResult.Task.Status)
 	fmt.Fprintf(r.stdout, "Initial steps: %d\n", len(createResult.Steps))
@@ -122,12 +132,13 @@ func (r Runner) executeTaskCreate(args []string) error {
 }
 
 type taskCreateParams struct {
-	title    string
-	mode     string
-	role     string
-	agent    string
-	priority string
-	stepType string
+	title       string
+	description string
+	mode        string
+	role        string
+	agent       string
+	priority    string
+	stepType    string
 }
 
 func (r Runner) executeTaskShow(args []string) error {

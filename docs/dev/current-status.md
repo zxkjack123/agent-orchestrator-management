@@ -316,7 +316,7 @@ Implemented commands:
 - `aom open`
 - `aom plan`
 - `aom status`
-- `aom task create`
+- `aom task create [--description <text>]`
 - `aom task update`
 - `aom task close`
 - `aom task show`
@@ -575,8 +575,10 @@ env \
   GOMODCACHE=$PWD/.cache/gomodcache \
   GOTELEMETRY=off \
   GOTELEMETRYDIR=$PWD/.cache/gotelemetry \
-  go test ./...
+  go test -timeout 20m ./...
 ```
+
+Note: `internal/cli` integration tests run real git operations and take ~10 minutes on Windows. Use `-timeout 20m` on Windows; macOS/Linux is typically under 5 minutes.
 
 ## Environment Notes
 
@@ -804,10 +806,50 @@ Implemented from real-world usage feedback (`AOM_FEEDBACK.md`):
 
 ### Pending (Windows/WSL2 cross-platform)
 - `project.yaml.tmpl` → `repo: .` (absolute Windows path breaks Linux binary)
-- NTFS `mkdir` false-positive in `project init` (`internal/project/service.go:112`)
+- ~~NTFS `mkdir` false-positive in `project init` (`internal/project/service.go:112`)~~ **DONE** (stat-check fallback already in place)
 - NTFS `index.lock`: agent profile NTFS fallback instruction + `aom doctor` NTFS warning
 - `CLAUDE.md` add/add merge conflict: auto-resolve with "ours" in `executeMergeCommit`
 - `--prefer-branch` flag for `aom merge commit`
+
+### E2E Feedback — Second Round Fixes (2026-05-19)
+
+Implemented from a full analysis of `AOM-FEEDBACK.md` after the first live multi-agent run.
+
+#### `aom project init` — auto git init
+
+- `ensureGitReady(repoPath)` added to `internal/project/service.go`: runs after `writeConfigFiles` + `seedAgentProfiles`
+  - If not a git repo: runs `git init -b main`
+  - If no HEAD commit: runs `git commit --allow-empty -m "initial commit [aom init]"` with hardcoded identity (`-c user.email=aom@aom -c user.name=AOM`)
+  - All AOM-triggered git commands run via `aomGit()` helper which sets `credential.helper=`, `commit.gpgsign=false`, and `GIT_TERMINAL_PROMPT=0` — prevents credential-helper hangs on Windows
+- `InitResult` struct gains `GitInitialized bool` and `GitInitialCommit bool`
+- `executeProjectInit` prints git status lines when git actions were taken
+- **Effect**: `aom project init` on an empty directory now produces a git-ready repo; `task create` immediately provisions real worktrees instead of staying `Planned`
+
+#### `aom doctor` — new checks
+
+- **git initial commit**: warns when the repo has no HEAD commit (worktree provisioning will fail)
+- **codex update dialog**: warns when `~/.codex/version.json` has no `dismissed_version` set (codex spawn may hang on the update prompt)
+
+#### Codex provider — dismissed_version guard
+
+- `internal/provider/codex.go` preamble now writes `~/.codex/version.json` with `{"dismissed_version":"9999.0.0"}` if the file doesn't exist — suppresses the Codex update dialog at session spawn time
+
+#### `aom worktree commit` — clearer errors
+
+- No-worktree error now suggests `git commit` directly + `aom checkpoint <session-id>`
+- Non-ready worktree error includes current status + same fallback suggestion
+
+#### `aom task create --description`
+
+- `--description <text>` flag added; stored in new `description` column (schema-v8 migration: `ALTER TABLE tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''`)
+- Description printed in `task create` output and available in `task show`
+
+#### Windows git stability fixes
+
+- `aomGit()` helper in `internal/project/service.go`: wraps all `ensureGitReady` git commands with `credential.helper=`, `commit.gpgsign=false`, and `GIT_TERMINAL_PROMPT=0` env var — prevents hangs from credential managers and GPG signing on Windows
+- `worktree.NewService.runGit` updated with same env vars (`credential.helper=`, `GIT_TERMINAL_PROMPT=0`)
+- `changedFilesSummary` in `internal/cli/worktree_cmd.go` now uses `exec.CommandContext` with a 5-second timeout — prevents git status hang from blocking handoff
+- Test command updated to `-timeout 20m` in `CLAUDE.md` — cli integration tests run real git ops on Windows and need extra time
 
 ## Immediate Next Step
 

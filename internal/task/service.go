@@ -34,6 +34,7 @@ const (
 type CreateParams struct {
 	ProjectID       string
 	Title           string
+	Description     string
 	Mode            string
 	Priority        int
 	PreferredRole   string
@@ -140,6 +141,7 @@ func (s *Service) createTask(params CreateParams, seeds []StepSeed) (*CreateResu
 		ID:             s.taskIDGen(),
 		ProjectID:      projectID,
 		Title:          title,
+		Description:    strings.TrimSpace(params.Description),
 		Mode:           mode,
 		Status:         defaultTaskStatus,
 		Priority:       params.Priority,

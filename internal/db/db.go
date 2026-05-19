@@ -18,6 +18,7 @@ const (
 	migrationSchemaV5    = "schema-v5"
 	migrationSchemaV6    = "schema-v6"
 	migrationSchemaV7    = "schema-v7"
+	migrationSchemaV8    = "schema-v8"
 	defaultBusyTimeoutMS = 5000
 )
 
@@ -238,6 +239,28 @@ func Migrate(db *sql.DB) error {
 		}
 	}
 
+	applied, err = hasMigration(db, migrationSchemaV8)
+	if err != nil {
+		return fmt.Errorf("check migration %q: %w", migrationSchemaV8, err)
+	}
+	if !applied {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration transaction: %w", err)
+		}
+		if err := applySchemaV8(tx); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("apply schema v8: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO migrations (id) VALUES (?)`, migrationSchemaV8); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("record migration %q: %w", migrationSchemaV8, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration transaction: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -377,6 +400,11 @@ CREATE TABLE steps (
 
 func applySchemaV7(tx *sql.Tx) error {
 	_, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN model TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+func applySchemaV8(tx *sql.Tx) error {
+	_, err := tx.Exec(`ALTER TABLE tasks ADD COLUMN description TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 

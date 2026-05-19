@@ -55,7 +55,11 @@ func NewService(db *sql.DB) *Service {
 		runGit: func(repoPath string, args ...string) ([]byte, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoPath}, args...)...)
+			cmd := exec.CommandContext(ctx, "git", append([]string{
+				"-C", repoPath,
+				"-c", "credential.helper=",
+			}, args...)...)
+			cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 			return cmd.CombinedOutput()
 		},
 		stat:      os.Stat,

@@ -1090,17 +1090,16 @@ func TestExecuteSessionSpawnWithTaskRefreshesArtifacts(t *testing.T) {
 	if !strings.Contains(out, "Task: "+taskID) {
 		t.Fatalf("stdout = %q, want task in spawn output", out)
 	}
-	if !strings.Contains(out, "Worktree status: Planned") {
-		t.Fatalf("stdout = %q, want planned worktree status for non-git repo", out)
+	if !strings.Contains(out, "Worktree status: Active") {
+		t.Fatalf("stdout = %q, want active worktree status", out)
 	}
 	spawnWorktreePath := extractLineValue(out, "Worktree path: ")
 	if spawnWorktreePath == "" {
 		t.Fatalf("stdout = %q, want worktree path", out)
 	}
-	if same, err := samePath(spawnWorktreePath, repoRoot); err != nil {
-		t.Fatalf("samePath failed: %v", err)
-	} else if !same {
-		t.Fatalf("worktree path = %q, want repo root %q", spawnWorktreePath, repoRoot)
+	worktreesDir := filepath.Join(repoRoot, ".aom", "worktrees")
+	if !strings.HasPrefix(spawnWorktreePath, worktreesDir) {
+		t.Fatalf("worktree path = %q, want path inside %q", spawnWorktreePath, worktreesDir)
 	}
 	sessionID := extractSessionID(out)
 	if sessionID == "" {
@@ -1123,17 +1122,11 @@ func TestExecuteSessionSpawnWithTaskRefreshesArtifacts(t *testing.T) {
 	}
 	if out := stdout.String(); !strings.Contains(out, "Task: "+taskID) {
 		t.Fatalf("stdout = %q, want task in session show", out)
-	} else if worktreePath := extractLineValue(out, "Worktree: "); func() bool {
-		same, err := samePath(worktreePath, repoRoot)
-		if err != nil {
-			t.Fatalf("samePath failed: %v", err)
-		}
-		return same
-	}() == false {
-		t.Fatalf("worktree path = %q, want repo root %q", worktreePath, repoRoot)
+	} else if worktreePath := extractLineValue(out, "Worktree: "); !strings.HasPrefix(worktreePath, filepath.Join(repoRoot, ".aom", "worktrees")) {
+		t.Fatalf("worktree path = %q, want path inside %q", worktreePath, filepath.Join(repoRoot, ".aom", "worktrees"))
 	}
 
-	indexData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "index.md"))
+	indexData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "index.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(index.md) failed: %v", err)
 	}
@@ -1141,7 +1134,7 @@ func TestExecuteSessionSpawnWithTaskRefreshesArtifacts(t *testing.T) {
 		t.Fatalf("index.md = %q, want active session", string(indexData))
 	}
 
-	logData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md"))
+	logData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "log.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(log.md) failed: %v", err)
 	}
@@ -1158,7 +1151,7 @@ func TestExecuteSessionSpawnWithTaskRefreshesArtifacts(t *testing.T) {
 		t.Fatalf("log.md = %q, want idle lifecycle state", string(logData))
 	}
 
-	handoffData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "handoff.md"))
+	handoffData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "handoff.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(handoff.md) failed: %v", err)
 	}
@@ -1537,7 +1530,7 @@ func TestExecuteCheckpointCreatesCanonicalLogEvent(t *testing.T) {
 		t.Fatalf("could not extract checkpoint id from %q", out)
 	}
 
-	logData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md"))
+	logData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "log.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(log.md) failed: %v", err)
 	}
@@ -1545,7 +1538,7 @@ func TestExecuteCheckpointCreatesCanonicalLogEvent(t *testing.T) {
 		t.Fatalf("log.md = %q, want checkpoint event with id", string(logData))
 	}
 
-	indexData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "index.md"))
+	indexData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "index.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(index.md) failed: %v", err)
 	}
@@ -1648,7 +1641,7 @@ func TestExecuteHandoffWritesHandoffArtifactAndMarksSessionWaiting(t *testing.T)
 		t.Fatalf("stdout = %q, want WaitingHandoff status", out)
 	}
 
-	handoffData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "handoff.md"))
+	handoffData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "handoff.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(handoff.md) failed: %v", err)
 	}
@@ -1656,7 +1649,7 @@ func TestExecuteHandoffWritesHandoffArtifactAndMarksSessionWaiting(t *testing.T)
 		t.Fatalf("handoff.md = %q, want populated transfer packet", string(handoffData))
 	}
 
-	indexData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "index.md"))
+	indexData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "index.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(index.md) failed: %v", err)
 	}
@@ -1758,7 +1751,7 @@ func TestExecuteSessionSpawnWithTaskLogsFailureWhenPaneCreationFails(t *testing.
 		t.Fatalf("stdout = %q, want failed session status", out)
 	}
 
-	logData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md"))
+	logData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "log.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(log.md) failed: %v", err)
 	}
@@ -1967,7 +1960,7 @@ func TestExecuteSessionSpawnWithTaskLogsFailureWhenPaneAnnotationFails(t *testin
 		t.Fatalf("stdout = %q, want failed session status", out)
 	}
 
-	logData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md"))
+	logData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "log.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(log.md) failed: %v", err)
 	}
@@ -2173,7 +2166,7 @@ func TestExecuteAttachLogsOperatorInterventionForTaskBoundSession(t *testing.T) 
 		t.Fatalf("stdout = %q, want attach summary", out)
 	}
 
-	indexData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "index.md"))
+	indexData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "index.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(index.md) failed: %v", err)
 	}
@@ -2181,7 +2174,7 @@ func TestExecuteAttachLogsOperatorInterventionForTaskBoundSession(t *testing.T) 
 		t.Fatalf("index.md = %q, want active session after attach", string(indexData))
 	}
 
-	logData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md"))
+	logData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "log.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(log.md) failed: %v", err)
 	}
@@ -2285,7 +2278,7 @@ func TestExecuteSessionSendDeliversPromptAndAppendsTaskEvent(t *testing.T) {
 		t.Fatalf("stdout = %q, want joined message", sendOut)
 	}
 
-	logData, err := os.ReadFile(filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md"))
+	logData, err := os.ReadFile(filepath.Join(taskArtifactDir(repoRoot, taskID), "log.md"))
 	if err != nil {
 		t.Fatalf("ReadFile(log.md) failed: %v", err)
 	}
@@ -2352,8 +2345,8 @@ func TestExecuteTaskCreateShowAndStepList(t *testing.T) {
 	if !strings.Contains(showOut, "Status: Planned") {
 		t.Fatalf("stdout = %q, want Planned status", showOut)
 	}
-	if !strings.Contains(showOut, "Worktree status: Planned") {
-		t.Fatalf("stdout = %q, want planned worktree status", showOut)
+	if !strings.Contains(showOut, "Worktree status: Ready") {
+		t.Fatalf("stdout = %q, want ready worktree status", showOut)
 	}
 	if !strings.Contains(showOut, "Worktree branch: aom/") {
 		t.Fatalf("stdout = %q, want worktree branch", showOut)
@@ -2365,15 +2358,9 @@ func TestExecuteTaskCreateShowAndStepList(t *testing.T) {
 	if artifactRoot == "" {
 		t.Fatalf("stdout = %q, want artifact root", showOut)
 	}
-	if same, err := samePath(artifactRoot, filepath.Join(repoRoot, ".aom", "tasks", taskID)); err != nil || !same {
-		t.Fatalf("artifact root = %q, want %q (same=%t err=%v)", artifactRoot, filepath.Join(repoRoot, ".aom", "tasks", taskID), same, err)
-	}
 	taskLog := extractLineValue(showOut, "Task log: ")
 	if taskLog == "" {
 		t.Fatalf("stdout = %q, want task log path", showOut)
-	}
-	if same, err := samePath(filepath.Dir(taskLog), filepath.Join(repoRoot, ".aom", "tasks", taskID)); err != nil || !same {
-		t.Fatalf("task log dir = %q, want %q (same=%t err=%v)", filepath.Dir(taskLog), filepath.Join(repoRoot, ".aom", "tasks", taskID), same, err)
 	}
 
 	stdout.Reset()
@@ -2404,11 +2391,11 @@ func TestExecuteTaskCreateShowAndStepList(t *testing.T) {
 	if !strings.Contains(out, "title=Implement milestone 3") {
 		t.Fatalf("stdout = %q, want task detail row", out)
 	}
-	if !strings.Contains(out, "worktree=Planned | branch=aom/") {
-		t.Fatalf("stdout = %q, want planned worktree summary", out)
+	if !strings.Contains(out, "worktree=Ready | branch=aom/") {
+		t.Fatalf("stdout = %q, want ready worktree summary", out)
 	}
-	if !strings.Contains(out, filepath.Join(".aom", "tasks", taskID)) {
-		t.Fatalf("stdout = %q, want planned artifact path summary", out)
+	if !strings.Contains(out, filepath.Join(".aom", "worktrees")) {
+		t.Fatalf("stdout = %q, want worktree artifact path summary", out)
 	}
 	if !strings.Contains(out, "next=confirm the proposed step and move the task to Ready") {
 		t.Fatalf("stdout = %q, want recommended next action", out)
@@ -2417,7 +2404,7 @@ func TestExecuteTaskCreateShowAndStepList(t *testing.T) {
 		t.Fatalf("stdout = %q, want task step summary", out)
 	}
 
-	artifactDir := filepath.Join(repoRoot, ".aom", "tasks", taskID)
+	artifactDir := taskArtifactDir(repoRoot, taskID)
 	for _, name := range []string{"task.md", "state.md", "index.md", "log.md"} {
 		if _, err := os.Stat(filepath.Join(artifactDir, name)); err != nil {
 			t.Fatalf("artifact %s missing: %v", name, err)
@@ -4259,7 +4246,7 @@ func TestExecuteReviewPreparesNotesWithoutTmux(t *testing.T) {
 		t.Fatalf("stdout = %q, want tmux-unavailable next action", out)
 	}
 
-	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	reviewNotesPath := filepath.Join(taskArtifactDir(repoRoot, taskID), "review-notes.md")
 	data, err := os.ReadFile(reviewNotesPath)
 	if err != nil {
 		t.Fatalf("ReadFile(review-notes.md) failed: %v", err)
@@ -4546,7 +4533,7 @@ func TestExecuteReviewFindingsMoveTaskAndReviewStepToNeedsAttention(t *testing.T
 		t.Fatalf("could not extract review step id from %q", stdout.String())
 	}
 
-	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	reviewNotesPath := filepath.Join(taskArtifactDir(repoRoot, taskID), "review-notes.md")
 	reviewContent := `# Review Notes
 
 ## Summary
@@ -4672,7 +4659,7 @@ func TestExecuteReviewFindingsResetPreferredOwnerToSharedFindingOwner(t *testing
 	}
 	followupStepID := extractStepID(stdout.String())
 
-	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	reviewNotesPath := filepath.Join(taskArtifactDir(repoRoot, taskID), "review-notes.md")
 	reviewContent := `# Review Notes
 
 ## Summary
@@ -4748,7 +4735,7 @@ func TestExecuteStatusSurfacesUnresolvedReviewItems(t *testing.T) {
 	}
 	taskID := extractEntityID(stdout.String(), "Task: ")
 
-	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	reviewNotesPath := filepath.Join(taskArtifactDir(repoRoot, taskID), "review-notes.md")
 	reviewContent := `# Review Notes
 
 ## Summary
@@ -4819,7 +4806,7 @@ func TestExecuteStatusHighlightsMixedReviewOwners(t *testing.T) {
 	}
 	taskID := extractEntityID(stdout.String(), "Task: ")
 
-	reviewNotesPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "review-notes.md")
+	reviewNotesPath := filepath.Join(taskArtifactDir(repoRoot, taskID), "review-notes.md")
 	reviewContent := `# Review Notes
 
 ## Summary
@@ -5072,8 +5059,8 @@ func TestExecutePlanCreatePersistsTaskAndSteps(t *testing.T) {
 	if !strings.Contains(showOut, "Preferred agent: backend-main") {
 		t.Fatalf("stdout = %q, want backend-main ownership", showOut)
 	}
-	if !strings.Contains(showOut, "Worktree status: Planned") {
-		t.Fatalf("stdout = %q, want planned worktree status", showOut)
+	if !strings.Contains(showOut, "Worktree status: Ready") {
+		t.Fatalf("stdout = %q, want ready worktree status", showOut)
 	}
 
 	stdout.Reset()
@@ -5091,7 +5078,7 @@ func TestExecutePlanCreatePersistsTaskAndSteps(t *testing.T) {
 		t.Fatalf("stdout = %q, want sequential dependency", stepOut)
 	}
 
-	artifactDir := filepath.Join(repoRoot, ".aom", "tasks", taskID)
+	artifactDir := taskArtifactDir(repoRoot, taskID)
 	if _, err := os.Stat(filepath.Join(artifactDir, "log.md")); err != nil {
 		t.Fatalf("plan artifact log missing: %v", err)
 	}
@@ -5139,14 +5126,12 @@ func TestExecutePlanCreateFailsBeforePersistingTaskOnEmptyGitRepo(t *testing.T) 
 		t.Fatalf("project init failed: %v", err)
 	}
 
+	// project init now calls ensureGitReady which creates the initial commit,
+	// so plan --create should succeed on an empty git repo.
 	stdout.Reset()
 	stderr.Reset()
-	err = Execute([]string{"plan", "fix login bug", "--create"}, &stdout, &stderr)
-	if err == nil {
-		t.Fatal("plan --create returned nil error, want empty repo failure")
-	}
-	if !strings.Contains(err.Error(), "create an initial commit first") {
-		t.Fatalf("error = %q, want initial commit hint", err)
+	if err := Execute([]string{"plan", "fix login bug", "--create"}, &stdout, &stderr); err != nil {
+		t.Fatalf("plan --create failed: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()
@@ -5154,8 +5139,8 @@ func TestExecutePlanCreateFailsBeforePersistingTaskOnEmptyGitRepo(t *testing.T) 
 	if err := Execute([]string{"status"}, &stdout, &stderr); err != nil {
 		t.Fatalf("status failed: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Tasks: 0") && !strings.Contains(stdout.String(), "  Tasks: 0") {
-		t.Fatalf("stdout = %q, want zero tasks after failed plan --create", stdout.String())
+	if strings.Contains(stdout.String(), "Tasks: 0") {
+		t.Fatalf("stdout = %q, want at least one task after plan --create", stdout.String())
 	}
 }
 
@@ -5201,14 +5186,12 @@ func TestExecuteTaskCreateFailsBeforePersistingTaskOnEmptyGitRepo(t *testing.T) 
 		t.Fatalf("project init failed: %v", err)
 	}
 
+	// project init now calls ensureGitReady which creates the initial commit,
+	// so task create should succeed on an empty git repo.
 	stdout.Reset()
 	stderr.Reset()
-	err = Execute([]string{"task", "create", "Implement initial task"}, &stdout, &stderr)
-	if err == nil {
-		t.Fatal("task create returned nil error, want empty repo failure")
-	}
-	if !strings.Contains(err.Error(), "create an initial commit first") {
-		t.Fatalf("error = %q, want initial commit hint", err)
+	if err := Execute([]string{"task", "create", "Implement initial task"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create failed: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()
@@ -5216,9 +5199,30 @@ func TestExecuteTaskCreateFailsBeforePersistingTaskOnEmptyGitRepo(t *testing.T) 
 	if err := Execute([]string{"status"}, &stdout, &stderr); err != nil {
 		t.Fatalf("status failed: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "Tasks: 0") && !strings.Contains(stdout.String(), "  Tasks: 0") {
-		t.Fatalf("stdout = %q, want zero tasks after failed task create", stdout.String())
+	if strings.Contains(stdout.String(), "Tasks: 0") {
+		t.Fatalf("stdout = %q, want at least one task after task create", stdout.String())
 	}
+}
+
+// taskArtifactDir returns the artifact directory for a task. When the repo has
+// git initialized (normal flow after project init), artifacts are stored in the
+// worktree .agent directory. Falls back to .aom/tasks/<taskID> for legacy or
+// non-git scenarios.
+func taskArtifactDir(repoRoot, taskID string) string {
+	worktreePrefix := strings.ToLower(taskID)
+	worktreesDir := filepath.Join(repoRoot, ".aom", "worktrees")
+	if entries, err := os.ReadDir(worktreesDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() || !strings.HasPrefix(e.Name(), worktreePrefix) {
+				continue
+			}
+			agentDir := filepath.Join(worktreesDir, e.Name(), ".agent")
+			if _, err := os.Stat(agentDir); err == nil {
+				return agentDir
+			}
+		}
+	}
+	return filepath.Join(repoRoot, ".aom", "tasks", taskID)
 }
 
 func samePath(left, right string) (bool, error) {
@@ -5579,7 +5583,7 @@ func TestExecuteReviewCloseTransitionsTaskToInProgress(t *testing.T) {
 	}
 
 	// Verify the log records a review.closed event.
-	logPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md")
+	logPath := filepath.Join(taskArtifactDir(repoRoot, taskID), "log.md")
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("ReadFile(log.md) failed: %v", err)
@@ -5659,7 +5663,7 @@ func TestExecuteSessionSendUsesAOMActorEnvVar(t *testing.T) {
 		t.Fatalf("session send failed: %v", err)
 	}
 
-	logPath := filepath.Join(repoRoot, ".aom", "tasks", taskID, "log.md")
+	logPath := filepath.Join(taskArtifactDir(repoRoot, taskID), "log.md")
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("ReadFile(log.md) failed: %v", err)

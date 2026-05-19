@@ -171,10 +171,10 @@ func (r Runner) executeWorktreeCommit(args []string) error {
 		return err
 	}
 	if mapping == nil {
-		return fmt.Errorf("task %q has no worktree", taskID)
+		return fmt.Errorf("task %q has no worktree — work may be in the main repo; use git commit directly, then run: aom checkpoint <session-id>", taskID)
 	}
 	if mapping.Status != "Ready" && mapping.Status != "Active" {
-		return fmt.Errorf("worktree for task %q is not available (status: %s)", taskID, mapping.Status)
+		return fmt.Errorf("worktree for task %q is not available (status: %s) — use git commit directly, then run: aom checkpoint <session-id>", taskID, mapping.Status)
 	}
 
 	wtPath := mapping.WorktreePath
@@ -295,7 +295,9 @@ func changedFilesSummary(worktreePath, repoPath string) string {
 		return "unavailable in current milestone"
 	}
 
-	output, err := exec.Command("git", "-C", target, "status", "--short").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "git", "-C", target, "status", "--short").CombinedOutput()
 	if err != nil {
 		return "unavailable in current milestone"
 	}

@@ -148,7 +148,7 @@ func TestBuilderBuildResumesCodexSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	want := "sh -lc 'export AOM_RUNTIME=codex; export PYTHONDONTWRITEBYTECODE=1; exec codex resume sess-xyz-789 --sandbox workspace-write -a never'"
+	want := "sh -lc 'export AOM_RUNTIME=codex; export PYTHONDONTWRITEBYTECODE=1; [ -f \"$HOME/.codex/version.json\" ] || { mkdir -p \"$HOME/.codex\" && printf '{\"dismissed_version\":\"9999.0.0\"}\\n' > \"$HOME/.codex/version.json\"; }; exec codex resume sess-xyz-789 --sandbox workspace-write -a never'"
 	if command != want {
 		t.Fatalf("command = %q, want %q", command, want)
 	}

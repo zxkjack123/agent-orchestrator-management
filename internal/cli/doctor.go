@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -134,6 +135,25 @@ func (r Runner) executeDoctor(args []string) error {
 		}
 	}
 
+	// ── Git: initial commit ───────────────────────────────────────────────────
+	if cfg != nil {
+		if _, lookErr := exec.LookPath("git"); lookErr == nil {
+			out, err := exec.Command("git", "-C", ".", "rev-parse", "--verify", "HEAD").Output()
+			if err != nil {
+				results = append(results, doctorResult{
+					label:  "git: initial commit",
+					detail: `none — task worktrees cannot be provisioned; fix: git commit --allow-empty -m "initial"`,
+				})
+			} else {
+				sha := strings.TrimSpace(string(out))
+				if len(sha) > 8 {
+					sha = sha[:8]
+				}
+				results = append(results, doctorResult{label: "git: initial commit", detail: sha, ok: true})
+			}
+		}
+	}
+
 	// ── .aom/ writable ────────────────────────────────────────────────────────
 	if cfg != nil {
 		probe := filepath.Join(cfg.AOMPath, ".doctor-probe")
@@ -187,6 +207,37 @@ func (r Runner) executeDoctor(args []string) error {
 				results = append(results, doctorResult{
 					label:  fmt.Sprintf("runtime: %s", rt),
 					detail: fmt.Sprintf("%s  (used by: %s)", path, agentList),
+					ok:     true,
+				})
+			}
+		}
+	}
+
+	// ── Codex: update dialog suppression ─────────────────────────────────────
+	if cfg != nil {
+		if _, lookErr := exec.LookPath("codex"); lookErr == nil {
+			home, _ := os.UserHomeDir()
+			versionFile := filepath.Join(home, ".codex", "version.json")
+			data, readErr := os.ReadFile(versionFile)
+			hasDismissed := false
+			if readErr == nil {
+				var v map[string]any
+				if jsonErr := json.Unmarshal(data, &v); jsonErr == nil {
+					if val, ok := v["dismissed_version"]; ok && fmt.Sprintf("%v", val) != "" {
+						hasDismissed = true
+					}
+				}
+			}
+			if !hasDismissed {
+				results = append(results, doctorResult{
+					label:   "codex: update dialog",
+					detail:  `dismissed_version not set — update prompt may block session spawn; fix: printf '{"dismissed_version":"9999.0.0"}\n' > ~/.codex/version.json`,
+					warning: true,
+				})
+			} else {
+				results = append(results, doctorResult{
+					label:  "codex: update dialog",
+					detail: "dismissed_version set",
 					ok:     true,
 				})
 			}

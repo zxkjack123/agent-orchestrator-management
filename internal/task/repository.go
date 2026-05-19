@@ -11,6 +11,7 @@ type Record struct {
 	ID             string
 	ProjectID      string
 	Title          string
+	Description    string
 	Mode           string
 	Status         string
 	Priority       int
@@ -37,16 +38,18 @@ INSERT INTO tasks (
 	id,
 	project_id,
 	title,
+	description,
 	mode,
 	status,
 	priority,
 	preferred_role,
 	preferred_agent
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	project_id = excluded.project_id,
 	title = excluded.title,
+	description = excluded.description,
 	mode = excluded.mode,
 	status = excluded.status,
 	priority = excluded.priority,
@@ -57,6 +60,7 @@ ON CONFLICT(id) DO UPDATE SET
 		record.ID,
 		record.ProjectID,
 		record.Title,
+		record.Description,
 		record.Mode,
 		record.Status,
 		record.Priority,
@@ -77,6 +81,7 @@ SELECT
 	id,
 	project_id,
 	title,
+	description,
 	mode,
 	status,
 	priority,
@@ -118,6 +123,7 @@ SELECT
 	id,
 	project_id,
 	title,
+	description,
 	mode,
 	status,
 	priority,
@@ -263,6 +269,7 @@ func scanRecord(scanner rowScanner) (*Record, error) {
 		&record.ID,
 		&record.ProjectID,
 		&record.Title,
+		&record.Description,
 		&record.Mode,
 		&record.Status,
 		&record.Priority,

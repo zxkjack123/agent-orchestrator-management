@@ -20,8 +20,8 @@ go build -o aom cmd/aom/main.go
 # Run
 go run cmd/aom/main.go <command>
 
-# Test all packages
-go test ./...
+# Test all packages (cli integration tests run real git ops — needs extra time on Windows)
+go test -timeout 20m ./...
 
 # Test a single package
 go test ./internal/<package>/...

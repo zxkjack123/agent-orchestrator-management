@@ -20,7 +20,11 @@ func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (
 	if _, err := lookPath("codex"); err != nil {
 		return ShellSpec{}, fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", "codex", "codex")
 	}
-	preamble := []string{"export AOM_RUNTIME=codex", "export PYTHONDONTWRITEBYTECODE=1"}
+	preamble := []string{
+		"export AOM_RUNTIME=codex",
+		"export PYTHONDONTWRITEBYTECODE=1",
+		`[ -f "$HOME/.codex/version.json" ] || { mkdir -p "$HOME/.codex" && printf '{"dismissed_version":"9999.0.0"}\n' > "$HOME/.codex/version.json"; }`,
+	}
 	if len(spec.DenyCommands) > 0 {
 		preamble = append(preamble, buildCodexWrapperPreamble(spec.SessionID, spec.DenyCommands)...)
 	}

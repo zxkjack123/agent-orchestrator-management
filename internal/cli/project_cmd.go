@@ -294,6 +294,13 @@ func (r Runner) executeProjectInit(args []string) error {
 	fmt.Fprintf(r.stdout, "AOM: %s\n", result.AOMPath)
 	fmt.Fprintf(r.stdout, "DB: %s\n", result.DBPath)
 	fmt.Fprintf(r.stdout, "Config: %s\n", filepath.Join(result.AOMPath, "project.yaml"))
+	if result.GitInitialized && result.GitInitialCommit {
+		fmt.Fprintln(r.stdout, "Git: repository initialized + initial commit created")
+	} else if result.GitInitialized {
+		fmt.Fprintln(r.stdout, "Git: repository initialized")
+	} else if result.GitInitialCommit {
+		fmt.Fprintln(r.stdout, "Git: initial commit created")
+	}
 
 	return nil
 }
