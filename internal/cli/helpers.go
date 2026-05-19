@@ -742,6 +742,18 @@ func interpretEscapes(s string) string {
 	return s
 }
 
+// windowsPathToWSL converts a Windows absolute path (e.g. C:\foo\bar) to its
+// WSL2 mount equivalent (/mnt/c/foo/bar). Paths that are already Linux-style or
+// do not match the Windows drive-letter pattern are returned unchanged.
+func windowsPathToWSL(p string) string {
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		drive := strings.ToLower(string(p[0]))
+		rest := strings.ReplaceAll(p[3:], "\\", "/")
+		return "/mnt/" + drive + "/" + rest
+	}
+	return p
+}
+
 // briefSummary returns a single-line summary of a brief for use in log events.
 // Multi-line briefs are truncated to their first non-empty line so that the
 // log scanner never mistakes embedded log-format templates for real events.

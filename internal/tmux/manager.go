@@ -181,6 +181,19 @@ func (m *Manager) CreatePane(sessionTarget, repoPath, command string) (*PaneBind
 	return parsePaneBindingOutput(output)
 }
 
+// SetSessionEnv sets an environment variable on an existing tmux session so that
+// all future windows and panes within it inherit the variable automatically.
+func (m *Manager) SetSessionEnv(sessionTarget, key, value string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available in the current environment")
+	}
+	if _, err := m.exec(availability.BinaryPath, "set-environment", "-t", sessionTarget, key, value); err != nil {
+		return fmt.Errorf("set session env %q on %q: %w", key, sessionTarget, err)
+	}
+	return nil
+}
+
 // AnnotatePane stores AOM metadata on a pane using tmux user options.
 func (m *Manager) AnnotatePane(paneID string, metadata map[string]string) error {
 	availability := m.Availability()

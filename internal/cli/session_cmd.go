@@ -130,6 +130,15 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		return nil, fmt.Errorf("ensure tmux workspace: %w", err)
 	}
 
+	// Inject AOM_BIN so agents can call `aom` regardless of PATH configuration.
+	if selfBinEarly, binErr := os.Executable(); binErr == nil && selfBinEarly != "" {
+		_ = r.app.Tmux.SetSessionEnv(workspace.Target, "AOM_BIN", selfBinEarly)
+	}
+	// Signal agents that direct git commands may hang on NTFS/WSL2 mounts.
+	if strings.HasPrefix(executionPath, "/mnt/") {
+		_ = r.app.Tmux.SetSessionEnv(workspace.Target, "AOM_NO_DIRECT_GIT", "1")
+	}
+
 	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
 	if err != nil {
 		return nil, err
@@ -1288,7 +1297,7 @@ func (r Runner) executeSessionSend(args []string) error {
 		if filePath == "-" || filePath == "/dev/stdin" {
 			data, err = io.ReadAll(os.Stdin)
 		} else {
-			data, err = os.ReadFile(filePath)
+			data, err = os.ReadFile(windowsPathToWSL(filePath))
 		}
 		if err != nil {
 			return fmt.Errorf("read --file %q: %w", filePath, err)

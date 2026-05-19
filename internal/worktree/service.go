@@ -1,12 +1,14 @@
 package worktree
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -51,7 +53,9 @@ func NewService(db *sql.DB) *Service {
 		repo:     NewRepository(db),
 		lookPath: exec.LookPath,
 		runGit: func(repoPath string, args ...string) ([]byte, error) {
-			cmd := exec.Command("git", append([]string{"-C", repoPath}, args...)...)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoPath}, args...)...)
 			return cmd.CombinedOutput()
 		},
 		stat:      os.Stat,

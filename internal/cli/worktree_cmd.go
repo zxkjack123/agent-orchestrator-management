@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/worktree"
@@ -186,18 +188,29 @@ func (r Runner) executeWorktreeCommit(args []string) error {
 		"GIT_WORK_TREE="+wtPath,
 	)
 
-	addCmd := exec.Command("git", "add", "-A")
+	const gitTimeout = 60 * time.Second
+	addCtx, addCancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer addCancel()
+	addCmd := exec.CommandContext(addCtx, "git", "add", "-A")
 	addCmd.Env = env
 	addCmd.Dir = wtPath
 	if out, addErr := addCmd.CombinedOutput(); addErr != nil {
+		if addCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("git add timed out after %s (NTFS/WSL2 may be causing git to hang — use aom worktree commit from the Linux side)", gitTimeout)
+		}
 		return fmt.Errorf("git add: %w\n%s", addErr, strings.TrimSpace(string(out)))
 	}
 
-	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
+	commitCtx, commitCancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer commitCancel()
+	commitCmd := exec.CommandContext(commitCtx, "git", "commit", "-m", commitMsg)
 	commitCmd.Env = env
 	commitCmd.Dir = wtPath
 	out, err := commitCmd.CombinedOutput()
 	if err != nil {
+		if commitCtx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("git commit timed out after %s (NTFS/WSL2 may be causing git to hang — use aom worktree commit from the Linux side)", gitTimeout)
+		}
 		return fmt.Errorf("git commit: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
 	fmt.Fprint(r.stdout, string(out))
