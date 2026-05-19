@@ -907,9 +907,98 @@ Three spec-defined gaps implemented:
 - Sent after the startup dialog loop to avoid interfering with the "1" response keys
 - Eliminates the need to manually remind codex agents to commit via `aom session send`
 
+## Planned Next Work
+
+Milestones 0–17 and all E2E feedback improvements are complete. The following is the verified remaining work — checked against the actual source code to confirm nothing listed here already exists. Implement groups in order (A → B → C → D).
+
+---
+
+### Group A — Windows/WSL2 Stabilization
+
+#### A1. NTFS `index.lock` — agent profile fallback instruction + `aom doctor` warning
+
+- **Profile templates**: add a short note in the "Git Workflow" section of `builder.md.tmpl`, `frontend.md.tmpl`, and `default.md.tmpl` (in `internal/project/templates/project-init/profiles/`) explaining that on NTFS mounts `git commit` may fail with `index.lock: Read-only file system`; instruct agents to use `aom worktree commit` as the fallback
+- **`aom doctor`** (`internal/cli/doctor.go`): after the existing git checks, add an NTFS detection block — on Linux/WSL2, run `findmnt --output FSTYPE --target <repoPath> --noheadings` (or read `/proc/mounts`); if filesystem type is `fuseblk` or `ntfs`, print `[WARN] NTFS mount detected — git index.lock operations may fail; use aom worktree commit instead of git commit inside worktrees`
+
+---
+
+### Group B — Hook System Completion
+
+`on-task-done.sh` is already generated as a live file and `on-session-spawn` / `on-task-done` / `on-task-ready` hook sites already fire. The following gaps remain:
+
+#### B1. `project init` — add `on-task-blocked.sh` stub
+
+- **File**: `internal/project/config_files.go` → `ensureHooksDir()` (already generates `on-task-done.sh`)
+- **Change**: also write `on-task-blocked.sh` with the same pattern (executable 0755, stub with env var comments: `AOM_TASK_ID`, `AOM_STATUS`)
+
+#### B2. New hook fire sites
+
+- **`on-task-blocked`**: fire from `internal/task/service.go` → `UpdateStatus` when the new status is `Blocked` or `NeedsAttention`; pass `AOM_TASK_ID`, `AOM_STATUS` env vars; call `runHook("on-task-blocked", ...)` from the CLI layer (same pattern as `on-task-done` in `task_cmd.go`)
+- **`on-review-prepared`**: fire from `executeReview` in `internal/cli/review_cmd.go` after `review-notes.md` is written; pass `AOM_TASK_ID`, `AOM_REVIEWER_SESSION` (session ID if spawned, else empty)
+
+---
+
+### Group C — UX Fix
+
+#### C1. `--force` flag for `aom merge commit` Red-score override
+
+- **Context**: `executeMergeCommit` already calls `executeMergeCheck()` before attempting `git merge`, but there is no way to override when the score is Red — the operator is blocked with no escape hatch
+- **File**: `internal/cli/merge_cmd.go` → `executeMergeCommit`
+- **Change**: add `--force` bool flag; when Red score is detected, print the overlap summary and exit with error unless `--force` is set; when `--force` is set, print a one-line warning `[warn] forcing merge despite high overlap — operator confirmed` and proceed
+
+---
+
+### Group D — New Features
+
+#### D1. `aom worktree push [<task-id>] [--remote <name>]`
+
+- **Purpose**: push the task's worktree branch to a configured remote — a common operation agents need but currently have no AOM command for
+- **Behavior**:
+  1. Resolve task worktree path and branch name from `worktree.Record`
+  2. Run `git push <remote> <branch>` inside the worktree path (default remote: `origin`)
+  3. Append `worktree.pushed` event to task `log.md` with remote and branch fields
+  4. Print push output + `Pushed <branch> to <remote>`
+- **Error cases**: no remote configured → clear error with `git remote add origin <url>` hint; no commits ahead → `Already up to date` info message (not an error)
+- **CLI**: `internal/cli/worktree_cmd.go` → add `push` subcommand alongside existing `repair`, `read-file`, `commit`
+
+#### D2. `aom report [--days N] [--output <file>]`
+
+- **Purpose**: sprint/period summary derived entirely from existing task DB records and `log.md` event timestamps — no new data stores needed
+- **Output sections**:
+  1. **Summary**: total tasks created / completed / cancelled / in-progress in the period
+  2. **Completed tasks**: table with task ID, title, assigned agent, duration (created→done), mode
+  3. **Blocker analysis**: count of `task.blocked` events per task and per agent; highlight tasks that were blocked more than once
+  4. **Agent breakdown**: per-agent row with tasks owned, tasks completed, avg duration, checkpoints made (from `checkpoint.created` events)
+  5. **Velocity trend**: tasks completed per day in the period (simple ASCII sparkline using `▁▂▃▄▅▆▇█`)
+- **Default**: `--days 7`; `--output` writes to a file path; default (no `--output`) prints to stdout
+- **Side-effect**: always writes `.aom/report.md` so agents and operators can always find the last report
+- **Implementation**: `internal/cli/report_cmd.go` (new file); reuse `BuildVelocityReport` / `parseBlockEvents` patterns from `internal/cli/metrics.go`
+
+#### D3. `aom tui`
+
+- **Purpose**: live-refresh terminal dashboard — the "summary/control surface" described in `docs/AOM-planning.md` that has never been implemented
+- **Behavior**: every 2 seconds, clear the terminal and re-render the same layout as `aom status --active`; header shows last-refresh time; footer shows `q=quit  r=refresh`
+- **Implementation approach**: no external TUI library; use ANSI escape codes (`\033[2J\033[H` to clear+home); extract a `RenderStatusScreen(w io.Writer, ...)` function into `internal/cli/status_format.go` shared by both `aom status` and `aom tui`
+- **Key bindings**: put stdin in raw mode using `golang.org/x/term` (already a transitive dependency); handle `q`/`Q` and `Ctrl-C` as quit; `r`/`R` forces immediate refresh
+- **Fallback**: if stdout is not a TTY (piped/redirected), print one snapshot and exit (same as `aom status --active`)
+- **CLI**: `internal/cli/tui_cmd.go` (new file)
+
+#### D4. Session staleness / context window warning
+
+- **Purpose**: warn when an agent session has been `Working` for a long time with no checkpoint — a likely sign the agent is approaching context limits or has stalled
+- **Threshold**: configurable via `policy.yaml` as `stale_session_hours` (default: `4`); if unset, default applies
+- **`aom status`** (`internal/cli/status_format.go`): for each `Working` session, read the last `checkpoint.created` timestamp from the task's `log.md`; if `time.Since(lastCheckpoint) > threshold`, append `[stale — no checkpoint in Xh Ym]` in yellow next to the session row
+- **`aom session health`** (`internal/cli/message_cmd.go`): already shows time since last checkpoint; add explicit `[WARN]` prefix when threshold is exceeded
+- **`aom doctor`** (`internal/cli/doctor.go`): add a staleness check block; list each stale Working session with its last checkpoint time and suggest `aom checkpoint <session-id>`
+- **No new log events needed**: `checkpoint.created` timestamps already exist in `log.md`
+
+---
+
 ## Immediate Next Step
 
-Milestones 0–17 and all E2E feedback improvements are complete. Remaining work:
+Start with **Group A** (1 targeted change in doctor.go + profile templates), then B → C → D.
+
+Gemini/Kiro runtime support remains deferred:
 
 1. **gemini/kiro runtime support** — fill in `LaunchCommand` in `internal/provider/gemini.go` and `internal/provider/kiro.go`; blocked on confirmed CLI flags
 

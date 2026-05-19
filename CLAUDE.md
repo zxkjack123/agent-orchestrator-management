@@ -123,14 +123,23 @@ Defined in full in `docs/state-machine.md`. Summary:
 | 17 — Observability (cross-worktree read, velocity metrics) | Complete |
 | Post-M17 — Bug fixes, UX, merge commit, runtime policy | Complete |
 
-**Immediate next work** (see `docs/dev/current-status.md` for full detail):
+**Immediate next work** — verified against source; nothing listed below already exists (see `docs/dev/current-status.md` → "Planned Next Work" for full implementation detail):
 
-*Windows/WSL2 cross-platform (still pending):*
-- `project.yaml.tmpl` → `repo: .` (absolute Windows path breaks Linux binary)
-- NTFS `mkdir` false-positive in `project init` (`internal/project/service.go:112`)
-- NTFS `index.lock`: agent profile NTFS fallback instruction + `aom doctor` NTFS warning
-- `CLAUDE.md` add/add merge conflict: auto-resolve with "ours" in `executeMergeCommit`
-- `--prefer-branch` flag for `aom merge commit`
+*Group A — Windows/WSL2 (1 item remaining):*
+- NTFS `index.lock`: `aom doctor` NTFS mount detection + agent profile template fallback note (all other A-items already implemented)
+
+*Group B — Hook system completion (2 gaps remain):*
+- `project init` add `on-task-blocked.sh` stub (`config_files.go` → `ensureHooksDir`; `on-task-done.sh` already generated)
+- New hook fire sites: `on-task-blocked` (task → Blocked/NeedsAttention in `task/service.go`), `on-review-prepared` (after `review-notes.md` written in `review_cmd.go`)
+
+*Group C — UX fix (1 gap remains):*
+- `--force` flag for `aom merge commit` to override Red-score block (pre-merge check already runs, but no bypass exists)
+
+*Group D — New features (none exist yet):*
+- `aom worktree push [<task-id>] [--remote <name>]` — push task branch to remote; log `worktree.pushed`; `worktree_cmd.go`
+- `aom report [--days N] [--output <file>]` — sprint summary + `.aom/report.md`; new `report_cmd.go`
+- `aom tui` — live-refresh terminal dashboard (2s, ANSI-only, no external lib); new `tui_cmd.go`
+- Session staleness warning — `aom status` / `aom session health` / `aom doctor` warn when Working session has no checkpoint in >4h (configurable `stale_session_hours` in `policy.yaml`)
 
 *Deferred:*
 - gemini and kiro runtime launch (`internal/provider/gemini.go`, `internal/provider/kiro.go`) — blocked on confirmed CLI flags
