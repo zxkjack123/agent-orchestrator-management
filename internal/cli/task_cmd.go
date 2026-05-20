@@ -571,6 +571,11 @@ func (r Runner) executeTaskAccept(args []string) error {
 
 	_ = r.refreshProjectBoard(result)
 
+	// Auto-stop any Idle sessions bound to this task so that orphaned background
+	// terminals (e.g. codex background terminal children) are cleaned up immediately
+	// without requiring a separate "aom session stop" command.
+	stoppedSessions := r.autoStopIdleSessionsForTask(result, taskID)
+
 	fmt.Fprintln(r.stdout, "Task accepted")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Task: %s\n", taskRecord.ID)
@@ -578,8 +583,42 @@ func (r Runner) executeTaskAccept(args []string) error {
 	if len(completedStepIDs) > 0 {
 		fmt.Fprintf(r.stdout, "Steps completed: %d\n", len(completedStepIDs))
 	}
+	for _, sid := range stoppedSessions {
+		fmt.Fprintf(r.stdout, "Session stopped: %s (background processes cleaned up)\n", sid)
+	}
 
 	return nil
+}
+
+// autoStopIdleSessionsForTask finds Idle sessions bound to taskID and stops them,
+// killing any descendant processes (codex background terminals, caffeinate, etc.).
+// Returns the IDs of sessions that were stopped. Errors are best-effort: a cleanup
+// failure does not fail the task accept.
+func (r Runner) autoStopIdleSessionsForTask(result *project.OpenResult, taskID string) []string {
+	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return nil
+	}
+	defer sqlDB.Close()
+
+	sessions, err := sessionService.ListByProject(result.Project.ID)
+	if err != nil {
+		return nil
+	}
+
+	var stopped []string
+	for _, s := range sessions {
+		if s.TaskID != taskID {
+			continue
+		}
+		if s.Status != "Idle" && s.Status != "WaitingHandoff" {
+			continue
+		}
+		if _, _, err := r.stopSessionRecord(result, s, false); err == nil {
+			stopped = append(stopped, s.ID)
+		}
+	}
+	return stopped
 }
 
 // executeTaskReady transitions a Planned task to Ready in one shot:
