@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -33,14 +35,26 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 
-	// Pre-create the file with group-writable permissions (0664) so that sandboxed
-	// runtimes (e.g. codex) running as a non-owner can still write to the DB.
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o664)
-		if err != nil {
-			return nil, fmt.Errorf("create database file: %w", err)
+	// Pre-create the DB file and WAL companion files with group-writable
+	// permissions (0664). The companion files (-wal, -shm) must exist with
+	// correct permissions before WAL mode is activated; if SQLite creates them
+	// on first open it uses the process umask (typically 0644) which causes
+	// SQLITE_CANTOPEN (14) for other concurrent processes trying to write to
+	// the shared memory file.
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		p := path + suffix
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			f, err := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0o664)
+			if err != nil {
+				if suffix == "" {
+					return nil, fmt.Errorf("create database file: %w", err)
+				}
+				// WAL/SHM companion creation failures are non-fatal;
+				// SQLite will create them on first open.
+			} else {
+				_ = f.Close()
+			}
 		}
-		_ = f.Close()
 	}
 
 	// Use file: URI so we can pass _txlock=immediate. This forces every
@@ -57,7 +71,37 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open sqlite database: driver is not available")
 	}
 
-	return openAndMigrate(db)
+	// Retry openAndMigrate on SQLITE_CANTOPEN (14). This error can occur during
+	// WAL initialisation when two processes open the DB simultaneously — one
+	// creates the -shm file while the other tries to open it. Three attempts
+	// with 100/200/300 ms backoff cover any realistic race window.
+	const maxRetries = 3
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(100*attempt) * time.Millisecond)
+		}
+		result, migrateErr := openAndMigrate(db)
+		if migrateErr == nil {
+			return result, nil
+		}
+		if !isSQLiteCantopenError(migrateErr) {
+			return nil, migrateErr
+		}
+		lastErr = migrateErr
+	}
+	return nil, lastErr
+}
+
+// isSQLiteCantopenError reports whether err is a SQLite CANTOPEN error (code 14).
+// This error occurs when concurrent processes race to create the WAL/SHM files
+// on first open. modernc.org/sqlite surfaces it as a string containing "(14)".
+func isSQLiteCantopenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "unable to open database file") ||
+		strings.Contains(err.Error(), "(14)")
 }
 
 func openAndMigrate(db *sql.DB) (*sql.DB, error) {

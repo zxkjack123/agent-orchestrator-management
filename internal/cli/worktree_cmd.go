@@ -225,6 +225,8 @@ func (r Runner) executeWorktreeCommitLocal(commitMsg string) error {
 
 // runGitAddAndCommit stages all changes and creates a commit in dir.
 // If env is nil, the current process environment is used unchanged.
+// It prints a porcelain status summary after staging so the caller can see
+// exactly what is going into the commit (including deletions).
 func runGitAddAndCommit(out interface{ Write([]byte) (int, error) }, commitMsg, dir string, env []string) error {
 	const gitTimeout = 60 * time.Second
 
@@ -240,6 +242,20 @@ func runGitAddAndCommit(out interface{ Write([]byte) (int, error) }, commitMsg, 
 			return fmt.Errorf("git add timed out after %s", gitTimeout)
 		}
 		return fmt.Errorf("git add: %w\n%s", addErr, strings.TrimSpace(string(addOut)))
+	}
+
+	// Show what is staged so the agent can confirm deletions are included.
+	// git add -A stages deletions of tracked files; this confirms the commit
+	// will not silently skip files that were physically removed with `rm`.
+	statusCtx, statusCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer statusCancel()
+	statusCmd := exec.CommandContext(statusCtx, "git", "status", "--porcelain")
+	if env != nil {
+		statusCmd.Env = env
+	}
+	statusCmd.Dir = dir
+	if statusOut, _ := statusCmd.Output(); len(statusOut) > 0 {
+		fmt.Fprintf(out, "Staged changes:\n%s\n", strings.TrimSpace(string(statusOut)))
 	}
 
 	commitCtx, commitCancel := context.WithTimeout(context.Background(), gitTimeout)

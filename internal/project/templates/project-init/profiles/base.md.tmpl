@@ -29,9 +29,14 @@
    - "## Open Questions" — anything unresolved
 2. Commit synchronously in the foreground (NOT in a background terminal):
    git add -A && git commit -m "..."
+   IMPORTANT: always use `git add -A` (never `git add .` or `git add <file>`).
+   The -A flag stages additions, modifications, AND deletions of tracked files.
+   If you physically deleted a file with `rm`, only `git add -A` will include
+   that deletion in the commit — selective `git add` will silently skip it,
+   leaving the old file in the committed tree.
    If git commit fails for ANY reason (index.lock, timeout, permission, NTFS/WSL2, sandbox):
    use instead: aom worktree commit --local -m "your message"
-   (--local commits CWD without DB access — safe inside any sandboxed runtime)
+   (--local runs git add -A automatically and is safe inside any sandboxed runtime)
    Do NOT use timeout wrappers, background shells (&/nohup), or retry loops.
 3. Choose the right signal:
    - Task fully done → append event "task.completed" to .agent/log.md
