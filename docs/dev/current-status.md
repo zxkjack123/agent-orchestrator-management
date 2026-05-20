@@ -358,6 +358,13 @@ Implemented commands:
 - `aom runtime list`
 - `aom runtime inspect`
 - `aom policy list [--task <task-id>]`
+- `aom task verify <task-id>` (E2E feedback)
+- `aom task ready <task-id>` (E2E feedback)
+- `aom task cancel <task-id>` (E2E feedback)
+- `aom worktree prune [--dry-run]` (E2E feedback)
+- `aom project share <file>` (E2E feedback)
+- `aom status --json` / `-j` (E2E feedback)
+- `aom capture --summary` (E2E feedback)
 
 Current behavior notes:
 - `open` ensures tmux workspace and fails clearly when tmux is unavailable
@@ -430,6 +437,66 @@ Current behavior notes:
 - `index.md`, `task show`, and `status` now count unresolved review items from structured `review-notes.md`
 - when unresolved review items are open, task next-action guidance now prefers addressing review findings before continuing implementation
 - `attach` and `capture` operate through the tmux manager abstraction
+
+### E2E Feedback Round 1–3 Improvements (2026-05-20)
+
+Implemented after live WSL multi-agent test session (login-app project):
+
+#### Operator UX
+- `--help` / `-h` flag now handled in all top-level command dispatchers (`agent`, `session`, `project`, `worktree`, `merge`, `message`, `channel`, `step`) before the subcommand switch; prevents misleading "unknown command" errors
+- `wrapProjectNotFound` helper wraps the `"no AOM project found"` error with an actionable hint: `Run aom project init <name> --repo . to initialise a project first, then aom open`; applied in `executeOpen` and `executeStatus`
+- `aom agent add --class <class>` already existed; fixed false warning message that referenced a non-existent `aom agent disable` command
+- `aom capture --summary` flag added: filters raw pane output to structured lines only (pipe-delimited AOM log events, `##` headers, `key=value` pairs, error/warning markers); reduces noise when capturing long agent sessions
+
+#### Session detection stability
+- `detectUniqueVendorSessionID` outer loop now sleeps 1 second when `DetectFn` returns empty to prevent tight spinning
+- claude session file timestamp filter widened from `spawnedAt` to `spawnedAt - 2s` to tolerate filesystem timestamp rounding
+
+#### Session management UX
+- `aom session list` now shows `readiness=` label per session: `done-pending-review` / `needs-operator` / `awaiting-peer` / `in-progress` / `no-progress`; derived from log.md, outbox.md, and channel.md without extra DB queries
+- Detached sessions in `aom session list` and `aom status` now show a `next=` hint with the exact recovery command (`resume`, `recover`, or `archive` depending on available context)
+- `aom session replace` default `launchMode` corrected from `LaunchModeReal` to `LaunchModePlaceholder` so `--mock` flag works without conflicting with the default; fixes three integration test failures
+- Session spawn now auto-appends a channel announcement: `aom: spawned <agent> (session <id>) for task <id> — waiting for operator prompt`
+- `aom session spawn` warns when model ends with `-mini` and the task has more than one step
+
+#### SQLite
+- WAL journal mode and `NORMAL` synchronous pragma applied in `configureConnection`; eliminates most `SQLITE_BUSY` errors from parallel operator commands
+
+#### Agent profiles
+- `base.md.tmpl` rewritten with a mandatory 3-step protocol: update `state.md` directly → `aom step update --status completed` → `aom channel append`; concrete template showing which state.md sections to fill
+- `orchestrator.md.tmpl` expanded to full working protocol: how to check worker progress, when/how to accept tasks, handling blocked workers, dispatching commands
+
+#### Task lifecycle guards
+- `aom task show` commit guard: if `task.completed` appears in the task log but the worktree branch has no commits ahead of the default branch, a `⚠ task.completed logged but no commits found` warning is printed with a hint to run `aom task verify`
+- `aom task ready` now refreshes `project-board.md` after transitioning to Ready (already done in close/accept/cancel)
+- `aom task verify <task-id>` added: 4-point checklist — commits on branch, `state.md` updated, `handoff.md` filled, `task.completed` in log; prints `[ok]` / `[FAIL]` per check with notes; also runs any invariant checks
+- `aom task cancel` already refreshed project board; confirmed consistent with other task state changes
+
+#### New commands
+- `aom worktree prune [--dry-run]`: removes Archived worktrees from git (`git worktree remove --force`) and runs `git worktree prune`; `--dry-run` previews without changes; safe to run after `task cancel` or `task close`
+
+### E2E Feedback Round 4–5 Improvements (2026-05-20)
+
+Implemented after second real WSL test session analysis (AOM_FEEDBACK.md):
+
+#### Session readiness
+- `sessionReadiness(repoPath, session.Record) string` computes a human-readable readiness label per session beyond raw status: `needs-operator` (WaitingApproval / WaitingHandoff / Blocked), `done-pending-review` (task.completed in log.md), `awaiting-peer` (outbox.md present), `in-progress` (agent posted to channel), `no-progress` (Idle with no evidence of activity)
+- Readiness label surfaces in `aom session list` (after each session line) and `aom status` Sessions section
+- JSON output includes `readiness` field per session
+
+#### Machine-readable output
+- `aom status --json` / `aom status -j` outputs structured JSON: `project` (name, repo, defaultBranch, dbPath), `agents`, `sessions` (with readiness), `tasks` (with steps), `counts`
+
+#### Collaboration enforcement
+- `aom step update <id> --status completed` now warns when the assigned agent has not posted any channel message: `Warning: no channel activity from "<agent>" found — consider posting a summary via aom channel append before marking complete`; warning only (does not block)
+
+#### Task invariants
+- `aom task create --invariant required-path=<prefix> --invariant forbidden-path=<glob>` stores constraints in `.aom/<stateDir>/<taskID>/invariants.txt`, one per line
+- `aom task show` displays invariants when present
+- `aom task verify` checks invariants: `required-path=<prefix>` fails if no committed file has that prefix; `forbidden-path=<prefix>` fails if any committed file matches
+
+#### Shared brief distribution
+- `aom project share <file>` copies a file to `.aom/shared/<filename>` (operator-owned) and pushes it to `.agent/shared/<filename>` in every active (Ready/Active) worktree; agents read from `.agent/shared/` without needing to know another task's worktree path; output lists every destination written
 
 ## Current Packages
 

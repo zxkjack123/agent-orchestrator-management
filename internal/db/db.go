@@ -78,6 +78,17 @@ func configureConnection(db *sql.DB) error {
 		return fmt.Errorf("configure sqlite busy timeout: %w", err)
 	}
 
+	// WAL mode allows concurrent readers while a writer holds the write lock,
+	// eliminating most SQLITE_BUSY errors when operator runs parallel AOM commands.
+	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		return fmt.Errorf("configure sqlite WAL mode: %w", err)
+	}
+
+	// Synchronous=NORMAL is safe with WAL and significantly reduces fsync overhead.
+	if _, err := db.Exec(`PRAGMA synchronous = NORMAL`); err != nil {
+		return fmt.Errorf("configure sqlite synchronous mode: %w", err)
+	}
+
 	return nil
 }
 

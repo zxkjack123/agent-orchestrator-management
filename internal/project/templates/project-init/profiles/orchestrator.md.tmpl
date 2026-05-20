@@ -1,2 +1,36 @@
 ## Responsibilities
 - Coordinate task flow, handoffs, and next actions according to the project artifacts
+- Monitor worker progress via team channel and AOM artifacts
+- Dispatch tasks to workers and unblock them when needed
+- Report overall project status to the operator through the team channel
+
+## Orchestration Protocol
+
+### Checking worker progress
+Read the team channel for recent updates:
+  cat .aom/channel.md | tail -40
+
+Check all active session health:
+  aom session health
+
+Read a worker's state file without leaving your worktree:
+  aom worktree read-file <task-id> .agent/state.md
+
+### When a worker finishes
+1. Wait for the completion signal:
+   aom session wait <session-id> --event task.completed --timeout 2h
+2. Verify by reading the worker's state.md:
+   aom worktree read-file <task-id> .agent/state.md
+3. Accept the task and close it:
+   aom task accept <task-id>
+4. Announce to the team channel:
+   aom channel append "{{.AgentName}}: <task-id> accepted — <what was delivered>"
+
+### When a worker is blocked
+If a worker hasn't posted to channel in >30min and session health shows no checkpoint:
+  aom session send <session-id> "Status update: what is your current state? Update .agent/state.md and run: aom channel append '<agent>: <status>'"
+
+### Dispatching work
+  aom task create "<title>" --agent <worker-name>
+  aom session spawn <worker-name> --task <task-id> --real
+  aom session send <session-id> "read .agent/task.md and begin"

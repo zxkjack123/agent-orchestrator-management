@@ -68,6 +68,21 @@ func (r Runner) executeSessionSpawn(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	// Warn when a mini model is used for a task with multiple steps.
+	if agentRecord.Model != "" && strings.HasSuffix(agentRecord.Model, "-mini") && params.taskID != "" {
+		stepService, stepDB, stepErr := r.app.OpenStepService(result.DBPath)
+		if stepErr == nil {
+			steps, _ := stepService.ListByTask(params.taskID)
+			stepDB.Close()
+			if len(steps) > 1 {
+				fmt.Fprintf(r.stdout, "Warning: model %q (mini) may not handle multi-step tasks reliably (%d steps).\n", agentRecord.Model, len(steps))
+				fmt.Fprintln(r.stdout, "         Consider using a larger model: aom agent set-model "+agentRecord.Name+" <model>")
+				fmt.Fprintln(r.stdout, "")
+			}
+		}
+	}
+
 	_, err = r.executeResolvedSessionSpawn(result, agentRecord, params)
 	return err
 }
@@ -157,6 +172,23 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 				)
 			}
 		}
+
+		// Warn if a different agent with the same role already has an active session
+		// for this task — this usually means project init created a default agent
+		// (e.g. reviewer-main) and the operator also added a custom one (e.g. claude-reviewer),
+		// leading to two reviewer sessions consuming the same task context.
+		allActive, listErr := sessionService.ListByProject(result.Project.ID)
+		if listErr == nil {
+			for _, s := range allActive {
+				if s.AgentName != agentRecord.Name && s.RoleName == agentRecord.Role &&
+					s.TaskID == params.taskID && isActiveSessionStatus(s.Status) {
+					fmt.Fprintf(r.stdout, "Warning: agent %q (role=%s) already has an active session %s for this task.\n", s.AgentName, s.RoleName, s.ID)
+					fmt.Fprintln(r.stdout, "         Two agents with the same role on the same task may duplicate work or conflict.")
+					fmt.Fprintf(r.stdout, "         If %q is no longer needed, stop it first: aom session stop %s\n", s.AgentName, s.ID)
+					fmt.Fprintln(r.stdout, "")
+				}
+			}
+		}
 	}
 
 	record, err := sessionService.Create(session.CreateParams{
@@ -224,10 +256,24 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "pane creation failed before session became interactive", err)
 	}
 
-	record.Status = "Idle"
+	// Set pane binding on record before any early-exit paths so failure saves include tmux context.
 	record.TmuxWindow = paneBinding.WindowID
 	record.TmuxPane = paneBinding.PaneID
 	record.TmuxSessionName = workspace.Name
+
+	// For real-mode sessions, verify the runtime process didn't exit immediately.
+	// Some runtimes (e.g. codex) silently quit on auth failure, leaving the pane closed.
+	if params.launchMode == aomruntime.LaunchModeReal {
+		time.Sleep(1200 * time.Millisecond)
+		if alive, _ := r.app.Tmux.PaneExists(paneBinding.PaneID); !alive {
+			_ = r.app.Tmux.KillPane(paneBinding.PaneID)
+			return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID,
+				fmt.Sprintf("%q runtime exited within 1.2s of launch — check binary, PATH, and authentication", agentRecord.Runtime),
+				fmt.Errorf("runtime %q pane %s closed immediately after spawn — check binary and authentication", agentRecord.Runtime, paneBinding.PaneID))
+		}
+	}
+
+	record.Status = "Idle"
 
 	// Label the window with the agent name so operators can identify sessions at a glance.
 	_ = r.app.Tmux.RenameWindow(paneBinding.WindowID, agentRecord.Name)
@@ -263,6 +309,10 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		if err := r.ensureTaskHandoffTemplate(result, taskRecord.ID, record); err != nil {
 			return nil, err
 		}
+		_ = appendChannelMessage(result.Project.RepoPath, "aom",
+			fmt.Sprintf("spawned %s (session %s) for task %s — waiting for operator prompt",
+				agentRecord.Name, record.ID, taskRecord.ID),
+			time.Now())
 	}
 
 	if err := r.app.Tmux.AnnotatePane(record.TmuxPane, map[string]string{
@@ -399,7 +449,12 @@ func (r Runner) executeSessionReplace(args []string) error {
 				return err
 			}
 		case "--real":
+			// --real is the default; accepted for backwards compatibility
 			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeReal); err != nil {
+				return err
+			}
+		case "--placeholder":
+			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModePlaceholder); err != nil {
 				return err
 			}
 		default:
@@ -527,11 +582,17 @@ func (r Runner) executeSessionList(args []string) error {
 			emptyFallback(item.TaskID),
 			item.Runtime,
 			modelSuffix,
-			item.Status,
+			colorStatus(item.Status, r.stdout),
 			item.TmuxSessionName,
 			item.TmuxWindow,
 			item.TmuxPane,
 		)
+		if item.Status == "Detached" {
+			fmt.Fprintf(r.stdout, "    next=%s\n", detachedSessionHint(item))
+		}
+		if readiness := sessionReadiness(result.Project.RepoPath, item); readiness != "" {
+			fmt.Fprintf(r.stdout, "    readiness=%s\n", readiness)
+		}
 		printed++
 	}
 
@@ -544,6 +605,48 @@ func (r Runner) executeSessionList(args []string) error {
 	}
 
 	return nil
+}
+
+// sessionReadiness returns a computed readiness label for the session, giving
+// operators a quick signal beyond just the status string.
+func sessionReadiness(repoPath string, s session.Record) string {
+	if s.TaskID == "" {
+		return ""
+	}
+	switch s.Status {
+	case "WaitingApproval", "WaitingHandoff", "Blocked":
+		return "needs-operator"
+	case "Stopped", "Failed", "Detached", "Archived":
+		return ""
+	}
+	// Idle or Working — compute from artifacts.
+	if s.WorktreePath != "" {
+		logPath := filepath.Join(s.WorktreePath, ".agent", "log.md")
+		if hasTaskCompletedEvent(logPath) {
+			return "done-pending-review"
+		}
+		// Check outbox.
+		if _, err := os.Stat(filepath.Join(s.WorktreePath, ".agent", "outbox.md")); err == nil {
+			return "awaiting-peer"
+		}
+	}
+	// Check if agent posted to channel.
+	channelData, _ := readChannelFile(repoPath)
+	if strings.Contains(channelData, "| "+s.AgentName+"\n") {
+		return "in-progress"
+	}
+	return "no-progress"
+}
+
+// detachedSessionHint returns the recommended next-action command for a Detached session.
+func detachedSessionHint(s session.Record) string {
+	if s.VendorSessionID != "" {
+		return fmt.Sprintf("aom session resume %s  (native session available)", s.ID)
+	}
+	if s.TaskID != "" {
+		return fmt.Sprintf("aom session recover %s  (task-backed; inspect then spawn or archive)", s.ID)
+	}
+	return fmt.Sprintf("aom session archive %s  (no task or native session — safe to archive)", s.ID)
 }
 
 func (r Runner) executeSessionShow(args []string) error {
@@ -1538,6 +1641,14 @@ func (r Runner) executeSessionSend(args []string) error {
 		fmt.Fprintf(r.stdout, "Warning: pane %s is showing an interactive overlay (e.g. a permission prompt or /status view).\n", sessionRecord.TmuxPane)
 		fmt.Fprintln(r.stdout, "The message will be sent but the agent may not receive it until the overlay is dismissed.")
 		fmt.Fprintln(r.stdout, "Tip: press 'q' or Escape in the pane to close the overlay first.")
+		fmt.Fprintln(r.stdout)
+	}
+
+	if cmd := r.app.Tmux.PaneCurrentCommand(sessionRecord.TmuxPane); isShellProcess(cmd) {
+		fmt.Fprintf(r.stdout, "Warning: pane %s is running a shell (%q) — the agent runtime is not active.\n", sessionRecord.TmuxPane, cmd)
+		fmt.Fprintln(r.stdout, "The message will be sent as shell input and may be interpreted as shell commands.")
+		fmt.Fprintf(r.stdout, "Tip: run \"aom session spawn %s --real\" (or \"aom session replace %s --agent %s\") to start the agent first.\n",
+			sessionRecord.AgentName, sessionRecord.ID, sessionRecord.AgentName)
 		fmt.Fprintln(r.stdout)
 	}
 

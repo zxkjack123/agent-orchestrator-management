@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
 )
@@ -57,6 +59,12 @@ func (r Runner) executeTaskCreate(args []string) error {
 				return fmt.Errorf("--description requires a value")
 			}
 			params.description = args[i]
+		case "--invariant":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--invariant requires a value")
+			}
+			params.invariants = append(params.invariants, args[i])
 		default:
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
@@ -100,6 +108,16 @@ func (r Runner) executeTaskCreate(args []string) error {
 		return err
 	}
 
+	if len(params.invariants) > 0 {
+		invPath := invariantsPath(result.Project.RepoPath, result.StateDir, createResult.Task.ID)
+		if err := os.MkdirAll(filepath.Dir(invPath), 0o755); err != nil {
+			return fmt.Errorf("create invariants dir: %w", err)
+		}
+		if err := os.WriteFile(invPath, []byte(strings.Join(params.invariants, "\n")+"\n"), 0o644); err != nil {
+			return fmt.Errorf("write invariants: %w", err)
+		}
+	}
+
 	if err := r.syncTaskArtifacts(result, createResult.Task.ID, artifact.Event{
 		Type:        "task.created",
 		Actor:       "operator",
@@ -139,6 +157,7 @@ type taskCreateParams struct {
 	agent       string
 	priority    string
 	stepType    string
+	invariants  []string
 }
 
 func (r Runner) executeTaskShow(args []string) error {
@@ -168,6 +187,9 @@ func (r Runner) executeTaskShow(args []string) error {
 	fmt.Fprintf(r.stdout, "Title: %s\n", view.Task.Title)
 	fmt.Fprintf(r.stdout, "Mode: %s\n", view.Task.Mode)
 	fmt.Fprintf(r.stdout, "Status: %s\n", view.Task.Status)
+	if transitions := task.ValidTransitions(view.Task.Status); len(transitions) > 0 {
+		fmt.Fprintf(r.stdout, "Valid transitions: -> %s\n", strings.Join(transitions, ", "))
+	}
 	fmt.Fprintf(r.stdout, "Preferred role: %s\n", emptyFallback(view.Task.PreferredRole))
 	fmt.Fprintf(r.stdout, "Preferred agent: %s\n", emptyFallback(view.Task.PreferredAgent))
 	if view.Worktree != nil {
@@ -184,6 +206,24 @@ func (r Runner) executeTaskShow(args []string) error {
 	fmt.Fprintf(r.stdout, "Review owner hint: %s\n", reviewOwnerHintDisplay(view.ReviewOwnerHint, view.ReviewOwnerAmbiguous))
 	fmt.Fprintf(r.stdout, "Steps: %d\n", len(view.Steps))
 	fmt.Fprintf(r.stdout, "Recommended next action: %s\n", recommendTaskAction(view.Task.Status, view.Steps, view.Worktree, view.WorktreeDrift, view.UnresolvedReviewItems, view.ReviewOwnerHint, view.ReviewOwnerAmbiguous))
+	if invs := loadTaskInvariants(result, view.Task.ID); len(invs) > 0 {
+		fmt.Fprintf(r.stdout, "Invariants: %s\n", strings.Join(invs, ", "))
+	}
+
+	// Commit guard: warn if agent signalled task.completed but branch has no commits.
+	if view.Worktree != nil && view.Task.Status != "Done" && view.Task.Status != "Archived" {
+		logPath := taskArtifactLogPath(result.Project.RepoPath, result.StateDir, view.Task.ID, view.Worktree)
+		if hasTaskCompletedEvent(logPath) {
+			branch := view.Worktree.BranchName
+			defaultBranch := result.Project.DefaultBranch
+			commitsOut, commitsErr := exec.Command("git", "-C", result.Project.RepoPath,
+				"log", "--oneline", defaultBranch+".."+branch).Output()
+			if commitsErr == nil && strings.TrimSpace(string(commitsOut)) == "" {
+				fmt.Fprintf(r.stdout, "\n⚠  task.completed logged but no commits found on branch %q ahead of %q\n", branch, defaultBranch)
+				fmt.Fprintf(r.stdout, "   Agent may not have committed work. Run: aom task verify %s\n", view.Task.ID)
+			}
+		}
+	}
 
 	return nil
 }
@@ -618,6 +658,8 @@ func (r Runner) executeTaskReady(args []string) error {
 	}
 
 	go runHook(result.Project.RepoPath, "on-task-ready", taskRecord.ID, taskRecord.Title, taskRecord.Status)
+
+	_ = r.refreshProjectBoard(result)
 
 	fmt.Fprintln(r.stdout, "Task ready")
 	fmt.Fprintln(r.stdout, "")
@@ -1357,6 +1399,174 @@ func (r Runner) executeTaskClaim(args []string) error {
 	return nil
 }
 
+// hasTaskCompletedEvent returns true if log.md contains a task.completed event,
+// indicating an agent signalled completion regardless of the DB task status.
+func hasTaskCompletedEvent(logPath string) bool {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), "task.completed")
+}
+
+// executeTaskVerify checks that a task's worktree evidence is consistent with completion:
+// commits exist on branch, state.md updated, handoff.md filled, task.completed in log.
+func (r Runner) executeTaskVerify(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task identifier is required")
+	}
+	taskID := strings.TrimSpace(args[0])
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	view, err := r.loadTaskView(result, taskID)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+
+	type chk struct {
+		name string
+		ok   bool
+		note string
+	}
+	var checks []chk
+
+	// Check 1: commits on branch ahead of default branch.
+	if view.Worktree != nil {
+		branch := view.Worktree.BranchName
+		defaultBranch := result.Project.DefaultBranch
+		commitsOut, commitsErr := exec.Command("git", "-C", result.Project.RepoPath,
+			"log", "--oneline", defaultBranch+".."+branch).Output()
+		hasCommits := commitsErr == nil && strings.TrimSpace(string(commitsOut)) != ""
+		note := ""
+		if !hasCommits {
+			note = fmt.Sprintf("no commits on %q ahead of %q", branch, defaultBranch)
+		}
+		checks = append(checks, chk{"commits on branch", hasCommits, note})
+	}
+
+	// Check 2: state.md has completed work entries.
+	artifactRoot := taskArtifactRoot(result.Project.RepoPath, result.StateDir, view.Task.ID, view.Worktree)
+	stateData, stateErr := os.ReadFile(filepath.Join(artifactRoot, "state.md"))
+	stateOK := stateErr == nil && !strings.Contains(string(stateData), "- None recorded yet")
+	stateNote := ""
+	if !stateOK {
+		if stateErr != nil {
+			stateNote = "state.md not found"
+		} else {
+			stateNote = "state.md still shows 'None recorded yet'"
+		}
+	}
+	checks = append(checks, chk{"state.md updated", stateOK, stateNote})
+
+	// Check 3: handoff.md is present and non-trivial.
+	handoffData, handoffErr := os.ReadFile(filepath.Join(artifactRoot, "handoff.md"))
+	handoffOK := handoffErr == nil && len(strings.TrimSpace(string(handoffData))) > 80
+	handoffNote := ""
+	if !handoffOK {
+		if handoffErr != nil {
+			handoffNote = "handoff.md not found"
+		} else {
+			handoffNote = "handoff.md appears empty or too sparse"
+		}
+	}
+	checks = append(checks, chk{"handoff.md filled", handoffOK, handoffNote})
+
+	// Check 4: task.completed event in log.md.
+	logPath := taskArtifactLogPath(result.Project.RepoPath, result.StateDir, view.Task.ID, view.Worktree)
+	logOK := hasTaskCompletedEvent(logPath)
+	logNote := ""
+	if !logOK {
+		logNote = "task.completed event not found in log.md"
+	}
+	checks = append(checks, chk{"task.completed in log", logOK, logNote})
+
+	// Invariant checks.
+	if view.Worktree != nil {
+		branch := view.Worktree.BranchName
+		defaultBranch := result.Project.DefaultBranch
+		gitLogOut, gitLogErr := exec.Command("git", "-C", result.Project.RepoPath,
+			"log", "--name-only", defaultBranch+".."+branch).Output()
+		gitLogFiles := ""
+		if gitLogErr == nil {
+			gitLogFiles = string(gitLogOut)
+		}
+		for _, inv := range loadTaskInvariants(result, view.Task.ID) {
+			parts := strings.SplitN(inv, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key, val := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+			switch key {
+			case "required-path":
+				found := false
+				for _, line := range strings.Split(gitLogFiles, "\n") {
+					if strings.HasPrefix(strings.TrimSpace(line), val) {
+						found = true
+						break
+					}
+				}
+				note := ""
+				if !found {
+					note = fmt.Sprintf("no changed file with prefix %q found on branch", val)
+				}
+				checks = append(checks, chk{"invariant: required-path=" + val, found, note})
+			case "forbidden-path":
+				violated := false
+				violatingFile := ""
+				for _, line := range strings.Split(gitLogFiles, "\n") {
+					trimmed := strings.TrimSpace(line)
+					if trimmed != "" && strings.HasPrefix(trimmed, val) {
+						violated = true
+						violatingFile = trimmed
+						break
+					}
+				}
+				note := ""
+				if violated {
+					note = fmt.Sprintf("forbidden file found on branch: %q", violatingFile)
+				}
+				checks = append(checks, chk{"invariant: forbidden-path=" + val, !violated, note})
+			}
+		}
+	}
+
+	allOK := true
+	fmt.Fprintln(r.stdout, "Task Verify")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Task:   %s\n", view.Task.ID)
+	fmt.Fprintf(r.stdout, "Title:  %s\n", view.Task.Title)
+	fmt.Fprintf(r.stdout, "Status: %s\n", view.Task.Status)
+	fmt.Fprintln(r.stdout, "")
+
+	for _, c := range checks {
+		icon := "ok"
+		if !c.ok {
+			icon = "FAIL"
+			allOK = false
+		}
+		if c.note != "" {
+			fmt.Fprintf(r.stdout, "[%s]  %s — %s\n", icon, c.name, c.note)
+		} else {
+			fmt.Fprintf(r.stdout, "[%s]  %s\n", icon, c.name)
+		}
+	}
+
+	fmt.Fprintln(r.stdout, "")
+	if allOK {
+		fmt.Fprintln(r.stdout, "All checks passed — task appears ready for review/accept")
+	} else {
+		fmt.Fprintln(r.stdout, "Some checks failed — review the items above before accepting this task")
+	}
+	return nil
+}
+
 func (r Runner) executeTaskCancel(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("task id is required")
@@ -1440,4 +1650,25 @@ func (r Runner) executeTaskCancel(args []string) error {
 		fmt.Fprintf(r.stdout, "Steps cancelled: %d\n", cancelledSteps)
 	}
 	return nil
+}
+
+// invariantsPath returns the path to the task invariants file.
+func invariantsPath(repoPath, stateDir, taskID string) string {
+	return filepath.Join(repoPath, ".aom", stateDir, taskID, "invariants.txt")
+}
+
+// loadTaskInvariants reads the invariants file for a task. Returns nil if not found.
+func loadTaskInvariants(result *project.OpenResult, taskID string) []string {
+	data, err := os.ReadFile(invariantsPath(result.Project.RepoPath, result.StateDir, taskID))
+	if err != nil {
+		return nil
+	}
+	var invs []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			invs = append(invs, line)
+		}
+	}
+	return invs
 }

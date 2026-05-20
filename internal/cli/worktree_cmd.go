@@ -220,6 +220,111 @@ func (r Runner) executeWorktreeCommit(args []string) error {
 // resolveWorktreeGitDir finds the GIT_DIR for a git worktree. It first reads
 // the .git pointer file in the worktree; if that fails it falls back to
 // scanning .git/worktrees/ for a matching gitdir entry.
+// executeWorktreePrune removes archived worktrees from git and the filesystem.
+// Pass --dry-run to preview what would be removed without making changes.
+func (r Runner) executeWorktreePrune(args []string) error {
+	dryRun := false
+	for _, a := range args {
+		switch a {
+		case "--dry-run":
+			dryRun = true
+		default:
+			return fmt.Errorf("unknown flag %q", a)
+		}
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	worktreeService, wDB, err := r.app.OpenWorktreeService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer wDB.Close()
+
+	records, err := worktreeService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	// Collect paths registered in git worktrees.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	gitOut, gitErr := exec.CommandContext(ctx, "git", "-C", result.Project.RepoPath, "worktree", "list", "--porcelain").Output()
+	cancel()
+	var gitPaths []string
+	if gitErr == nil {
+		gitPaths = parseGitWorktreePorcelain(string(gitOut))
+	}
+
+	pruned := 0
+	for _, rec := range records {
+		if rec.Status != "Archived" {
+			continue
+		}
+		wtPath := filepath.Clean(rec.WorktreePath)
+
+		// Check if this path is still registered with git.
+		inGit := false
+		for _, gp := range gitPaths {
+			if filepath.Clean(gp) == wtPath {
+				inGit = true
+				break
+			}
+		}
+
+		if !inGit {
+			continue
+		}
+
+		if dryRun {
+			fmt.Fprintf(r.stdout, "would prune: %s  (task: %s)\n", wtPath, rec.TaskID)
+			pruned++
+			continue
+		}
+
+		removeCtx, removeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		out, removeErr := exec.CommandContext(removeCtx, "git", "-C", result.Project.RepoPath,
+			"worktree", "remove", "--force", wtPath).CombinedOutput()
+		removeCancel()
+		if removeErr != nil {
+			fmt.Fprintf(r.stderr, "Warning: could not remove git worktree %s: %v\n%s\n", wtPath, removeErr, strings.TrimSpace(string(out)))
+		} else {
+			fmt.Fprintf(r.stdout, "pruned: %s  (task: %s)\n", wtPath, rec.TaskID)
+			pruned++
+		}
+	}
+
+	if !dryRun {
+		// Clean up any stale git worktree references.
+		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_, _ = exec.CommandContext(pruneCtx, "git", "-C", result.Project.RepoPath, "worktree", "prune").Output()
+		pruneCancel()
+	}
+
+	if pruned == 0 {
+		fmt.Fprintln(r.stdout, "No archived worktrees to prune")
+	} else if dryRun {
+		fmt.Fprintf(r.stdout, "\n%d worktree(s) would be pruned (dry run — no changes made)\n", pruned)
+	} else {
+		fmt.Fprintf(r.stdout, "\n%d worktree(s) pruned\n", pruned)
+	}
+	return nil
+}
+
+// parseGitWorktreePorcelain extracts worktree paths from `git worktree list --porcelain` output.
+func parseGitWorktreePorcelain(output string) []string {
+	var paths []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "worktree ") {
+			paths = append(paths, strings.TrimPrefix(line, "worktree "))
+		}
+	}
+	return paths
+}
+
 func resolveWorktreeGitDir(repoPath, worktreePath string) (string, error) {
 	gitFile := filepath.Join(worktreePath, ".git")
 	data, err := os.ReadFile(gitFile)

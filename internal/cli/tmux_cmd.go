@@ -49,10 +49,11 @@ func (r Runner) executeAttach(args []string) error {
 }
 
 func (r Runner) executeCapture(args []string) error {
-	// Parse flags: session identifier (positional), --follow/-f, --diff, --interval <duration>
+	// Parse flags: session identifier (positional), --follow/-f, --diff, --summary, --interval <duration>
 	var sessionID string
 	var followMode bool
 	var diffMode bool
+	var summaryMode bool
 	interval := 2 * time.Second
 
 	for i := 0; i < len(args); i++ {
@@ -61,6 +62,8 @@ func (r Runner) executeCapture(args []string) error {
 			followMode = true
 		case "--diff":
 			diffMode = true
+		case "--summary":
+			summaryMode = true
 		case "--interval":
 			i++
 			if i >= len(args) {
@@ -139,8 +142,57 @@ func (r Runner) executeCapture(args []string) error {
 		return err
 	}
 
+	if summaryMode {
+		fmt.Fprint(r.stdout, captureSummary(output))
+		return nil
+	}
+
 	fmt.Fprint(r.stdout, output)
 	return nil
+}
+
+// captureSummary filters raw pane output down to lines that carry structured
+// signal: AOM log events (pipe-delimited), section headers (##), key=value
+// pairs, error/warning markers, and git/tool output lines. Everything else —
+// raw diff fragments, ANSI escape sequences, and blank separator lines — is
+// dropped so the operator can read the summary at a glance.
+func captureSummary(raw string) string {
+	var kept []string
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// AOM log event rows: | timestamp | type | actor | ... |
+		if strings.HasPrefix(trimmed, "|") && strings.Count(trimmed, "|") >= 4 {
+			kept = append(kept, line)
+			continue
+		}
+		// Markdown section headers written by agents
+		if strings.HasPrefix(trimmed, "##") || strings.HasPrefix(trimmed, "# ") {
+			kept = append(kept, line)
+			continue
+		}
+		// key=value status lines (e.g. status=Done, step=s-001)
+		if strings.Count(trimmed, "=") >= 1 && !strings.HasPrefix(trimmed, "-") && !strings.HasPrefix(trimmed, "+") {
+			if idx := strings.Index(trimmed, "="); idx > 0 && idx < 30 {
+				kept = append(kept, line)
+				continue
+			}
+		}
+		// Error, warning, and completion signals
+		lower := strings.ToLower(trimmed)
+		for _, marker := range []string{"error:", "warning:", "fatal:", "✓", "✗", "done", "completed", "failed", "checkpoint"} {
+			if strings.Contains(lower, marker) {
+				kept = append(kept, line)
+				break
+			}
+		}
+	}
+	if len(kept) == 0 {
+		return "(no structured output detected — use aom capture <session> without --summary to see raw pane)\n"
+	}
+	return strings.Join(kept, "\n") + "\n"
 }
 
 // readStateFile returns the content of a state file, or "" if it doesn't exist.

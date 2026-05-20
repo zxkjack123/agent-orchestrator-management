@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-# Build aom-linux (Linux/amd64) and deploy to WSL home directory.
+# Build aom for Linux/amd64 on Windows and deploy it into the WSL user's PATH.
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
@@ -17,9 +17,11 @@ $OutputPath = "$ProjectRoot\aom-linux"
 go build -o $OutputPath "$ProjectRoot\cmd\aom\main.go"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Copying to WSL ~/aom-linux..."
+Write-Host "Copying to WSL ~/.local/bin/aom..."
 $WslPath = wsl wslpath -u ($OutputPath -replace "\\", "/")
-wsl cp $WslPath ~/aom-linux
-wsl chmod +x ~/aom-linux
+wsl bash -lc "mkdir -p ~/.local/bin"
+wsl cp $WslPath ~/.local/bin/aom
+wsl chmod +x ~/.local/bin/aom
 
-Write-Host "Done. Test with: wsl ~/aom-linux --help"
+Write-Host "Done."
+Write-Host "Test with: wsl bash -lc 'command -v aom && aom help'"

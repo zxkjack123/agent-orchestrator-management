@@ -13,9 +13,11 @@
 - Remove dead code and unused imports before each commit
 
 ## Sandbox Constraints
-- Your runtime sandbox may restrict outbound network access (e.g. codex restricts it by default)
-- If npm install / pip install / go get fails with a network error: do NOT retry in a loop
-  Instead: write stub/placeholder code, note "requires: npm install post-merge" in .agent/state.md,
-  and continue with the task — the operator will run package installation after merge
+- Outbound network access is enabled — npm install / pip install / go get should work normally
+- If a package install fails (network error, registry timeout, or sandbox restriction on this platform):
+  do NOT retry in a loop — write stub/placeholder code, note "requires: npm install post-merge"
+  in .agent/state.md, and continue with the task
+- If git commit fails with `index.lock: Read-only file system` (NTFS mount via WSL2):
+  use `aom worktree commit <task-id>` as the fallback instead of git commit directly
 - Always cd into the correct subdirectory before running npm/pip/go commands to avoid
   creating stray package files at the repo root

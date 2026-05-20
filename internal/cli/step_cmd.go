@@ -164,6 +164,14 @@ func (r Runner) executeStepUpdate(args []string) error {
 		}
 	}
 
+	// Collaboration gate: warn if step is being completed without any channel activity.
+	if targetStatus == "Completed" && record != nil && record.AgentName != "" {
+		channelData, _ := readChannelFile(result.Project.RepoPath)
+		if !strings.Contains(channelData, "| "+record.AgentName+"\n") {
+			fmt.Fprintf(r.stdout, "Warning: no channel activity from %q found — consider posting a summary via `aom channel append` before marking complete.\n\n", record.AgentName)
+		}
+	}
+
 	if err := r.syncTaskArtifacts(result, record.TaskID, artifact.Event{
 		Type:        mapStepEventType(record.Status),
 		Actor:       "operator",

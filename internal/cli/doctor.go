@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 )
 
@@ -373,6 +374,29 @@ func (r Runner) executeDoctor(args []string) error {
 		}
 	}
 
+	// ── Agent model field ─────────────────────────────────────────────────────
+	if cfg != nil {
+		agentsPath := filepath.Join(cfg.AOMPath, "agents.yaml")
+		if rawData, readErr := os.ReadFile(agentsPath); readErr == nil {
+			modelFieldCount := strings.Count(string(rawData), "\n    model:")
+			agentCount := len(cfg.Agents.Agents)
+			if agentCount > 0 && modelFieldCount < agentCount {
+				missing := agentCount - modelFieldCount
+				results = append(results, doctorResult{
+					label:   "agents: model field",
+					detail:  fmt.Sprintf("%d agent(s) missing model: field — run \"aom doctor --fix\" to auto-repair agents.yaml", missing),
+					warning: true,
+				})
+			} else if agentCount > 0 {
+				results = append(results, doctorResult{
+					label:  "agents: model field",
+					detail: "all agents have model: field",
+					ok:     true,
+				})
+			}
+		}
+	}
+
 	// ── Stale policy dirs + session count ────────────────────────────────────
 	if cfg != nil && dbPath != "" {
 		sessService, sessDB, sessErr := r.app.OpenSessionService(dbPath)
@@ -509,6 +533,15 @@ func (r Runner) executeDoctorFix() error {
 	fmt.Fprintln(r.stdout, "AOM Doctor --fix")
 	fmt.Fprintln(r.stdout, "================")
 	fmt.Fprintln(r.stdout, "")
+
+	// Re-serialize agents.yaml to ensure model: field is present for all agents.
+	if err := project.RepairAgentsFile(cfg.AOMPath); err != nil {
+		fmt.Fprintf(r.stdout, "  FAIL  agents.yaml repair: %v\n", err)
+		failed++
+	} else {
+		fmt.Fprintf(r.stdout, "  FIXED agents.yaml — model: field ensured for all agents\n")
+		fixed++
+	}
 
 	// Fix sessions.db permissions.
 	dbPath := filepath.Join(cfg.AOMPath, "sessions.db")

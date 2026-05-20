@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -89,9 +90,10 @@ func AddAgentToConfig(aomPath string, params AddAgentParams) error {
 		Runtime: params.Runtime,
 		Role:    params.Role,
 		Enabled: true,
+		Model:   "", // empty = provider default; set via `aom agent set-model`
 	}
 
-	out, err := yaml.Marshal(&cfg)
+	out, err := marshalAgentsFile(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal agents.yaml: %w", err)
 	}
@@ -105,6 +107,31 @@ func AddAgentToConfig(aomPath string, params AddAgentParams) error {
 		return fmt.Errorf("render agent profile %q: %w", params.Name, err)
 	}
 	return WriteAgentProfile(aomPath, params.Name, content)
+}
+
+// RepairAgentsFile re-serializes agents.yaml using marshalAgentsFile, which
+// guarantees every agent entry contains a model: field (even when empty).
+// Call this to upgrade files created before the model field was introduced.
+func RepairAgentsFile(aomPath string) error {
+	agentsPath := filepath.Join(aomPath, "agents.yaml")
+	data, err := os.ReadFile(agentsPath)
+	if err != nil {
+		return fmt.Errorf("read agents.yaml: %w", err)
+	}
+
+	var cfg config.AgentsFile
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("parse agents.yaml: %w", err)
+	}
+
+	out, err := marshalAgentsFile(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal agents.yaml: %w", err)
+	}
+	if err := os.WriteFile(agentsPath, out, 0o644); err != nil {
+		return fmt.Errorf("write agents.yaml: %w", err)
+	}
+	return nil
 }
 
 // SetAgentModel updates only the model field for a named agent in agents.yaml,
@@ -130,7 +157,7 @@ func SetAgentModel(aomPath, agentName, model string) error {
 	agent.Model = model
 	cfg.Agents[agentName] = agent
 
-	out, err := yaml.Marshal(&cfg)
+	out, err := marshalAgentsFile(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal agents.yaml: %w", err)
 	}
@@ -138,6 +165,99 @@ func SetAgentModel(aomPath, agentName, model string) error {
 		return fmt.Errorf("write agents.yaml: %w", err)
 	}
 	return nil
+}
+
+// marshalAgentsFile serializes an AgentsFile to YAML, ensuring the model: field
+// is always present for every agent (even when empty) so operators can see and
+// edit it without having to know the field name.
+func marshalAgentsFile(cfg config.AgentsFile) ([]byte, error) {
+	// Build a yaml.Node tree so we can control field order and include model: ""
+	// even when it is empty (yaml.Marshal would omit zero-value strings otherwise).
+	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+
+	// roles section
+	rolesKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "roles"}
+	rolesVal := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	roleNames := make([]string, 0, len(cfg.Roles))
+	for n := range cfg.Roles {
+		roleNames = append(roleNames, n)
+	}
+	sort.Strings(roleNames)
+	for _, name := range roleNames {
+		rc := cfg.Roles[name]
+		roleKey := &yaml.Node{Kind: yaml.ScalarNode, Value: name}
+		roleVal := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		appendStrField(roleVal, "class", rc.Class)
+		appendStrField(roleVal, "worktree_mode", rc.WorktreeMode)
+		appendStrField(roleVal, "checkpoint_expectation", rc.CheckpointExpectation)
+		appendStrField(roleVal, "default_session_mode", rc.DefaultSessionMode)
+		rolesVal.Content = append(rolesVal.Content, roleKey, roleVal)
+	}
+	root.Content = append(root.Content, rolesKey, rolesVal)
+
+	// agents section
+	agentsKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "agents"}
+	agentsVal := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	agentNames := make([]string, 0, len(cfg.Agents))
+	for n := range cfg.Agents {
+		agentNames = append(agentNames, n)
+	}
+	sort.Strings(agentNames)
+	for _, name := range agentNames {
+		ac := cfg.Agents[name]
+		agentKey := &yaml.Node{Kind: yaml.ScalarNode, Value: name}
+		agentVal := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		appendStrField(agentVal, "runtime", ac.Runtime)
+		appendStrField(agentVal, "role", ac.Role)
+		appendBoolField(agentVal, "enabled", ac.Enabled)
+		// model: always written, even when empty, so operators can see and set it.
+		modelNode := &yaml.Node{Kind: yaml.ScalarNode, Value: ac.Model}
+		modelNode.LineComment = modelLineComment(ac.Runtime)
+		agentVal.Content = append(agentVal.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "model"},
+			modelNode,
+		)
+		agentsVal.Content = append(agentsVal.Content, agentKey, agentVal)
+	}
+	root.Content = append(root.Content, agentsKey, agentsVal)
+
+	doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func appendStrField(node *yaml.Node, key, value string) {
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: value},
+	)
+}
+
+func appendBoolField(node *yaml.Node, key string, value bool) {
+	v := "false"
+	if value {
+		v = "true"
+	}
+	node.Content = append(node.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: v, Tag: "!!bool"},
+	)
+}
+
+func modelLineComment(runtime string) string {
+	switch runtime {
+	case "codex":
+		return "# leave empty = provider default | options: gpt-5.5 | gpt-5.4 | gpt-5.4-mini | gpt-5.3-codex"
+	case "claude":
+		return "# leave empty = provider default | options: sonnet | opus | haiku | claude-sonnet-4-6 | claude-opus-4-7"
+	default:
+		return "# leave empty = provider default"
+	}
 }
 
 // UpdateProfileSection replaces a named markdown section (## Heading) with new content.

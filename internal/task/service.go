@@ -3,6 +3,7 @@ package task
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -443,7 +444,30 @@ func validateTaskTransition(current, next string) error {
 		return nil
 	}
 
-	return fmt.Errorf("task transition %s -> %s is not allowed", current, next)
+	validNext := make([]string, 0)
+	for state := range allowed[current] {
+		validNext = append(validNext, state)
+	}
+	sort.Strings(validNext)
+	if len(validNext) == 0 {
+		return fmt.Errorf("task transition %s -> %s is not allowed (no further transitions from %s)", current, next, current)
+	}
+	return fmt.Errorf("task transition %s -> %s is not allowed\nValid next states from %s: %s", current, next, current, strings.Join(validNext, ", "))
+}
+
+// ValidTransitions returns the allowed next states for the given task status,
+// sorted alphabetically. Returns nil for terminal states with no transitions.
+func ValidTransitions(current string) []string {
+	allowed := map[string][]string{
+		"Draft":          {"Archived", "Planned"},
+		"Planned":        {"Archived", "NeedsAttention", "Ready"},
+		"Ready":          {"Archived", "InProgress"},
+		"InProgress":     {"Blocked", "Done", "NeedsAttention", "Ready"},
+		"Blocked":        {"NeedsAttention", "Ready"},
+		"NeedsAttention": {"Done", "InProgress", "Planned", "Ready"},
+		"Done":           {"Archived"},
+	}
+	return allowed[current]
 }
 
 // NormalizePriority converts a human-readable priority label to its integer value.

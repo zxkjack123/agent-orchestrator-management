@@ -373,6 +373,7 @@ func (r Runner) detectUniqueVendorSessionID(
 		}
 		sid, _ := strategy.DetectFn(record.WorktreePath, spawnedAt, pollTimeout)
 		if sid == "" {
+			time.Sleep(time.Second)
 			continue
 		}
 		active, err := svc.IsVendorSessionIDActive(record.ProjectID, sid)

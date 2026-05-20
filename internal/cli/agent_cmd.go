@@ -15,6 +15,12 @@ func (r Runner) executeAgent(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("agent subcommand is required: list, add, show, profile, set-model")
 	}
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			r.printHelp()
+			return nil
+		}
+	}
 	switch args[0] {
 	case "list":
 		return r.executeAgentList(args[1:])
@@ -27,7 +33,7 @@ func (r Runner) executeAgent(args []string) error {
 	case "set-model":
 		return r.executeAgentSetModel(args[1:])
 	default:
-		return fmt.Errorf("unknown agent subcommand %q", args[0])
+		return fmt.Errorf("unknown agent subcommand %q — valid: list, add, show, profile, set-model", args[0])
 	}
 }
 
@@ -117,6 +123,15 @@ func (r Runner) executeAgentAdd(args []string) error {
 	result, err := r.app.Projects.Open(".")
 	if err != nil {
 		return err
+	}
+
+	// Warn when another enabled agent already occupies the same role+runtime combination.
+	for _, a := range result.Agents {
+		if a.Enabled && a.Role == role && a.Runtime == runtime {
+			fmt.Fprintf(r.stdout, "Warning: agent %q already uses role=%s runtime=%s — two agents sharing a role+runtime can both receive spawn commands and may create duplicate sessions.\n", a.Name, role, runtime)
+			fmt.Fprintf(r.stdout, "         To retire the old agent, remove it from .aom/agents.yaml and run: aom open\n")
+			fmt.Fprintln(r.stdout, "")
+		}
 	}
 
 	if err := project.AddAgentToConfig(result.AOMPath, project.AddAgentParams{

@@ -54,8 +54,8 @@ func TestBuilderBuildReturnsRealCodexCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	if !strings.Contains(command, "exec codex --sandbox workspace-write -a never") {
-		t.Fatalf("command = %q, want codex exec command with -a never", command)
+	if !strings.Contains(command, "exec codex --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true'") {
+		t.Fatalf("command = %q, want codex exec command with network_access=true", command)
 	}
 }
 
@@ -148,7 +148,7 @@ func TestBuilderBuildResumesCodexSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	want := "sh -lc 'export AOM_RUNTIME=codex; export PYTHONDONTWRITEBYTECODE=1; [ -f \"$HOME/.codex/version.json\" ] || { mkdir -p \"$HOME/.codex\" && printf '{\"dismissed_version\":\"9999.0.0\"}\\n' > \"$HOME/.codex/version.json\"; }; exec codex resume sess-xyz-789 --sandbox workspace-write -a never'"
+	want := "sh -lc 'export AOM_RUNTIME=codex; export PYTHONDONTWRITEBYTECODE=1; [ -f \"$HOME/.codex/version.json\" ] || { mkdir -p \"$HOME/.codex\" && printf '{\"dismissed_version\":\"9999.0.0\"}\\n' > \"$HOME/.codex/version.json\"; }; exec codex resume sess-xyz-789 --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true''"
 	if command != want {
 		t.Fatalf("command = %q, want %q", command, want)
 	}
@@ -164,7 +164,7 @@ func TestBuilderBuildFreshStartWhenNoAgentSessionID(t *testing.T) {
 		wantContain string
 	}{
 		{"claude", "exec claude --dangerously-skip-permissions"},
-		{"codex", "exec codex --sandbox workspace-write -a never"},
+		{"codex", "exec codex --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true'"},
 	} {
 		command, err := builder.Build(SessionSpec{Runtime: tc.runtime}, LaunchModeReal)
 		if err != nil {

@@ -2,8 +2,10 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -384,7 +386,7 @@ func (r Runner) executeOpen(args []string) error {
 
 	result, err := r.app.Projects.Open(".")
 	if err != nil {
-		return err
+		return wrapProjectNotFound(err)
 	}
 
 	workspace, err := r.app.Tmux.EnsureWorkspace(result.SessionPrefix, result.Project.RepoPath)
@@ -411,15 +413,87 @@ func (r Runner) executeOpen(args []string) error {
 	return nil
 }
 
+// executeProjectShare copies a file into the operator-owned shared docs directory
+// (.aom/shared/) and also into the .agent/shared/ directory of every active worktree,
+// so all running agents can immediately read it.
+func (r Runner) executeProjectShare(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("file path is required: aom project share <file>")
+	}
+	srcPath := strings.TrimSpace(args[0])
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("read file: %w", err)
+	}
+
+	filename := filepath.Base(srcPath)
+
+	// Always write to the operator-owned shared dir (.aom/shared/).
+	sharedDir := filepath.Join(result.Project.RepoPath, ".aom", "shared")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		return fmt.Errorf("create shared dir: %w", err)
+	}
+	destMain := filepath.Join(sharedDir, filename)
+	if err := os.WriteFile(destMain, data, 0o644); err != nil {
+		return fmt.Errorf("write shared file: %w", err)
+	}
+	fmt.Fprintf(r.stdout, "shared: %s\n", destMain)
+
+	// Also push to .agent/shared/ in every active worktree.
+	worktreeService, wDB, err := r.app.OpenWorktreeService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer wDB.Close()
+
+	records, err := worktreeService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	pushed := 0
+	for _, wt := range records {
+		if wt.Status != "Ready" && wt.Status != "Active" {
+			continue
+		}
+		wtSharedDir := filepath.Join(wt.WorktreePath, ".agent", "shared")
+		if err := os.MkdirAll(wtSharedDir, 0o755); err != nil {
+			fmt.Fprintf(r.stderr, "Warning: could not create %s: %v\n", wtSharedDir, err)
+			continue
+		}
+		dest := filepath.Join(wtSharedDir, filename)
+		if err := os.WriteFile(dest, data, 0o644); err != nil {
+			fmt.Fprintf(r.stderr, "Warning: could not write to %s: %v\n", dest, err)
+			continue
+		}
+		fmt.Fprintf(r.stdout, "pushed:  %s  (task: %s)\n", dest, wt.TaskID)
+		pushed++
+	}
+
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Shared %q with %d active worktree(s)\n", filename, pushed)
+	fmt.Fprintf(r.stdout, "Agents can read it at: .agent/shared/%s\n", filename)
+	return nil
+}
+
 func (r Runner) executeStatus(args []string) error {
 	activeOnly := false
 	graphMode := false
+	jsonMode := false
 	for _, arg := range args {
 		switch arg {
 		case "--active":
 			activeOnly = true
 		case "--graph":
 			graphMode = true
+		case "--json", "-j":
+			jsonMode = true
 		default:
 			return fmt.Errorf("unknown flag %q", arg)
 		}
@@ -427,7 +501,7 @@ func (r Runner) executeStatus(args []string) error {
 
 	result, err := r.app.Projects.Open(".")
 	if err != nil {
-		return err
+		return wrapProjectNotFound(err)
 	}
 
 	if graphMode {
@@ -459,7 +533,132 @@ func (r Runner) executeStatus(args []string) error {
 		sessions = filterActiveSessions(sessions)
 	}
 
+	if jsonMode {
+		return r.printStatusJSON(result, sessions, taskCount, taskViews)
+	}
+
 	r.printProjectSummary("Project status", result, nil, sessions, taskCount, taskViews)
+	return nil
+}
+
+// statusJSONOutput is the JSON structure for `aom status --json`.
+type statusJSONOutput struct {
+	Project  statusJSONProject   `json:"project"`
+	Agents   []statusJSONAgent   `json:"agents"`
+	Sessions []statusJSONSession `json:"sessions"`
+	Tasks    []statusJSONTask    `json:"tasks"`
+	Counts   statusJSONCounts    `json:"counts"`
+}
+
+type statusJSONProject struct {
+	Name          string `json:"name"`
+	Repo          string `json:"repo"`
+	DefaultBranch string `json:"defaultBranch"`
+	DBPath        string `json:"dbPath"`
+}
+
+type statusJSONAgent struct {
+	Name    string `json:"name"`
+	Role    string `json:"role"`
+	Runtime string `json:"runtime"`
+	Model   string `json:"model"`
+	Enabled bool   `json:"enabled"`
+}
+
+type statusJSONSession struct {
+	ID        string `json:"id"`
+	Agent     string `json:"agent"`
+	Role      string `json:"role"`
+	Status    string `json:"status"`
+	Readiness string `json:"readiness"`
+	TaskID    string `json:"taskId"`
+	Runtime   string `json:"runtime"`
+}
+
+type statusJSONTask struct {
+	ID     string           `json:"id"`
+	Title  string           `json:"title"`
+	Status string           `json:"status"`
+	Mode   string           `json:"mode"`
+	Steps  []statusJSONStep `json:"steps"`
+}
+
+type statusJSONStep struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
+type statusJSONCounts struct {
+	Tasks    int `json:"tasks"`
+	Sessions int `json:"sessions"`
+}
+
+func (r Runner) printStatusJSON(result *project.OpenResult, sessions []session.Record, taskCount int, taskViews []taskView) error {
+	out := statusJSONOutput{
+		Project: statusJSONProject{
+			Name:          result.Project.Name,
+			Repo:          result.Project.RepoPath,
+			DefaultBranch: result.Project.DefaultBranch,
+			DBPath:        result.DBPath,
+		},
+		Counts: statusJSONCounts{
+			Tasks:    taskCount,
+			Sessions: len(sessions),
+		},
+	}
+
+	// Agents.
+	out.Agents = make([]statusJSONAgent, 0, len(result.Agents))
+	for _, a := range result.Agents {
+		out.Agents = append(out.Agents, statusJSONAgent{
+			Name:    a.Name,
+			Role:    a.Role,
+			Runtime: a.Runtime,
+			Model:   a.Model,
+			Enabled: a.Enabled,
+		})
+	}
+
+	// Sessions.
+	out.Sessions = make([]statusJSONSession, 0, len(sessions))
+	for _, s := range sessions {
+		out.Sessions = append(out.Sessions, statusJSONSession{
+			ID:        s.ID,
+			Agent:     s.AgentName,
+			Role:      s.RoleName,
+			Status:    s.Status,
+			Readiness: sessionReadiness(result.Project.RepoPath, s),
+			TaskID:    s.TaskID,
+			Runtime:   s.Runtime,
+		})
+	}
+
+	// Tasks.
+	out.Tasks = make([]statusJSONTask, 0, len(taskViews))
+	for _, tv := range taskViews {
+		steps := make([]statusJSONStep, 0, len(tv.Steps))
+		for _, st := range tv.Steps {
+			steps = append(steps, statusJSONStep{
+				ID:     st.ID,
+				Title:  st.Title,
+				Status: st.Status,
+			})
+		}
+		out.Tasks = append(out.Tasks, statusJSONTask{
+			ID:     tv.Task.ID,
+			Title:  tv.Task.Title,
+			Status: tv.Task.Status,
+			Mode:   tv.Task.Mode,
+			Steps:  steps,
+		})
+	}
+
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal status JSON: %w", err)
+	}
+	fmt.Fprintln(r.stdout, string(data))
 	return nil
 }
 

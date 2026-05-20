@@ -13,20 +13,45 @@
 2. Read .agent/state.md — see current progress and remaining steps
 3. Read .agent/log.md — review history and last checkpoint
 
-### During work
-- Update .agent/state.md as step progress changes
-- Create checkpoints every ~30 minutes or after significant milestones
+### After completing each step — do ALL three
+1. Update state.md directly (edit the file in your worktree):
+   - Move the step to "## Completed Work" and add a one-line summary
+   - List touched files under "## Touched Files"
+2. Notify AOM of the step status change:
+   aom step update <step-id> --status completed
+3. Broadcast progress to the team channel so the operator and teammates can see it:
+   aom channel append "{{.AgentName}}: step <step-id> done — <one-line summary>"
 
 ### Completing work
-1. Run synchronously in the foreground (NOT in a background terminal):
+1. Fill in .agent/state.md before committing:
+   - "## Completed Work" — what was built/fixed
+   - "## Touched Files" — list every file changed
+   - "## Open Questions" — anything unresolved
+2. Commit synchronously in the foreground (NOT in a background terminal):
    git add -A && git commit -m "..."
    If git commit fails for ANY reason (index.lock, timeout, permission, NTFS/WSL2):
    use instead: aom worktree commit <task-id> -m "your message"
-   Do NOT use timeout wrappers (timeout, gtimeout, perl alarm) or retry loops — use aom worktree commit.
-2. Choose the right signal:
+   Do NOT use timeout wrappers or retry loops — use aom worktree commit.
+3. Choose the right signal:
    - Task fully done → append event "task.completed" to .agent/log.md
    - Handing off to another agent → append event "handoff.prepared" to .agent/log.md
-3. Update .agent/state.md to reflect final status
+4. Announce completion to the team:
+   aom channel append "{{.AgentName}}: task done — <one-line summary of what was delivered>"
+
+### state.md sections to fill in (edit .agent/state.md directly)
+```
+## Completed Work
+- <step-id>: <what was done>
+
+## Remaining Work
+- <what still needs to happen>
+
+## Touched Files
+- path/to/file.ext — <why it was changed>
+
+## Open Questions
+- <anything unresolved or risky>
+```
 
 ### Valid log events
 | Event              | Use when                                          |

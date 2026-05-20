@@ -121,14 +121,12 @@ func (r Runner) executeTask(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("task subcommand is required")
 	}
-
 	for _, a := range args {
 		if a == "--help" || a == "-h" {
 			r.printHelp()
 			return nil
 		}
 	}
-
 	switch args[0] {
 	case "create":
 		return r.executeTaskCreate(args[1:])
@@ -164,6 +162,8 @@ func (r Runner) executeTask(args []string) error {
 		return r.executeTaskRejectRequest(args[1:])
 	case "cancel":
 		return r.executeTaskCancel(args[1:])
+	case "verify":
+		return r.executeTaskVerify(args[1:])
 	default:
 		return fmt.Errorf("unknown task command %q", strings.Join(args, " "))
 	}
@@ -173,7 +173,12 @@ func (r Runner) executeStep(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("step subcommand is required")
 	}
-
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			r.printHelp()
+			return nil
+		}
+	}
 	switch args[0] {
 	case "list":
 		return r.executeStepList(args[1:])
@@ -188,7 +193,12 @@ func (r Runner) executeSession(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("session subcommand is required")
 	}
-
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			r.printHelp()
+			return nil
+		}
+	}
 	switch args[0] {
 	case "spawn":
 		return r.executeSessionSpawn(args[1:])
@@ -227,12 +237,19 @@ func (r Runner) executeProject(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("project subcommand is required")
 	}
-
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			r.printHelp()
+			return nil
+		}
+	}
 	switch args[0] {
 	case "init":
 		return r.executeProjectInit(args[1:])
 	case "resources":
 		return r.executeProjectResources(args[1:])
+	case "share":
+		return r.executeProjectShare(args[1:])
 	default:
 		return fmt.Errorf("unknown project command %q", strings.Join(args, " "))
 	}
@@ -242,7 +259,12 @@ func (r Runner) executeWorktree(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("worktree subcommand is required")
 	}
-
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			r.printHelp()
+			return nil
+		}
+	}
 	switch args[0] {
 	case "repair":
 		return r.executeWorktreeRepair(args[1:])
@@ -250,6 +272,8 @@ func (r Runner) executeWorktree(args []string) error {
 		return r.executeWorktreeReadFile(args[1:])
 	case "commit":
 		return r.executeWorktreeCommit(args[1:])
+	case "prune":
+		return r.executeWorktreePrune(args[1:])
 	default:
 		return fmt.Errorf("unknown worktree command %q", strings.Join(args, " "))
 	}
@@ -262,7 +286,12 @@ func (r Runner) executeMerge(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("merge subcommand is required (check | prepare | commit)")
 	}
-
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			r.printHelp()
+			return nil
+		}
+	}
 	switch args[0] {
 	case "check":
 		return r.executeMergeCheck(args[1:])
@@ -285,7 +314,12 @@ func (r Runner) executeMessage(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("message subcommand is required (send | read | clear)")
 	}
-
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			r.printHelp()
+			return nil
+		}
+	}
 	switch args[0] {
 	case "send":
 		return r.executeMessageSend(args[1:])
@@ -302,6 +336,12 @@ func (r Runner) executeChannel(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("channel subcommand is required: append, read")
 	}
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			r.printHelp()
+			return nil
+		}
+	}
 	switch args[0] {
 	case "append":
 		return r.executeChannelAppend(args[1:])
@@ -310,6 +350,19 @@ func (r Runner) executeChannel(args []string) error {
 	default:
 		return fmt.Errorf("unknown channel command %q", args[0])
 	}
+}
+
+// wrapProjectNotFound wraps errors from Projects.Open that indicate no project
+// has been initialized yet, adding a hint about how to fix it.
+func wrapProjectNotFound(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "no AOM project found") {
+		return fmt.Errorf("%w\n\nRun `aom project init <name> --repo .` to initialise a project first, then `aom open`.", err)
+	}
+	return err
 }
 
 func (r Runner) printHelp() {

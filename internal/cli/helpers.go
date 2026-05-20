@@ -538,6 +538,12 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 				item.TmuxWindow,
 				item.TmuxPane,
 			)
+			if item.Status == "Detached" {
+				fmt.Fprintf(r.stdout, "    next=%s\n", detachedSessionHint(item))
+			}
+			if readiness := sessionReadiness(result.Project.RepoPath, item); readiness != "" {
+				fmt.Fprintf(r.stdout, "    readiness=%s\n", readiness)
+			}
 		}
 	}
 	fmt.Fprintln(r.stdout, "")
@@ -745,6 +751,17 @@ func interpretEscapes(s string) string {
 // briefSummary returns a single-line summary of a brief for use in log events.
 // Multi-line briefs are truncated to their first non-empty line so that the
 // log scanner never mistakes embedded log-format templates for real events.
+// isShellProcess returns true when the given process name indicates a bare shell
+// rather than an AI runtime. Used by session send to warn operators before
+// injecting a brief into a pane where no agent is running.
+func isShellProcess(cmd string) bool {
+	switch strings.ToLower(strings.TrimSpace(cmd)) {
+	case "bash", "sh", "zsh", "fish", "dash", "ksh", "tcsh", "csh":
+		return true
+	}
+	return false
+}
+
 func briefSummary(message string) string {
 	const maxLen = 200
 	for _, line := range strings.Split(message, "\n") {

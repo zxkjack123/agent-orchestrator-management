@@ -135,7 +135,7 @@ func claudeSessionForWorktree(worktreePath string, spawnedAt time.Time, timeout 
 			if err != nil {
 				continue
 			}
-			if info.ModTime().Before(spawnedAt) {
+			if info.ModTime().Before(spawnedAt.Add(-2 * time.Second)) {
 				continue
 			}
 			if newest == "" || info.ModTime().After(newestTime) {

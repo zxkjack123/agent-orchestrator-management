@@ -338,6 +338,28 @@ func (m *Manager) PaneInAlternateScreen(paneID string) bool {
 	return strings.TrimSpace(string(output)) == "1"
 }
 
+// PaneCurrentCommand returns the name of the process currently running in the
+// given pane (e.g. "claude", "codex", "bash"). Returns an empty string on any
+// error so callers can proceed safely.
+func (m *Manager) PaneCurrentCommand(paneID string) string {
+	availability := m.Availability()
+	if !availability.Available || strings.TrimSpace(paneID) == "" {
+		return ""
+	}
+	output, err := m.exec(
+		availability.BinaryPath,
+		"display-message",
+		"-p",
+		"-t",
+		paneID,
+		"#{pane_current_command}",
+	)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
 // PaneExists reports whether the given pane target is still live in tmux.
 func (m *Manager) PaneExists(paneID string) (bool, error) {
 	availability := m.Availability()

@@ -30,9 +30,9 @@ func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (
 	}
 	var execCmd string
 	if spec.AgentSessionID != "" {
-		execCmd = fmt.Sprintf("exec codex resume %s --sandbox workspace-write -a never", spec.AgentSessionID)
+		execCmd = fmt.Sprintf("exec codex resume %s --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true'", spec.AgentSessionID)
 	} else {
-		execCmd = "exec codex --sandbox workspace-write -a never"
+		execCmd = "exec codex --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true'"
 	}
 	if spec.Model != "" {
 		execCmd += " -m " + spec.Model
@@ -153,8 +153,8 @@ func buildCodexWrapperPreamble(sessionID string, denyCommands []string) []string
 func (p *codexProvider) ResumeInfo() ResumeInfo {
 	return ResumeInfo{
 		Supported:     true,
-		FreshExample:  "codex --sandbox workspace-write",
-		ResumeExample: "codex resume <session-id> --sandbox workspace-write",
+		FreshExample:  "codex --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'",
+		ResumeExample: "codex resume <session-id> --sandbox workspace-write -c 'sandbox_workspace_write.network_access=true'",
 	}
 }
 
