@@ -29,9 +29,10 @@
    - "## Open Questions" — anything unresolved
 2. Commit synchronously in the foreground (NOT in a background terminal):
    git add -A && git commit -m "..."
-   If git commit fails for ANY reason (index.lock, timeout, permission, NTFS/WSL2):
-   use instead: aom worktree commit <task-id> -m "your message"
-   Do NOT use timeout wrappers or retry loops — use aom worktree commit.
+   If git commit fails for ANY reason (index.lock, timeout, permission, NTFS/WSL2, sandbox):
+   use instead: aom worktree commit --local -m "your message"
+   (--local commits CWD without DB access — safe inside any sandboxed runtime)
+   Do NOT use timeout wrappers, background shells (&/nohup), or retry loops.
 3. Choose the right signal:
    - Task fully done → append event "task.completed" to .agent/log.md
    - Handing off to another agent → append event "handoff.prepared" to .agent/log.md
@@ -78,18 +79,23 @@ task scope requires a specialist that doesn't exist yet (e.g., devops, qa, data,
 Add a new agent:
   aom agent add <name> --role <role> --class <class> --runtime <runtime>
 
-Examples:
-  aom agent add devops-1 --role devops --class devops --runtime claude
-  aom agent add qa-1     --role qa     --class qa     --runtime codex
-  aom agent add data-1   --role data   --class builder --runtime claude
+Built-in classes (software engineering):
+  aom agent add backend-2  --role backend   --class builder      --runtime codex
+  aom agent add frontend-2 --role frontend  --class frontend     --runtime claude
+  aom agent add reviewer-1 --role reviewer  --class reviewer     --runtime claude
+
+Built-in classes (general purpose — no coding assumptions):
+  aom agent add researcher-1 --role researcher --class generic   --runtime claude
+  aom agent add analyst-1    --role analyst    --class generic   --runtime claude
+  aom agent add writer-1     --role writer     --class generic   --runtime claude
 
 After adding, assign a task and spawn:
   aom task create "..." --agent <name>
   aom session spawn <name> --task <task-id>
 
 Custom role profiles: place a template at .aom/templates/profiles/<class>.md.tmpl
-to give the new agent role-specific instructions. If no template exists, the default
-builder profile is used.
+to give the new agent role-specific instructions. If no template exists, the generic
+profile is used as the default fallback.
 
 ## Team Communication
 

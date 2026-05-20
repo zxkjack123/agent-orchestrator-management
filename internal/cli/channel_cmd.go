@@ -82,6 +82,14 @@ func (r Runner) executeChannelRead(args []string) error {
 		return err
 	}
 
+	// Warn when agent messages are staged in outbox but not yet visible in the
+	// channel. Agents inside sandboxed runtimes cannot write directly to the
+	// shared channel — they stage to .agent/outbox.md instead, and the
+	// operator must run "aom outbox flush" to publish them.
+	if n := countPendingOutboxMessages(repoPath); n > 0 {
+		fmt.Fprintf(r.stdout, "⚠  %d outbox message(s) pending (not yet visible) — run: aom outbox flush\n\n", n)
+	}
+
 	content, err := readChannelFile(repoPath)
 	if err != nil {
 		return err

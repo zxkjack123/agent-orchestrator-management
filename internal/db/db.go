@@ -11,15 +11,20 @@ import (
 )
 
 const (
-	migrationSchemaV1    = "schema-v1"
-	migrationSchemaV2    = "schema-v2"
-	migrationSchemaV3    = "schema-v3"
-	migrationSchemaV4    = "schema-v4"
-	migrationSchemaV5    = "schema-v5"
-	migrationSchemaV6    = "schema-v6"
-	migrationSchemaV7    = "schema-v7"
-	migrationSchemaV8    = "schema-v8"
-	defaultBusyTimeoutMS = 5000
+	migrationSchemaV1 = "schema-v1"
+	migrationSchemaV2 = "schema-v2"
+	migrationSchemaV3 = "schema-v3"
+	migrationSchemaV4 = "schema-v4"
+	migrationSchemaV5 = "schema-v5"
+	migrationSchemaV6 = "schema-v6"
+	migrationSchemaV7 = "schema-v7"
+	migrationSchemaV8 = "schema-v8"
+
+	// defaultBusyTimeoutMS is the time (ms) SQLite will retry a write before
+	// returning SQLITE_BUSY. 30 s gives ample headroom for concurrent CLI
+	// invocations under normal load. Pair with _txlock=immediate so that
+	// busy_timeout fires at BEGIN rather than mid-transaction.
+	defaultBusyTimeoutMS = 30000
 )
 
 // Open opens the SQLite database at the provided path and applies known migrations.
@@ -38,7 +43,12 @@ func Open(path string) (*sql.DB, error) {
 		_ = f.Close()
 	}
 
-	db, err := sql.Open("sqlite", path)
+	// Use file: URI so we can pass _txlock=immediate. This forces every
+	// transaction to use BEGIN IMMEDIATE, which acquires the write lock at
+	// BEGIN time rather than mid-transaction. Without this, DEFERRED
+	// transactions can fail with SQLITE_BUSY when upgrading read→write lock
+	// even when busy_timeout is set — the timeout only kicks in at BEGIN.
+	db, err := sql.Open("sqlite", "file:"+path+"?_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -74,12 +84,18 @@ func configureConnection(db *sql.DB) error {
 		return fmt.Errorf("configure sqlite connection: db is required")
 	}
 
+	// Limit the connection pool to a single connection within one process.
+	// Combined with _txlock=immediate in the DSN, this eliminates in-process
+	// write contention: only one goroutine holds the connection at a time, and
+	// when it starts a transaction the write lock is claimed immediately so
+	// busy_timeout can gate any cross-process contention cleanly.
+	db.SetMaxOpenConns(1)
+
 	if _, err := db.Exec(fmt.Sprintf(`PRAGMA busy_timeout = %d`, defaultBusyTimeoutMS)); err != nil {
 		return fmt.Errorf("configure sqlite busy timeout: %w", err)
 	}
 
-	// WAL mode allows concurrent readers while a writer holds the write lock,
-	// eliminating most SQLITE_BUSY errors when operator runs parallel AOM commands.
+	// WAL mode allows concurrent readers while a writer holds the write lock.
 	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
 		return fmt.Errorf("configure sqlite WAL mode: %w", err)
 	}
