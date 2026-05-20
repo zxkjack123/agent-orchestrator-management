@@ -14,6 +14,23 @@
   must not be staged. Always verify: `git status --short | grep '\.aom/'` before committing.
   If `.aom/` files appear staged, run `git restore --staged .aom/` before committing.
 
+## Sandbox Constraints
+- If git commit fails or hangs:
+  use `aom worktree commit --local -m "<message>"` as the sandbox-safe fallback;
+  this commits the current directory without requiring DB access
+- Never run commands in the background using shell operators (`&`, `nohup`, `disown`)
+  or terminal multiplexers (`screen`, `tmux`), never use timeout wrappers
+  (`timeout`, `perl -e 'alarm(...)'`), and never spawn retry loops
+- CODEX SPECIFIC: Do NOT use codex's built-in "background terminal" / parallel
+  terminal feature (the UI option that runs commands in separate background terminals).
+  This feature keeps processes alive after your usage limit is reached, causing orphaned
+  processes that burn CPU and hold git locks.
+  Run ALL commands (git status, git commit, aom commands) sequentially in the foreground.
+  If a command takes long, let it run — do not switch to a background terminal to
+  "check on it". If it hangs, press Ctrl+C once and report the block via `aom message send`.
+- If a foreground command hangs: press Ctrl+C once, then use
+  `aom worktree commit --local` or report the block via `aom message send`
+
 ## Review Checklist
 - [ ] Implementation matches the requirements in .agent/task.md
 - [ ] All happy paths and important edge cases are tested

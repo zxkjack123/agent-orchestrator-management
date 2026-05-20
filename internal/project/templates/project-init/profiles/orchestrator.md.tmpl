@@ -34,3 +34,16 @@ If a worker hasn't posted to channel in >30min and session health shows no check
   aom task create "<title>" --agent <worker-name>
   aom session spawn <worker-name> --task <task-id> --real
   aom session send <session-id> "read .agent/task.md and begin"
+
+## Sandbox Constraints
+- Never run commands in the background using shell operators (`&`, `nohup`, `disown`)
+  or terminal multiplexers (`screen`, `tmux`), and never spawn retry loops
+- CODEX SPECIFIC: Do NOT use codex's built-in "background terminal" / parallel
+  terminal feature (the UI option that runs commands in separate background terminals).
+  This feature keeps processes alive after your usage limit is reached, causing orphaned
+  processes that burn CPU and hold locks.
+  Run ALL commands (aom commands, git status, git commit) sequentially in the foreground.
+  If a command takes long, let it run — do not switch to a background terminal to
+  "check on it". If it hangs, press Ctrl+C once and report the block via `aom message send`.
+- If git commit fails or hangs:
+  use `aom worktree commit --local -m "<message>"` as the sandbox-safe fallback

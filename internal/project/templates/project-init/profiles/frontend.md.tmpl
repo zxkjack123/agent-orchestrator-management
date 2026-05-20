@@ -12,3 +12,31 @@
 - Keep component logic and presentation separate where the framework allows
 - Never hardcode colors, spacing, or typography — use design tokens or CSS variables
 - Remove unused CSS and dead component code before each commit
+- Never commit `.aom/` directory files — `git add -A` will include `.aom/sessions.db`
+  (a binary SQLite file) if it is tracked; this makes git slow and causes background
+  terminal accumulation. `.aom/` must be in `.gitignore` before the first commit.
+
+## Sandbox Constraints
+- Outbound network access is enabled — npm install / pip install should work normally
+- The sandbox sets `npm_config_cache=/tmp/aom-npm-cache-<uid>` automatically to prevent
+  EPERM errors from the default ~/.npm cache path; do NOT override this variable
+- If a package install fails (network error, registry timeout, or sandbox restriction):
+  do NOT retry in a loop — write stub/placeholder code, note "requires: npm install post-merge"
+  in .agent/state.md, and continue with the task
+- If git commit fails or hangs:
+  use `aom worktree commit --local -m "<message>"` as the sandbox-safe fallback;
+  this commits the current directory without requiring DB access
+- Never run commands in the background using shell operators (`&`, `nohup`, `disown`)
+  or terminal multiplexers (`screen`, `tmux`), never use timeout wrappers
+  (`timeout`, `perl -e 'alarm(...)'`), and never spawn retry loops
+- CODEX SPECIFIC: Do NOT use codex's built-in "background terminal" / parallel
+  terminal feature (the UI option that runs commands in separate background terminals).
+  This feature keeps processes alive after your usage limit is reached, causing orphaned
+  build/test processes that burn CPU and hold git locks.
+  Run ALL commands (npm test, npm run build, git commit) sequentially in the foreground.
+  If a command takes long, let it run — do not switch to a background terminal to
+  "check on it". If it hangs, press Ctrl+C once and report the block.
+- If a foreground command hangs: press Ctrl+C once, then use
+  `aom worktree commit --local` or report the block via `aom message send`
+- Always cd into the correct subdirectory before running npm/pip commands to avoid
+  creating stray package files at the repo root
