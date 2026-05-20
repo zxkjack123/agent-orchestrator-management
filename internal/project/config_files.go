@@ -87,7 +87,12 @@ func renderAgentsConfig(data projectTemplateData, templateDir string, agentSelec
 }
 
 var defaultGitignoreEntries = []string{
+	// AOM runtime directories — must be first; agents run git add -A and these
+	// must be excluded before any commit to prevent binary SQLite DBs and large
+	// channel logs from being staged and slowing down git operations.
+	".aom/",
 	".agent/",
+	// Common build artifacts and secrets
 	"node_modules/",
 	"dist/",
 	"build/",

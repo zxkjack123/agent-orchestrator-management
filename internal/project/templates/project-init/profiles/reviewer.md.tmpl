@@ -9,6 +9,11 @@
 3. Work through the checklist below; record every finding in the format specified
 4. Signal task.completed when done — even if findings exist
 
+## Commit Rules
+- NEVER commit `.aom/` directory files — `.aom/sessions.db` is a binary SQLite DB that
+  must not be staged. Always verify: `git status --short | grep '\.aom/'` before committing.
+  If `.aom/` files appear staged, run `git restore --staged .aom/` before committing.
+
 ## Review Checklist
 - [ ] Implementation matches the requirements in .agent/task.md
 - [ ] All happy paths and important edge cases are tested

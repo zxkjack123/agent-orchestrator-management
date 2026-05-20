@@ -195,6 +195,22 @@ func (r Runner) executeDoctor(args []string) error {
 		}
 	}
 
+	// ── .aom/ files tracked in git ───────────────────────────────────────────
+	// If .aom/sessions.db or .aom/channel.md are tracked in git, git add -A
+	// will stage the binary SQLite DB (often 50-200KB) on every commit.
+	// This causes git operations to be slow and makes codex background terminals
+	// accumulate while waiting for git — leading to high system load.
+	if _, lookErr := exec.LookPath("git"); lookErr == nil {
+		tracked, lsErr := exec.Command("git", "-C", ".", "ls-files", ".aom/sessions.db", ".aom/channel.md").Output()
+		if lsErr == nil && len(strings.TrimSpace(string(tracked))) > 0 {
+			results = append(results, doctorResult{
+				label:   "git: .aom/ tracked",
+				detail:  ".aom/sessions.db or .aom/channel.md is committed — will be staged on every git add -A, causing slow git and agent background terminal accumulation; fix: git rm --cached .aom/sessions.db .aom/channel.md && echo '.aom/' >> .gitignore",
+				warning: true,
+			})
+		}
+	}
+
 	// ── NTFS mount detection ──────────────────────────────────────────────────
 	// WSL2 mounts Windows NTFS volumes under /mnt/. Git lock files on NTFS are
 	// read-only, which causes "index.lock: Read-only file system" inside worktrees.

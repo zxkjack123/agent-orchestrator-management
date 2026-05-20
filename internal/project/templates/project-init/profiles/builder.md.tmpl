@@ -9,6 +9,9 @@
 - Keep functions focused and files under ~300 lines — split when they grow
 - Use clear, intention-revealing names; avoid abbreviations
 - Never commit secrets, credentials, or environment config — use environment variables
+- Never commit `.aom/` directory files — `git add -A` will include `.aom/sessions.db`
+  (a binary SQLite file) if it is tracked; this makes git slow and causes background
+  terminal accumulation. `.aom/` must be in `.gitignore` before the first commit.
 - Prefer explicit error handling; no silent failures or broad catch-all blocks
 - Remove dead code and unused imports before each commit
 
