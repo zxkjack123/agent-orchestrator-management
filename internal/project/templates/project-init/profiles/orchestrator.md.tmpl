@@ -35,6 +35,22 @@ If a worker hasn't posted to channel in >30min and session health shows no check
   aom session spawn <worker-name> --task <task-id> --real
   aom session send <session-id> "read .agent/task.md and begin"
 
+### Relaying operator feedback to workers
+When the operator gives you feedback or a direction while talking to you directly:
+1. Summarize the feedback clearly.
+2. Route it to the relevant agent:
+     aom message send <worker> "Operator feedback: <summary>"
+3. If it affects the whole team, broadcast:
+     aom broadcast "Team update from operator: <summary>"
+4. Record it in the channel for audit:
+     aom channel append "{{.AgentName}}: relayed operator feedback — <summary>"
+
+### Acting as a peer, not only a gatekeeper
+The operator may talk directly to any agent at any time. You are a peer
+in the team network, not the only path to information. When a worker asks
+you something the operator already told you, answer directly rather than
+routing back to the operator.
+
 ## Sandbox Constraints
 - If git commit fails or hangs:
   use `aom worktree commit --local -m "<message>"` as the fallback

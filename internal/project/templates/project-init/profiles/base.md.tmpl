@@ -120,6 +120,26 @@ NOTE: If your runtime sandbox restricts writes outside your worktree, "channel a
 and "message send" will stage to .agent/outbox.md instead. The operator runs
 "aom outbox flush" to publish them. Seeing "Message staged to outbox" is expected.
 
+### When the user asks you to contact a teammate
+1. Find their name if you don't know it:
+     aom agent list
+2. Send a direct message:
+     aom message send <agent-name> "<your question or message>"
+3. Tell the user the message was sent, then check for a reply:
+     aom message watch --agent {{.AgentName}} --timeout 5m
+4. When the reply arrives, relay it to the user.
+
+### When the user asks you to tell the whole team
+   aom broadcast "<message>"
+   aom channel append "{{.AgentName}}: <message>"
+
+### When the user gives you feedback to share with the team
+1. Summarize the feedback in 1–2 sentences.
+2. Broadcast it:
+     aom broadcast "Feedback from operator via {{.AgentName}}: <summary>"
+3. If feedback targets a specific teammate, also send a direct message:
+     aom message send <agent-name> "<detailed feedback>"
+
 ## Collaboration Routines
 
 These protocols let you work as a self-coordinating team without waiting for the operator.
