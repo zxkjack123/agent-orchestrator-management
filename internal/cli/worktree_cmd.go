@@ -135,8 +135,14 @@ func (r Runner) executeWorktreeReadFile(args []string) error {
 // directly using git's auto-detected directories. Use this when the AOM DB is
 // unreachable (e.g., from inside a sandbox-restricted agent session where the
 // database file lives outside the writable workspace).
+//
+// --deliverables-only: after staging all changes, unstages AOM orchestration
+// artifacts (.agent/, .aom/, AGENTS.md, CLAUDE.md, GEMINI.md, KIRO.md) so
+// the commit only contains deliverable code. Use this when task branches should
+// not include orchestration state in their history.
 func (r Runner) executeWorktreeCommit(args []string) error {
 	localMode := false
+	deliverablesOnly := false
 	var taskID string
 	var commitMsg string
 
@@ -144,6 +150,8 @@ func (r Runner) executeWorktreeCommit(args []string) error {
 		switch args[i] {
 		case "--local":
 			localMode = true
+		case "--deliverables-only":
+			deliverablesOnly = true
 		case "-m", "--message":
 			i++
 			if i >= len(args) {
@@ -173,7 +181,7 @@ func (r Runner) executeWorktreeCommit(args []string) error {
 	// This is safe to use from inside a sandboxed agent session where the
 	// DB lives outside the sandbox-writable workspace.
 	if localMode {
-		return r.executeWorktreeCommitLocal(commitMsg)
+		return r.executeWorktreeCommitLocal(commitMsg, deliverablesOnly)
 	}
 
 	result, err := r.app.Projects.Open(".")
@@ -209,25 +217,39 @@ func (r Runner) executeWorktreeCommit(args []string) error {
 		"GIT_WORK_TREE="+wtPath,
 	)
 
-	return runGitAddAndCommit(r.stdout, commitMsg, wtPath, env)
+	return runGitAddAndCommit(r.stdout, commitMsg, wtPath, env, deliverablesOnly)
 }
 
 // executeWorktreeCommitLocal performs git add -A && git commit in the current
 // working directory without any DB access. It lets git auto-detect GIT_DIR and
 // GIT_WORK_TREE, which works correctly inside a git worktree.
-func (r Runner) executeWorktreeCommitLocal(commitMsg string) error {
+func (r Runner) executeWorktreeCommitLocal(commitMsg string, deliverablesOnly bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
 	}
-	return runGitAddAndCommit(r.stdout, commitMsg, cwd, nil)
+	return runGitAddAndCommit(r.stdout, commitMsg, cwd, nil, deliverablesOnly)
+}
+
+// aomArtifactPaths lists the AOM orchestration paths that should be excluded
+// when --deliverables-only is passed to aom worktree commit. These are the
+// orchestration state files that belong to AOM itself, not the deliverable code.
+var aomArtifactPaths = []string{
+	".agent",
+	".aom",
+	"AGENTS.md",
+	"CLAUDE.md",
+	"GEMINI.md",
+	"KIRO.md",
 }
 
 // runGitAddAndCommit stages all changes and creates a commit in dir.
 // If env is nil, the current process environment is used unchanged.
+// If deliverablesOnly is true, AOM orchestration artifacts are unstaged after
+// git add -A so the commit contains only deliverable code.
 // It prints a porcelain status summary after staging so the caller can see
 // exactly what is going into the commit (including deletions).
-func runGitAddAndCommit(out interface{ Write([]byte) (int, error) }, commitMsg, dir string, env []string) error {
+func runGitAddAndCommit(out interface{ Write([]byte) (int, error) }, commitMsg, dir string, env []string, deliverablesOnly bool) error {
 	const gitTimeout = 60 * time.Second
 
 	addCtx, addCancel := context.WithTimeout(context.Background(), gitTimeout)
@@ -242,6 +264,26 @@ func runGitAddAndCommit(out interface{ Write([]byte) (int, error) }, commitMsg, 
 			return fmt.Errorf("git add timed out after %s", gitTimeout)
 		}
 		return fmt.Errorf("git add: %w\n%s", addErr, strings.TrimSpace(string(addOut)))
+	}
+
+	// --deliverables-only: unstage AOM orchestration artifacts so the commit
+	// only contains deliverable code. Use "git reset HEAD -- <path>" which is
+	// safe and idempotent even when paths are not staged.
+	if deliverablesOnly {
+		resetCtx, resetCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer resetCancel()
+		resetArgs := append([]string{"reset", "HEAD", "--"}, aomArtifactPaths...)
+		resetCmd := exec.CommandContext(resetCtx, "git", resetArgs...)
+		if env != nil {
+			resetCmd.Env = env
+		}
+		resetCmd.Dir = dir
+		// Errors are non-fatal: if the paths are not staged the command is a no-op.
+		if resetOut, resetErr := resetCmd.CombinedOutput(); resetErr == nil {
+			fmt.Fprintf(out, "Unstaged AOM artifacts (--deliverables-only): %s\n", strings.Join(aomArtifactPaths, " "))
+		} else {
+			fmt.Fprintf(out, "Note: could not unstage AOM artifacts: %s\n", strings.TrimSpace(string(resetOut)))
+		}
 	}
 
 	// Show what is staged so the agent can confirm deletions are included.

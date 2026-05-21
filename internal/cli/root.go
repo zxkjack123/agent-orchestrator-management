@@ -38,7 +38,17 @@ func Execute(args []string, stdout, stderr io.Writer) error {
 }
 
 // Execute dispatches a command line invocation.
-func (r Runner) Execute(args []string) error {
+func (r Runner) Execute(args []string) (retErr error) {
+	// Catch unexpected panics so the CLI always exits with a structured error
+	// instead of a raw stack trace. Panics in handler code (e.g. nil pointer
+	// dereference in step update) are surfaced as actionable messages rather
+	// than crashing the process mid-operation.
+	defer func() {
+		if p := recover(); p != nil {
+			retErr = fmt.Errorf("internal error: %v\n(this is a bug — please report it)", p)
+		}
+	}()
+
 	_ = r.app
 
 	if len(args) == 0 {
@@ -426,7 +436,8 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "Session")
 	fmt.Fprintln(r.stdout, "aom session spawn <agent> [--task <task-id>] [--mock|--real] [--fresh] : start a worker session")
 	fmt.Fprintln(r.stdout, "  --fresh : force a new context even when a previous native session exists for this task")
-	fmt.Fprintln(r.stdout, "aom session send <session-id> <message> [--file <path>] : deliver a prompt into a live session (--file reads message from file, avoids shell escaping)")
+	fmt.Fprintln(r.stdout, "aom session send <session-id> <message>        : deliver a prompt into a live session")
+	fmt.Fprintln(r.stdout, "aom session send <session-id> --file <path>    : deliver a prompt from file (mutually exclusive with inline message; avoids shell escaping)")
 
 	fmt.Fprintln(r.stdout, "aom session list [--active] : list known sessions (--active shows only running sessions)")
 	fmt.Fprintln(r.stdout, "aom session show <session-id> : inspect one session and its bindings")
@@ -461,7 +472,7 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "Worktree")
 	fmt.Fprintln(r.stdout, "aom worktree repair <task-id> : repair a missing or stale task worktree")
 	fmt.Fprintln(r.stdout, "aom worktree read-file <task-id> <path> : read a file from another task's worktree (cross-worktree read)")
-	fmt.Fprintln(r.stdout, "aom worktree commit <task-id> -m <msg> : stage all changes and commit using explicit GIT_DIR")
+	fmt.Fprintln(r.stdout, "aom worktree commit <task-id> -m <msg> [--deliverables-only] : stage all changes and commit (--deliverables-only excludes .agent/ .aom/ AGENTS.md and other AOM artifacts)")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Hooks (automation)")
 	fmt.Fprintln(r.stdout, ".aom/hooks/on-task-done.sh     — called when a task is closed or accepted; args: task_id task_title status")

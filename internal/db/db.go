@@ -57,12 +57,17 @@ func Open(path string) (*sql.DB, error) {
 		}
 	}
 
-	// Use file: URI so we can pass _txlock=immediate. This forces every
-	// transaction to use BEGIN IMMEDIATE, which acquires the write lock at
-	// BEGIN time rather than mid-transaction. Without this, DEFERRED
-	// transactions can fail with SQLITE_BUSY when upgrading read→write lock
-	// even when busy_timeout is set — the timeout only kicks in at BEGIN.
-	db, err := sql.Open("sqlite", "file:"+path+"?_txlock=immediate")
+	// Use file: URI so we can pass _txlock=immediate and _busy_timeout.
+	//
+	// _txlock=immediate forces every transaction to use BEGIN IMMEDIATE, which
+	// acquires the write lock at BEGIN time rather than mid-transaction.
+	// Without this, DEFERRED transactions can fail with SQLITE_BUSY when
+	// upgrading read→write lock even when busy_timeout is set.
+	//
+	// _busy_timeout=30000 sets the C-level SQLite timeout before the first
+	// PRAGMA is applied, closing the race window where an early Ping() could
+	// fail with SQLITE_BUSY before our configureConnection PRAGMA runs.
+	db, err := sql.Open("sqlite", "file:"+path+"?_txlock=immediate&_busy_timeout=30000")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -71,21 +76,28 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open sqlite database: driver is not available")
 	}
 
-	// Retry openAndMigrate on SQLITE_CANTOPEN (14). This error can occur during
-	// WAL initialisation when two processes open the DB simultaneously — one
-	// creates the -shm file while the other tries to open it. Three attempts
-	// with 100/200/300 ms backoff cover any realistic race window.
-	const maxRetries = 3
+	// Retry openAndMigrate on transient SQLite errors:
+	//
+	//   SQLITE_CANTOPEN (14): race on WAL/SHM file creation at first open.
+	//   SQLITE_BUSY (5): another process holds the write lock before our
+	//     busy_timeout PRAGMA is applied. Retrying opens a new connection
+	//     with the DSN-level _busy_timeout already active.
+	//   SQLITE_BUSY_SNAPSHOT (261): stale WAL snapshot — retrying forces a
+	//     fresh snapshot and clears the condition in SQLite < 3.37.
+	//
+	// Five attempts with 100/200/400/800/1600 ms exponential backoff cover
+	// any realistic parallel-CLI race window (total max wait ≈ 3 s).
+	const maxRetries = 5
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(100*attempt) * time.Millisecond)
+			time.Sleep(time.Duration(100*(1<<uint(attempt-1))) * time.Millisecond)
 		}
 		result, migrateErr := openAndMigrate(db)
 		if migrateErr == nil {
 			return result, nil
 		}
-		if !isSQLiteCantopenError(migrateErr) {
+		if !isSQLiteCantopenError(migrateErr) && !isSQLiteBusyError(migrateErr) {
 			return nil, migrateErr
 		}
 		lastErr = migrateErr
@@ -102,6 +114,29 @@ func isSQLiteCantopenError(err error) bool {
 	}
 	return strings.Contains(err.Error(), "unable to open database file") ||
 		strings.Contains(err.Error(), "(14)")
+}
+
+// isSQLiteBusyError reports whether err is a transient SQLite contention error
+// that is safe to retry. Two codes are handled:
+//
+//   - SQLITE_BUSY (5)         — another writer holds the lock; busy_timeout will
+//     normally gate this, but application-level retry provides a safety net when
+//     the C-level timeout is not yet active (e.g. before the first PRAGMA runs).
+//
+//   - SQLITE_BUSY_SNAPSHOT (261) — WAL-mode "stale snapshot" error that arises
+//     when a reader tries to write while another connection already committed a
+//     newer WAL snapshot. busy_timeout does NOT gate this error in SQLite < 3.37;
+//     the only reliable fix is to retry so the connection opens a fresh snapshot.
+func isSQLiteBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// modernc.org/sqlite surfaces error codes as "(N)" in the error string.
+	return strings.Contains(msg, "(5)") ||
+		strings.Contains(msg, "(261)") ||
+		strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "SQLITE_BUSY")
 }
 
 func openAndMigrate(db *sql.DB) (*sql.DB, error) {
