@@ -3499,6 +3499,8 @@ func TestExecuteSessionReplaceWithRealRuntimeUsesCodexLaunchCommand(t *testing.T
 		func(string) (string, error) { return "/opt/homebrew/bin/codex", nil },
 	))
 	defer restoreLaunchBuilder()
+	restoreRegistry := stubRegistryFactory(t)
+	defer restoreRegistry()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -3539,8 +3541,9 @@ func TestExecuteSessionReplaceWithRealRuntimeUsesCodexLaunchCommand(t *testing.T
 	if splitCount != 2 {
 		t.Fatalf("splitCount = %d, want 2 pane launches", splitCount)
 	}
-	if !strings.Contains(splitCommands[len(splitCommands)-1], "exec codex --sandbox workspace-write -a never") {
-		t.Fatalf("replacement split command = %q, want codex exec launch", splitCommands[len(splitCommands)-1])
+	// NiceExecPrefix prepends "exec nice -n 10 " before the binary name.
+	if !strings.Contains(splitCommands[len(splitCommands)-1], "exec nice -n 10 codex --sandbox workspace-write -a never") {
+		t.Fatalf("replacement split command = %q, want codex exec launch with nice prefix", splitCommands[len(splitCommands)-1])
 	}
 }
 
