@@ -10,13 +10,14 @@ import (
 
 // Record is the persisted agent model for Milestone 1.
 type Record struct {
-	ID        string
-	ProjectID string
-	Name      string
-	Runtime   string
-	Role      string
-	Enabled   bool
-	Model     string // optional; empty means use the CLI's default model
+	ID            string
+	ProjectID     string
+	Name          string
+	Runtime       string
+	Role          string
+	Enabled       bool
+	Model         string // optional; empty means use the CLI's default model
+	WorkspacePath string // optional; empty means use per-task worktrees
 }
 
 // Repository persists agent state.
@@ -64,15 +65,16 @@ func (r *Repository) Upsert(record Record) error {
 	}
 
 	_, err := r.db.Exec(`
-INSERT INTO agents (id, project_id, name, runtime, role, enabled, model)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO agents (id, project_id, name, runtime, role, enabled, model, workspace_path)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	project_id = excluded.project_id,
 	name = excluded.name,
 	runtime = excluded.runtime,
 	role = excluded.role,
 	enabled = excluded.enabled,
-	model = excluded.model
+	model = excluded.model,
+	workspace_path = excluded.workspace_path
 `,
 		record.ID,
 		record.ProjectID,
@@ -81,6 +83,7 @@ ON CONFLICT(id) DO UPDATE SET
 		record.Role,
 		enabled,
 		record.Model,
+		record.WorkspacePath,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert agent %q: %w", record.ID, err)
@@ -92,7 +95,7 @@ ON CONFLICT(id) DO UPDATE SET
 // ListByProjectID returns agents for a project ordered by name.
 func (r *Repository) ListByProjectID(projectID string) ([]Record, error) {
 	rows, err := r.db.Query(`
-SELECT id, project_id, name, runtime, role, enabled, model
+SELECT id, project_id, name, runtime, role, enabled, model, workspace_path
 FROM agents
 WHERE project_id = ?
 ORDER BY name
@@ -108,7 +111,7 @@ ORDER BY name
 	for rows.Next() {
 		var record Record
 		var enabled int
-		if err := rows.Scan(&record.ID, &record.ProjectID, &record.Name, &record.Runtime, &record.Role, &enabled, &record.Model); err != nil {
+		if err := rows.Scan(&record.ID, &record.ProjectID, &record.Name, &record.Runtime, &record.Role, &enabled, &record.Model, &record.WorkspacePath); err != nil {
 			return nil, fmt.Errorf("scan agent row: %w", err)
 		}
 		record.Enabled = enabled != 0
@@ -120,4 +123,16 @@ ORDER BY name
 	}
 
 	return records, nil
+}
+
+// SetWorkspacePath updates the workspace_path for one agent.
+func (r *Repository) SetWorkspacePath(projectID, agentName, path string) error {
+	_, err := r.db.Exec(
+		`UPDATE agents SET workspace_path = ? WHERE project_id = ? AND name = ?`,
+		path, projectID, agentName,
+	)
+	if err != nil {
+		return fmt.Errorf("set workspace path for agent %q: %w", agentName, err)
+	}
+	return nil
 }
