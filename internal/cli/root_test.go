@@ -4893,6 +4893,217 @@ func TestExecuteOpenFailsClearlyWhenTmuxIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestCaptureAllNoSessions verifies that --all prints a friendly "no sessions"
+// message when the project has no sessions with live panes.
+func TestCaptureAllNoSessions(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(string, ...string) ([]byte, error) { return nil, nil },
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+	stdout.Reset()
+
+	if err := Execute([]string{"capture", "--all"}, &stdout, &stderr); err != nil {
+		t.Fatalf("capture --all: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "No active sessions") {
+		t.Fatalf("stdout = %q, want 'No active sessions'", stdout.String())
+	}
+}
+
+// TestCaptureAllMutuallyExclusiveWithSessionID verifies that passing both
+// --all and a positional session ID returns an error.
+func TestCaptureAllMutuallyExclusiveWithSessionID(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(string, ...string) ([]byte, error) { return nil, nil },
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	err := Execute([]string{"capture", "--all", "SESS-001"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("capture --all <session-id> should return an error")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("error = %q, want 'mutually exclusive'", err.Error())
+	}
+}
+
+// TestCaptureAllWithActiveSessions verifies that --all prints a section header
+// per active session and the captured pane content beneath it.
+func TestCaptureAllWithActiveSessions(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	const paneID = "%5"
+	const paneContent = "status=InProgress\ntask=t-001\n"
+	firstHasSession := true
+
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(_ string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 " + paneID + "\n"), nil
+			case "set-option":
+				return nil, nil
+			case "display-message":
+				// PaneExists: return the pane ID so the check passes.
+				return []byte(paneID + "\n"), nil
+			case "capture-pane":
+				return []byte(paneContent), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+	stdout.Reset()
+
+	// Spawn a session so the DB has a record with a live pane.
+	if err := Execute([]string{"session", "spawn", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("session spawn: %v", err)
+	}
+	stdout.Reset()
+
+	if err := Execute([]string{"capture", "--all"}, &stdout, &stderr); err != nil {
+		t.Fatalf("capture --all: %v", err)
+	}
+	out := stdout.String()
+
+	// Expect a section header containing the agent name.
+	if !strings.Contains(out, "backend-main") {
+		t.Fatalf("stdout = %q, want 'backend-main' header", out)
+	}
+	// Expect the pane content to be printed.
+	if !strings.Contains(out, "status=InProgress") {
+		t.Fatalf("stdout = %q, want pane content 'status=InProgress'", out)
+	}
+	// Expect the summary count line at the end.
+	if !strings.Contains(out, "session(s) captured") {
+		t.Fatalf("stdout = %q, want 'session(s) captured' summary line", out)
+	}
+}
+
+// TestCaptureAllSummaryMode verifies that --all --summary applies the
+// signal-filter to each session's output.
+func TestCaptureAllSummaryMode(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	const paneID = "%5"
+	// Include one signal line and one noise line to verify filtering.
+	const paneContent = "random prose that should be filtered\nstatus=Done\n"
+	firstHasSession := true
+
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(_ string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 " + paneID + "\n"), nil
+			case "set-option":
+				return nil, nil
+			case "display-message":
+				return []byte(paneID + "\n"), nil
+			case "capture-pane":
+				return []byte(paneContent), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+	stdout.Reset()
+
+	if err := Execute([]string{"session", "spawn", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("session spawn: %v", err)
+	}
+	stdout.Reset()
+
+	if err := Execute([]string{"capture", "--all", "--summary"}, &stdout, &stderr); err != nil {
+		t.Fatalf("capture --all --summary: %v", err)
+	}
+	out := stdout.String()
+
+	// Signal line should be present.
+	if !strings.Contains(out, "status=Done") {
+		t.Fatalf("stdout = %q, want 'status=Done' (signal line)", out)
+	}
+	// Noise line should be filtered out.
+	if strings.Contains(out, "random prose") {
+		t.Fatalf("stdout = %q, 'random prose' should be filtered by --summary", out)
+	}
+}
+
 func stubAppFactory(t *testing.T, manager *tmux.Manager) func() {
 	t.Helper()
 

@@ -49,11 +49,13 @@ func (r Runner) executeAttach(args []string) error {
 }
 
 func (r Runner) executeCapture(args []string) error {
-	// Parse flags: session identifier (positional), --follow/-f, --diff, --summary, --interval <duration>
+	// Parse flags: session identifier (positional), --follow/-f, --diff, --summary,
+	// --all (capture every active session), --interval <duration>
 	var sessionID string
 	var followMode bool
 	var diffMode bool
 	var summaryMode bool
+	var allMode bool
 	interval := 2 * time.Second
 
 	for i := 0; i < len(args); i++ {
@@ -64,6 +66,8 @@ func (r Runner) executeCapture(args []string) error {
 			diffMode = true
 		case "--summary":
 			summaryMode = true
+		case "--all":
+			allMode = true
 		case "--interval":
 			i++
 			if i >= len(args) {
@@ -85,8 +89,16 @@ func (r Runner) executeCapture(args []string) error {
 		}
 	}
 
+	// --all: capture every session that has a live pane.
+	if allMode {
+		if sessionID != "" {
+			return fmt.Errorf("--all and a session identifier are mutually exclusive")
+		}
+		return r.executeCaptureAll(followMode, summaryMode, interval)
+	}
+
 	if sessionID == "" {
-		return fmt.Errorf("session identifier is required")
+		return fmt.Errorf("session identifier is required (or use --all to capture every active session)")
 	}
 
 	sessionRecord, err := r.loadSessionByIdentifier(sessionID)
@@ -97,7 +109,7 @@ func (r Runner) executeCapture(args []string) error {
 		return fmt.Errorf("session %q does not have a live tmux pane binding", sessionRecord.ID)
 	}
 
-	// P4: Auto-flush outbox before capturing.
+	// Auto-flush outbox before capturing.
 	if projResult, ferr := r.app.Projects.Open("."); ferr == nil {
 		if n, ferr := flushAllOutboxes(projResult.Project.RepoPath); ferr == nil && n > 0 {
 			fmt.Fprintf(r.stdout, "Auto-flushed %d outbox message(s) to channel/mailbox.\n", n)
@@ -149,6 +161,132 @@ func (r Runner) executeCapture(args []string) error {
 
 	fmt.Fprint(r.stdout, output)
 	return nil
+}
+
+// captureHeader returns a fixed-width section header for one session in the
+// --all output, e.g.: "══ backend-main (SESS-001) [Working] ══════════════"
+func captureHeader(agentName, sessionID, status string) string {
+	label := fmt.Sprintf(" %s (%s) [%s] ", agentName, sessionID, status)
+	const width = 72
+	const bar = "══"
+	prefix := bar
+	suffix := bar
+	fillLen := width - len(label) - len(prefix) - len(suffix)
+	if fillLen < 2 {
+		fillLen = 2
+	}
+	return prefix + label + strings.Repeat("═", fillLen)
+}
+
+// executeCaptureAll captures the pane content of every session that has a live
+// tmux pane, printing each behind a clear header so the operator can read the
+// full team status in a single command.
+//
+// --summary:  run captureSummary on each pane output (signal-only lines).
+// --follow:   loop forever, printing only new lines per session every interval.
+//             Each new line is prefixed with "[agent-name] " so output from
+//             multiple sessions remains readable in a single stream.
+func (r Runner) executeCaptureAll(followMode, summaryMode bool, interval time.Duration) error {
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	// Auto-flush all outboxes once before we start reading panes.
+	if n, ferr := flushAllOutboxes(result.Project.RepoPath); ferr == nil && n > 0 {
+		fmt.Fprintf(r.stdout, "Auto-flushed %d outbox message(s) to channel/mailbox.\n\n", n)
+	}
+
+	sessions, err := r.loadProjectSessions(result)
+	if err != nil {
+		return err
+	}
+
+	// Filter to sessions that have a live pane.
+	type liveSession struct {
+		id        string
+		agentName string
+		status    string
+		pane      string
+	}
+	var live []liveSession
+	for _, s := range sessions {
+		if strings.TrimSpace(s.TmuxPane) == "" {
+			continue
+		}
+		alive, _ := r.app.Tmux.PaneExists(s.TmuxPane)
+		if !alive {
+			continue
+		}
+		live = append(live, liveSession{
+			id:        s.ID,
+			agentName: s.AgentName,
+			status:    s.Status,
+			pane:      s.TmuxPane,
+		})
+	}
+
+	if len(live) == 0 {
+		fmt.Fprintln(r.stdout, "No active sessions with live panes found.")
+		return nil
+	}
+
+	// ── single-shot mode ──────────────────────────────────────────────────
+	if !followMode {
+		for _, s := range live {
+			fmt.Fprintln(r.stdout, captureHeader(s.agentName, s.id, s.status))
+			output, err := r.app.Tmux.CapturePane(s.pane)
+			if err != nil {
+				fmt.Fprintf(r.stdout, "(capture error: %v)\n", err)
+			} else if summaryMode {
+				fmt.Fprint(r.stdout, captureSummary(output))
+			} else {
+				fmt.Fprint(r.stdout, output)
+			}
+			fmt.Fprintln(r.stdout)
+		}
+		fmt.Fprintf(r.stdout, "─── %d session(s) captured ───\n", len(live))
+		return nil
+	}
+
+	// ── follow mode ───────────────────────────────────────────────────────
+	// Track last-seen content per session using the same /tmp state files as
+	// the single-session --follow path, so state survives across invocations.
+	prevByID := make(map[string]string, len(live))
+	for _, s := range live {
+		// Seed the previous state so we don't dump the full backlog on start.
+		if curr, err := r.app.Tmux.CapturePane(s.pane); err == nil {
+			prevByID[s.id] = curr
+		}
+	}
+
+	fmt.Fprintf(r.stdout, "Following %d session(s) — interval %s — Ctrl+C to stop\n", len(live), interval)
+	for _, s := range live {
+		fmt.Fprintf(r.stdout, "  • %s (%s)\n", s.agentName, s.id)
+	}
+	fmt.Fprintln(r.stdout)
+
+	for {
+		time.Sleep(interval)
+		for _, s := range live {
+			curr, err := r.app.Tmux.CapturePane(s.pane)
+			if err != nil {
+				continue
+			}
+			newContent := newPaneLines(prevByID[s.id], curr)
+			if strings.TrimSpace(newContent) == "" {
+				prevByID[s.id] = curr
+				continue
+			}
+			// Prefix every new line with the agent name so different sessions
+			// are distinguishable when their output interleaves.
+			tag := fmt.Sprintf("[%s] ", s.agentName)
+			for _, line := range strings.Split(strings.TrimRight(newContent, "\n"), "\n") {
+				fmt.Fprintf(r.stdout, "%s%s\n", tag, line)
+			}
+			prevByID[s.id] = curr
+		}
+	}
 }
 
 // captureSummary filters raw pane output down to lines that carry structured
