@@ -69,6 +69,31 @@ func NewService(db *sql.DB) *Service {
 	}
 }
 
+// ProvisionAgentWorkspace creates a permanent git worktree for an agent at
+// <repoPath>/.aom/agents/<agentName>/workspace/ on branch agents/<agentName>.
+// Idempotent: if the workspace directory already exists and is a registered
+// git worktree, returns the path without error.
+func (s *Service) ProvisionAgentWorkspace(repoPath, agentName string) (string, error) {
+	path := filepath.Join(repoPath, ".aom", "agents", agentName, "workspace")
+	branch := "agents/" + agentName
+
+	if _, err := s.stat(path); err == nil {
+		return path, nil
+	}
+
+	if err := s.mkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", fmt.Errorf("provision agent workspace for %q: %w", agentName, err)
+	}
+
+	if _, err := s.runGit(repoPath, "worktree", "add", "-b", branch, path); err != nil {
+		if _, err2 := s.runGit(repoPath, "worktree", "add", path, branch); err2 != nil {
+			return "", fmt.Errorf("provision agent workspace for %q: %w", agentName, err2)
+		}
+	}
+
+	return path, nil
+}
+
 // CreatePlanned inserts or updates the planned worktree mapping for one task.
 func (s *Service) CreatePlanned(params CreateParams) (*Record, error) {
 	projectID := strings.TrimSpace(params.ProjectID)
