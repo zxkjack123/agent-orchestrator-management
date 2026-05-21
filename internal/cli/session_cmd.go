@@ -276,6 +276,10 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "session launch validation failed before session became interactive", err)
 	}
 
+	// Always print the effective launch command to stderr so operators can
+	// diagnose pane-exit failures without needing a debug flag.
+	fmt.Fprintf(r.stderr, "Launch command: %s\n", launchCommand)
+
 	if err := r.materializeAgentContext(result, agentRecord, executionPath); err != nil {
 		return nil, fmt.Errorf("materialize agent context: %w", err)
 	}
@@ -303,14 +307,23 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 	record.TmuxSessionName = workspace.Name
 
 	// For real-mode sessions, verify the runtime process didn't exit immediately.
-	// Some runtimes (e.g. codex) silently quit on auth failure, leaving the pane closed.
+	// Some runtimes (e.g. codex) silently quit on auth failure or config parse errors,
+	// leaving the pane closed. We wait up to 3s in 1s increments so slow-starting
+	// runtimes (plugin sync, model cache warm-up) are not mis-classified as failures.
 	if params.launchMode == aomruntime.LaunchModeReal {
-		time.Sleep(1200 * time.Millisecond)
-		if alive, _ := r.app.Tmux.PaneExists(paneBinding.PaneID); !alive {
+		paneAlive := false
+		for attempt := 0; attempt < 3; attempt++ {
+			time.Sleep(1000 * time.Millisecond)
+			if alive, _ := r.app.Tmux.PaneExists(paneBinding.PaneID); alive {
+				paneAlive = true
+				break
+			}
+		}
+		if !paneAlive {
 			_ = r.app.Tmux.KillPane(paneBinding.PaneID)
 			return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID,
-				fmt.Sprintf("%q runtime exited within 1.2s of launch — check binary, PATH, and authentication", agentRecord.Runtime),
-				fmt.Errorf("runtime %q pane %s closed immediately after spawn — check binary and authentication", agentRecord.Runtime, paneBinding.PaneID))
+				fmt.Sprintf("%q runtime exited within 3s of launch — check binary, PATH, authentication, and ~/.codex/config.toml", agentRecord.Runtime),
+				fmt.Errorf("runtime %q pane %s closed immediately after spawn\nLaunch command: %s\nCheck: binary in PATH, auth token, and any project-local .codex/config.toml for invalid keys", agentRecord.Runtime, paneBinding.PaneID, launchCommand))
 		}
 	}
 

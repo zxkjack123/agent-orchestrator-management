@@ -554,6 +554,94 @@ func TestMaterializeMCPConfigNoopForEmptyServers(t *testing.T) {
 	}
 }
 
+func TestMaterializeCodexConfigWritesConfigTOML(t *testing.T) {
+	root := t.TempDir()
+	if err := MaterializeCodexConfig("bot-codex", "codex", root); err != nil {
+		t.Fatalf("MaterializeCodexConfig: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, ".codex", "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile .codex/config.toml: %v", err)
+	}
+	content := string(data)
+
+	// Confirmed-valid keys (verified against codex binary string table).
+	// Top-level keys must appear before any [section] header in the TOML file.
+	for _, want := range []string{
+		"model_auto_compact_token_limit",
+		"tool_output_token_limit",
+		"background_terminal_max_timeout",
+		"[agents]",
+		"max_threads = 1",
+		"job_max_runtime_seconds",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf(".codex/config.toml missing %q; content:\n%s", want, content)
+		}
+	}
+	// Keys that were previously written but are NOT valid in codex's config schema.
+	for _, bad := range []string{
+		"tool_timeout_sec", // incorrect name; correct is agents.job_max_runtime_seconds
+		"max_bytes",        // [history] section does not accept this key
+	} {
+		if strings.Contains(content, bad) {
+			t.Errorf(".codex/config.toml contains invalid key %q; content:\n%s", bad, content)
+		}
+	}
+	// Top-level keys must NOT appear after a [section] header — verify structural ordering.
+	agentsIdx := strings.Index(content, "[agents]")
+	for _, topKey := range []string{"model_auto_compact_token_limit", "tool_output_token_limit", "background_terminal_max_timeout"} {
+		keyIdx := strings.Index(content, topKey)
+		if keyIdx > agentsIdx {
+			t.Errorf(".codex/config.toml key %q appears after [agents] section — it will be treated as agents.%s", topKey, topKey)
+		}
+	}
+}
+
+func TestMaterializeCodexConfigNoopForNonCodex(t *testing.T) {
+	for _, runtime := range []string{"claude", "gemini", "kiro", ""} {
+		root := t.TempDir()
+		if err := MaterializeCodexConfig("agent", runtime, root); err != nil {
+			t.Fatalf("MaterializeCodexConfig(%q): unexpected error: %v", runtime, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, ".codex", "config.toml")); !os.IsNotExist(err) {
+			t.Errorf("runtime %q: config.toml should not exist, got stat err: %v", runtime, err)
+		}
+	}
+}
+
+func TestMaterializeCodexConfigNoopForEmptyWorktree(t *testing.T) {
+	if err := MaterializeCodexConfig("agent", "codex", ""); err != nil {
+		t.Fatalf("MaterializeCodexConfig(empty path): %v", err)
+	}
+}
+
+func TestMaterializeCodexConfigOverwritesExistingFile(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Write stale content first.
+	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte("stale = true\n"), 0o644); err != nil {
+		t.Fatalf("seed config.toml: %v", err)
+	}
+
+	if err := MaterializeCodexConfig("bot", "codex", root); err != nil {
+		t.Fatalf("MaterializeCodexConfig: %v", err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	content := string(data)
+	if strings.Contains(content, "stale = true") {
+		t.Error("config.toml was not overwritten — stale content still present")
+	}
+	if !strings.Contains(content, "max_threads = 1") {
+		t.Error("config.toml missing expected AOM content after overwrite")
+	}
+}
+
 func TestMaterializePolicyConstraintsAppendsToClaudeMD(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("# Agent\n"), 0o644); err != nil {

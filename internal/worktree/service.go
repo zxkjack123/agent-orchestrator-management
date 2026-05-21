@@ -85,9 +85,23 @@ func (s *Service) ProvisionAgentWorkspace(repoPath, agentName string) (string, e
 		return "", fmt.Errorf("provision agent workspace for %q: %w", agentName, err)
 	}
 
+	// Prune stale worktree metadata first so git doesn't reject the add due to
+	// a leftover locked/dangling entry from a previous failed provision attempt.
+	_, _ = s.runGit(repoPath, "worktree", "prune")
+
 	if _, err := s.runGit(repoPath, "worktree", "add", "-b", branch, path); err != nil {
+		// First attempt (-b creates a new branch) failed — try without -b in case the
+		// branch already exists (e.g. after a partial provision or manual git op).
 		if _, err2 := s.runGit(repoPath, "worktree", "add", path, branch); err2 != nil {
-			return "", fmt.Errorf("provision agent workspace for %q: %w", agentName, err2)
+			// Exit 128 from git usually means: no commits yet on the default branch,
+			// the repo is in a detached HEAD state, or the branch ref is invalid.
+			// Wrap with an actionable message so the operator knows what to fix.
+			return "", fmt.Errorf(
+				"provision agent workspace for %q: %w\n"+
+					"Hint: make sure the repository has at least one commit on the default branch.\n"+
+					"     Run: git add . && git commit -m \"init\" — then retry aom agent provision %s",
+				agentName, err2, agentName,
+			)
 		}
 	}
 

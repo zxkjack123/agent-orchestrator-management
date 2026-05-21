@@ -58,25 +58,6 @@ func Open(path string) (*sql.DB, error) {
 		}
 	}
 
-	// Use file: URI so we can pass _txlock=immediate and _busy_timeout.
-	//
-	// _txlock=immediate forces every transaction to use BEGIN IMMEDIATE, which
-	// acquires the write lock at BEGIN time rather than mid-transaction.
-	// Without this, DEFERRED transactions can fail with SQLITE_BUSY when
-	// upgrading read→write lock even when busy_timeout is set.
-	//
-	// _busy_timeout=30000 sets the C-level SQLite timeout before the first
-	// PRAGMA is applied, closing the race window where an early Ping() could
-	// fail with SQLITE_BUSY before our configureConnection PRAGMA runs.
-	db, err := sql.Open("sqlite", "file:"+path+"?_txlock=immediate&_busy_timeout=30000")
-	if err != nil {
-		return nil, fmt.Errorf("open sqlite database: %w", err)
-	}
-
-	if db.Driver() == nil {
-		return nil, fmt.Errorf("open sqlite database: driver is not available")
-	}
-
 	// Retry openAndMigrate on transient SQLite errors:
 	//
 	//   SQLITE_CANTOPEN (14): race on WAL/SHM file creation at first open.
@@ -88,13 +69,30 @@ func Open(path string) (*sql.DB, error) {
 	//
 	// Five attempts with 100/200/400/800/1600 ms exponential backoff cover
 	// any realistic parallel-CLI race window (total max wait ≈ 3 s).
+	//
+	// IMPORTANT: openAndMigrate calls db.Close() on failure, so we must open
+	// a FRESH *sql.DB on every retry — reusing a closed db produces
+	// "sql: database is closed" on the very next Ping() call.
+	dsn := "file:" + path + "?_txlock=immediate&_busy_timeout=30000"
 	const maxRetries = 5
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(100*(1<<uint(attempt-1))) * time.Millisecond)
 		}
-		result, migrateErr := openAndMigrate(db)
+		// Open a fresh connection on each attempt; openAndMigrate closes it on
+		// failure so we cannot reuse the same *sql.DB across retries.
+		retryDB, openErr := sql.Open("sqlite", dsn)
+		if openErr != nil {
+			lastErr = fmt.Errorf("open sqlite database: %w", openErr)
+			continue
+		}
+		if retryDB.Driver() == nil {
+			_ = retryDB.Close()
+			lastErr = fmt.Errorf("open sqlite database: driver is not available")
+			continue
+		}
+		result, migrateErr := openAndMigrate(retryDB)
 		if migrateErr == nil {
 			return result, nil
 		}

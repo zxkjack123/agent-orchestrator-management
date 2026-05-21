@@ -139,6 +139,9 @@ func (r Runner) executeStepUpdate(args []string) error {
 	if lookupErr != nil {
 		return lookupErr
 	}
+	if current == nil {
+		return fmt.Errorf("step %q not found", params.id)
+	}
 	intermediates := stepWalkPath(current.Status, targetStatus)
 
 	var record *step.Record

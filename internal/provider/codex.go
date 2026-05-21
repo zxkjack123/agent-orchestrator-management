@@ -27,23 +27,44 @@ func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (
 		// workspace-write sandbox, which restricts writes to paths outside the
 		// worktree (including the default ~/.npm cache directory).
 		`export npm_config_cache="/tmp/aom-npm-cache-$(id -u)"`,
-		`[ -f "$HOME/.codex/version.json" ] || { mkdir -p "$HOME/.codex" && printf '{"dismissed_version":"9999.0.0"}\n' > "$HOME/.codex/version.json"; }`,
+		// IMPORTANT: printf format must use hex escapes for { " } — no single quotes allowed here.
+		// This preamble is assembled inside sh -lc '...' by assembleLoginShellCommand; any single
+		// quote inside the preamble would prematurely close the outer quoted string, truncating the
+		// script and preventing the exec codex line from ever being reached.
+		// \x7b={  \x22="  \x7d=}
+		`[ -f "$HOME/.codex/version.json" ] || { mkdir -p "$HOME/.codex" && printf "\x7b\x22dismissed_version\x22:\x229999.0.0\x22\x7d\n" > "$HOME/.codex/version.json"; }`,
 	}
 	if len(spec.DenyCommands) > 0 {
 		preamble = append(preamble, buildCodexWrapperPreamble(spec.SessionID, spec.DenyCommands)...)
 	}
-	// NiceExecPrefix ("exec nice -n 10 ") ensures the shell is replaced by
-	// nice, which then exec's codex at niceness 10. The OS scheduler will
-	// deprioritise codex and all child bwrap sandboxes relative to interactive
-	// processes when CPU is contested; codex still gets full throughput when
-	// cores are free.
-	// -c agents.max_threads=2 caps codex's internal sub-agent concurrency
-	// to 2 threads, preventing runaway parallel-tool fan-out.
+	// codexNiceExecPrefix runs codex at niceness 19 (the highest non-root
+	// deprioritisation on Linux/macOS). Combined with agents.max_threads=1
+	// this gives codex the lowest possible OS-scheduler priority so it yields
+	// immediately to any interactive or normal-priority process. Codex still
+	// runs at full throughput when cores are free — niceness only matters when
+	// the CPU is contested.
+	//
+	// We use a codex-specific constant (not the shared NiceExecPrefix=10) so
+	// the heavier AI workload from codex is throttled more aggressively than
+	// lighter runtimes like claude.
+	const codexNiceExecPrefix = "exec nice -n 19 "
+
+	// -c agents.max_threads=1 serialises codex's internal tool execution to one
+	// call at a time, preventing parallel fan-out from spiking CPU on the host.
+	// This trades some throughput for a meaningfully lower and steadier CPU
+	// footprint — the right default for a shared developer machine.
+	// NOTE: the -c values must NOT be wrapped in single quotes here. The entire
+	// ExecCmd is joined into sh -lc '...' by assembleLoginShellCommand, which uses
+	// single quotes for the outer wrapper. Any inner single quote would prematurely
+	// terminate the outer quoted string, causing the shell to split the value into
+	// a positional parameter rather than passing it as the argument to -c. The
+	// values (network_access=true, agents.max_threads=1) contain no special
+	// characters, so no quoting is needed at all.
 	var execCmd string
 	if spec.AgentSessionID != "" {
-		execCmd = fmt.Sprintf(NiceExecPrefix+"codex resume %s --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true' -c 'agents.max_threads=2'", spec.AgentSessionID)
+		execCmd = fmt.Sprintf(codexNiceExecPrefix+"codex resume %s --sandbox workspace-write -a never -c sandbox_workspace_write.network_access=true -c agents.max_threads=1", spec.AgentSessionID)
 	} else {
-		execCmd = NiceExecPrefix + "codex --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true' -c 'agents.max_threads=2'"
+		execCmd = codexNiceExecPrefix + "codex --sandbox workspace-write -a never -c sandbox_workspace_write.network_access=true -c agents.max_threads=1"
 	}
 	if spec.Model != "" {
 		execCmd += " -m " + spec.Model

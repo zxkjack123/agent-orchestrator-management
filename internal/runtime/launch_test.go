@@ -54,7 +54,7 @@ func TestBuilderBuildReturnsRealCodexCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	if !strings.Contains(command, "exec nice -n 10 codex --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true'") {
+	if !strings.Contains(command, "exec nice -n 19 codex --sandbox workspace-write -a never -c sandbox_workspace_write.network_access=true") {
 		t.Fatalf("command = %q, want codex exec command with network_access=true", command)
 	}
 }
@@ -148,7 +148,7 @@ func TestBuilderBuildResumesCodexSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	want := "sh -lc 'export AOM_RUNTIME=codex; export PYTHONDONTWRITEBYTECODE=1; export npm_config_cache=\"/tmp/aom-npm-cache-$(id -u)\"; [ -f \"$HOME/.codex/version.json\" ] || { mkdir -p \"$HOME/.codex\" && printf '{\"dismissed_version\":\"9999.0.0\"}\\n' > \"$HOME/.codex/version.json\"; }; exec nice -n 10 codex resume sess-xyz-789 --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true' -c 'agents.max_threads=2''"
+	want := "sh -lc 'export AOM_RUNTIME=codex; export PYTHONDONTWRITEBYTECODE=1; export npm_config_cache=\"/tmp/aom-npm-cache-$(id -u)\"; [ -f \"$HOME/.codex/version.json\" ] || { mkdir -p \"$HOME/.codex\" && printf \"\\x7b\\x22dismissed_version\\x22:\\x229999.0.0\\x22\\x7d\\n\" > \"$HOME/.codex/version.json\"; }; exec nice -n 19 codex resume sess-xyz-789 --sandbox workspace-write -a never -c sandbox_workspace_write.network_access=true -c agents.max_threads=1'"
 	if command != want {
 		t.Fatalf("command = %q, want %q", command, want)
 	}
@@ -164,7 +164,7 @@ func TestBuilderBuildFreshStartWhenNoAgentSessionID(t *testing.T) {
 		wantContain string
 	}{
 		{"claude", "exec nice -n 10 claude --dangerously-skip-permissions"},
-		{"codex", "exec nice -n 10 codex --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true'"},
+		{"codex", "exec nice -n 19 codex --sandbox workspace-write -a never -c sandbox_workspace_write.network_access=true"},
 	} {
 		command, err := builder.Build(SessionSpec{Runtime: tc.runtime}, LaunchModeReal)
 		if err != nil {

@@ -248,6 +248,67 @@ func MaterializeModelHint(agentName, runtime, model, modelHint, worktreePath, pr
 	return nil
 }
 
+// MaterializeCodexConfig writes a minimal .codex/config.toml into the worktree
+// when the runtime is codex. Codex reads config from BOTH ~/.codex/config.toml
+// and a .codex/config.toml in the current working directory; any unknown or
+// misplaced key causes codex to refuse to start ("config could not be loaded").
+//
+// Only keys confirmed valid via the `-c key=value` CLI flag are written here.
+// Do NOT add speculative keys — validate against `codex doctor` first.
+//
+// Silently skipped for non-codex runtimes or when worktreePath is empty.
+//
+// Settings written:
+//   [agents] max_threads = 1   — serialise tool execution (mirrors -c agents.max_threads=1)
+func MaterializeCodexConfig(agentName, runtime, worktreePath string) error {
+	if strings.TrimSpace(worktreePath) == "" {
+		return nil
+	}
+	if strings.TrimSpace(runtime) != "codex" {
+		return nil
+	}
+
+	// Key placement rules (confirmed by inspecting codex binary strings):
+	//   - Top-level keys MUST appear BEFORE any [section] header in the TOML file.
+	//     Placing them after a [section] makes them sub-keys of that section (e.g.
+	//     agents.tool_output_token_limit) which is invalid and causes codex to exit.
+	//   - All keys below are confirmed present in the codex config struct.
+	//
+	// Confirmed top-level keys:
+	//   model_auto_compact_token_limit  — compact history when context grows large
+	//   tool_output_token_limit         — cap token dump per tool call (e.g. file reads)
+	//   background_terminal_max_timeout — kill stalled background terminals sooner
+	//                                     (codex default is 3 600 000 ms = 1 hour)
+	//
+	// Confirmed [agents] sub-keys:
+	//   max_threads             — serialise tool execution (mirrors -c agents.max_threads=1)
+	//   job_max_runtime_seconds — hard kill per agent job turn
+	const configTOML = `# AOM-managed codex config
+# Written at session spawn time — do not edit manually.
+# Source of truth: internal/artifact/service.go MaterializeCodexConfig()
+# CAUTION: top-level keys MUST come before any [section] header — TOML places
+# keys after a section header into that section, not at the top level.
+
+model_auto_compact_token_limit = 64000
+tool_output_token_limit = 12000
+background_terminal_max_timeout = 60000
+
+[agents]
+max_threads = 1
+job_max_runtime_seconds = 120
+`
+
+	dir := filepath.Join(worktreePath, ".codex")
+	if err := ensureDir(dir); err != nil {
+		return fmt.Errorf("create .codex dir for codex config (agent %q): %w", agentName, err)
+	}
+	dst := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(dst, []byte(configTOML), 0o644); err != nil {
+		return fmt.Errorf("write .codex/config.toml for agent %q: %w", agentName, err)
+	}
+	return nil
+}
+
 func writeCodexMCPConfig(agentName string, servers []config.ResolvedMCPServer, worktreePath string) error {
 	type stdioEntry struct {
 		Type    string   `json:"type"`

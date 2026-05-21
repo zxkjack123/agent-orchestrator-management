@@ -156,6 +156,10 @@ func (r Runner) materializeAgentContext(result *project.OpenResult, agentRecord 
 		return fmt.Errorf("materialize mcp config: %w", err)
 	}
 
+	if err := artifact.MaterializeCodexConfig(agentRecord.Name, agentRecord.Runtime, worktreePath); err != nil {
+		return fmt.Errorf("materialize codex config: %w", err)
+	}
+
 	if err := artifact.MaterializePolicyConstraints(agentRecord.Name, agentRecord.Runtime, result.Policy.Policy.DenyCommands, worktreePath); err != nil {
 		return fmt.Errorf("materialize policy constraints: %w", err)
 	}
