@@ -445,6 +445,18 @@ func (m *Manager) PanePID(paneID string) int {
 	return pid
 }
 
+// CountDescendants returns the number of descendant processes of the pane's root
+// process. A high count indicates the agent may be stuck in a retry loop spawning
+// background terminals. Returns 0 if the pane does not exist or the PID cannot
+// be determined.
+func (m *Manager) CountDescendants(paneID string) int {
+	pid := m.PanePID(paneID)
+	if pid <= 0 {
+		return 0
+	}
+	return len(paneDescendants(pid))
+}
+
 // KillPaneAndDescendants kills all descendant processes of the pane's root process
 // (SIGTERM then SIGKILL after 2 s) before removing the pane itself.
 // This is important for runtimes like codex that spawn background terminal children

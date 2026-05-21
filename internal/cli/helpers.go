@@ -555,8 +555,12 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 					fmt.Fprintf(r.stdout, "    attached=yes — process still running; run: aom session stop %s\n", item.ID)
 				}
 			}
-			if readiness := sessionReadiness(result.Project.RepoPath, item); readiness != "" {
+			bgCount := r.app.Tmux.CountDescendants(item.TmuxPane)
+			if readiness := sessionReadiness(result.Project.RepoPath, item, bgCount); readiness != "" {
 				fmt.Fprintf(r.stdout, "    readiness=%s\n", readiness)
+				if readiness == "stuck-retrying" {
+					fmt.Fprintf(r.stdout, "    bg-terminals=%d — agent may be retry-looping; run: aom session stop %s\n", bgCount, item.ID)
+				}
 			}
 		}
 	}

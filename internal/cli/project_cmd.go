@@ -660,7 +660,7 @@ func (r Runner) printStatusJSON(result *project.OpenResult, sessions []session.R
 			Agent:     s.AgentName,
 			Role:      s.RoleName,
 			Status:    s.Status,
-			Readiness: sessionReadiness(result.Project.RepoPath, s),
+			Readiness: sessionReadiness(result.Project.RepoPath, s, r.app.Tmux.CountDescendants(s.TmuxPane)),
 			TaskID:    s.TaskID,
 			Runtime:   s.Runtime,
 		})

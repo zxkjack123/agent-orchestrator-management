@@ -593,8 +593,12 @@ func (r Runner) executeSessionList(args []string) error {
 		if item.Status == "Detached" {
 			fmt.Fprintf(r.stdout, "    next=%s\n", detachedSessionHint(item))
 		}
-		if readiness := sessionReadiness(result.Project.RepoPath, item); readiness != "" {
+		bgCount := r.app.Tmux.CountDescendants(item.TmuxPane)
+		if readiness := sessionReadiness(result.Project.RepoPath, item, bgCount); readiness != "" {
 			fmt.Fprintf(r.stdout, "    readiness=%s\n", readiness)
+			if readiness == "stuck-retrying" {
+				fmt.Fprintf(r.stdout, "    bg-terminals=%d — agent may be retry-looping; run: aom session stop %s\n", bgCount, item.ID)
+			}
 		}
 		printed++
 	}
@@ -610,9 +614,17 @@ func (r Runner) executeSessionList(args []string) error {
 	return nil
 }
 
+// bgTerminalWarningThreshold is the number of descendant processes in a pane
+// above which the session is considered to be stuck in a retry loop.
+// Codex typically has 2–4 workers under normal operation; 6+ indicates runaway
+// background terminal accumulation.
+const bgTerminalWarningThreshold = 6
+
 // sessionReadiness returns a computed readiness label for the session, giving
 // operators a quick signal beyond just the status string.
-func sessionReadiness(repoPath string, s session.Record) string {
+// bgCount is the number of live descendant processes in the session's tmux pane
+// (pass 0 when tmux is unavailable or the pane ID is unknown).
+func sessionReadiness(repoPath string, s session.Record, bgCount int) string {
 	if s.TaskID == "" {
 		return ""
 	}
@@ -622,7 +634,13 @@ func sessionReadiness(repoPath string, s session.Record) string {
 	case "Stopped", "Failed", "Detached", "Archived":
 		return ""
 	}
-	// Idle or Working — compute from artifacts.
+	// Idle or Working — check for runaway background terminal accumulation first.
+	// When codex cannot complete a command it retries via new background terminals;
+	// a high descendant count is a reliable signal that it is stuck.
+	if bgCount >= bgTerminalWarningThreshold {
+		return "stuck-retrying"
+	}
+	// Compute from artifacts.
 	if s.WorktreePath != "" {
 		logPath := filepath.Join(s.WorktreePath, ".agent", "log.md")
 		if hasTaskCompletedEvent(logPath) {
