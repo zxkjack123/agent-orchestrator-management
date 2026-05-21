@@ -1138,7 +1138,65 @@ Claude Code does not have this problem: it uses a sequential tool-use loop (one 
 
 ## Immediate Next Step
 
-Milestones 0–17, all E2E feedback improvements, and cross-platform polish are complete. Only deferred work remains:
+Milestones 0–17, all E2E feedback improvements, and cross-platform polish are complete.
+
+### Track A — Per-Agent Workspace (Free-Roam foundation)
+
+Full plan in `docs/free-roam-workspace.md`.
+
+**Why**: In the current per-task-worktree model, when an agent gets a new task it must `cd` to a new
+worktree. `cd` is sent via `tmux send-keys` to a running TUI (claude/codex), which receives it as a
+chat message rather than a shell command — the agent's process CWD never changes and state diverges.
+Per-Agent Workspace eliminates this by giving each agent one permanent workspace that never moves.
+
+**What changes:**
+
+| Step | Status | File | Change |
+|------|--------|------|--------|
+| A1 | ✅ Done | `internal/db/db.go` | Schema migration v9: `ALTER TABLE agents ADD COLUMN workspace_path TEXT NOT NULL DEFAULT ''` |
+| A2 | ✅ Done | `internal/agent/repository.go` | Add `WorkspacePath string` field; update Upsert + scan |
+| A3 | ✅ Done | `internal/worktree/service.go` | Add `ProvisionAgentWorkspace(repoPath, agentName) (string, error)` — `<repo>/.aom/agents/<name>/workspace/` as git worktree on `agents/<name>` branch; idempotent |
+| A4 | ✅ Done | `internal/cli/agent_cmd.go` | Add `aom agent provision <name>` subcommand |
+| A5 | ✅ Done | `internal/cli/session_spawn_helpers.go` | `resolveTaskExecutionPath`: check `agentRecord.WorkspacePath != ""` first; return workspace path if set |
+| A6 | ✅ Done | `internal/artifact/service.go` | `TaskArtifactRoot` returns `<workspace>/.agent/tasks/<taskID>` when workspace set, else legacy `.agent/` |
+| A7 | ✅ Done | `internal/cli/task_cmd.go` | `aom task claim`: skip `ensurePlannedWorktree` when agent has workspace; write `current-task.md` |
+| A8 | ✅ Done | `internal/cli/merge_cmd.go` | `aom merge commit`: `resolveSourceBranch` helper detects workspace agent (`agents/<name>` branch) vs legacy worktree; verifies `[TASK-xxx]` tagged commits on agent branch before merge; `aom merge continue` updated consistently |
+
+**Track A complete.** Backward compatible: agents without `workspace_path` keep using per-task worktrees unchanged.
+
+### Track B — Free-Roam Messaging
+
+Full plan in `docs/free-roam-workspace.md` (Communication Features section).
+
+**Why**: Agents must currently poll `aom message read` for new messages. There is no live notification.
+The `aom message watch` command enables reactive inbox — agent is notified as messages arrive.
+`aom message reply` closes the request-response loop without manual routing.
+
+**What changes:**
+
+| Step | Status | File | Change |
+|------|--------|------|--------|
+| B1 | ✅ Done | `internal/cli/message_cmd.go` | Add `watch` subcommand — tail `.aom/mailbox/<agent>.md` using byte-offset tracking (same pattern as `tailLogEvents` in `log_wait.go`) |
+| B2 | ✅ Done | `internal/cli/message_cmd.go` | Add `reply <msg-id> <text>` subcommand — parse `from:` field from mailbox entry, route reply to sender |
+| B3 | ✅ Done | `internal/cli/root.go` | Wire `watch` and `reply` into `executeMessage` switch |
+| B4 | ✅ Done | `profiles/base.md.tmpl` | Add "When user asks to contact a teammate" and "When user asks to tell the team" workflow |
+| B5 | ✅ Done | `profiles/orchestrator.md.tmpl` | Add "Relaying operator feedback" and "Acting as peer relay" sections |
+
+**Track B complete.**
+
+### Track C — Document Updates
+
+| Document | Status | Change |
+|----------|--------|--------|
+| `docs/free-roam-workspace.md` | ✅ Done | Created — full concept + implementation plan |
+| `docs/AOM-planning.md` | ✅ Done | Added "Option C — Free-Roam" to Interaction Models section |
+| `docs/cli-spec.md` | ✅ Done | Added `aom message watch`, `aom message reply`, `aom agent provision` specs |
+| `profiles/base.md.tmpl` | ✅ Done | Free-Roam communication workflow |
+| `profiles/orchestrator.md.tmpl` | ✅ Done | Peer relay protocol |
+
+**All Free-Roam tracks complete (A1–A8, B1–B5, Track C).**
+
+### Deferred (unchanged)
 
 1. **gemini/kiro runtime support** — fill in `LaunchCommand` in `internal/provider/gemini.go` and `internal/provider/kiro.go`; blocked on confirmed CLI flags
 

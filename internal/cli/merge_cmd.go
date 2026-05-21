@@ -7,6 +7,7 @@ import (
 
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
 	aommerge "github.com/lattapon-aek/agents-orchestrator-management-private/internal/merge"
+	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
 )
 
@@ -401,6 +402,58 @@ func (r Runner) executeMergePrepare(args []string) error {
 	return nil
 }
 
+// resolveSourceBranch returns the git branch that holds the task's implementation work.
+//
+// For workspace-mode agents (agent.WorkspacePath != ""), the permanent per-agent branch
+// "agents/<name>" is used as the source. The task's commits are expected to be tagged
+// with "[TASK-xxx]" in their commit messages; this function verifies that at least one
+// such commit exists ahead of targetBranch (caller passes "" to skip that check).
+//
+// For legacy per-task worktree agents (WorkspacePath == ""), the branch comes from
+// view.Worktree.BranchName; a nil worktree is an error.
+func (r Runner) resolveSourceBranch(result *project.OpenResult, view *taskView, taskID, targetBranch string) (string, error) {
+	agentName := strings.TrimSpace(view.Task.PreferredAgent)
+	if agentName != "" {
+		agentRepo, agentDB, err := r.app.OpenAgentRepository(result.DBPath)
+		if err != nil {
+			return "", err
+		}
+		defer agentDB.Close()
+
+		agents, err := agentRepo.ListByProjectID(result.Project.ID)
+		if err != nil {
+			return "", err
+		}
+		for _, ag := range agents {
+			if ag.Name == agentName && strings.TrimSpace(ag.WorkspacePath) != "" {
+				sourceBranch := "agents/" + agentName
+				// Verify at least one [TASK-xxx] tagged commit exists on the agent branch.
+				if targetBranch != "" {
+					taskTag := "[" + taskID + "]"
+					taggedOut, _ := exec.Command("git", "-C", result.Project.RepoPath,
+						"log", "--oneline", "--grep="+taskTag,
+						targetBranch+".."+sourceBranch).Output()
+					if strings.TrimSpace(string(taggedOut)) == "" {
+						return "", fmt.Errorf(
+							"no commits tagged %q found on branch %q ahead of %q\n"+
+								"  hint: commit task work with [%s] prefix in the message, e.g.:\n"+
+								"    git commit -m %q",
+							taskTag, sourceBranch, targetBranch, taskID,
+							"["+taskID+"] implement feature X")
+					}
+				}
+				return sourceBranch, nil
+			}
+		}
+	}
+
+	// Legacy per-task worktree path.
+	if view.Worktree == nil {
+		return "", fmt.Errorf("task %q has no worktree — agent has no workspace and no per-task worktree", taskID)
+	}
+	return view.Worktree.BranchName, nil
+}
+
 func (r Runner) executeMergeCommit(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("task id is required")
@@ -442,20 +495,21 @@ func (r Runner) executeMergeCommit(args []string) error {
 	if view == nil {
 		return fmt.Errorf("task %q not found", taskID)
 	}
-	if view.Worktree == nil {
-		return fmt.Errorf("task %q has no worktree", taskID)
-	}
 
 	targetBranch := intoFlag
 	if targetBranch == "" {
 		targetBranch = result.Project.DefaultBranch
 	}
 
-	sourceBranch := view.Worktree.BranchName
-
 	// Safety check: require the task to be Done before merging.
 	if view.Task.Status != "Done" {
 		return fmt.Errorf("task %q is %s; close the task before merging (aom task close %s)", taskID, view.Task.Status, taskID)
+	}
+
+	// Resolve source branch — workspace agent ("agents/<name>") or legacy per-task worktree branch.
+	sourceBranch, err := r.resolveSourceBranch(result, view, taskID, targetBranch)
+	if err != nil {
+		return err
 	}
 
 	// Guard: require at least one commit on the source branch ahead of the target.
@@ -584,12 +638,16 @@ func (r Runner) executeMergeContinue(args []string) error {
 	if view == nil {
 		return fmt.Errorf("task %q not found", taskID)
 	}
-	if view.Worktree == nil {
-		return fmt.Errorf("task %q has no worktree", taskID)
-	}
 
 	targetBranch := result.Project.DefaultBranch
-	sourceBranch := view.Worktree.BranchName
+
+	// Resolve source branch — workspace agent ("agents/<name>") or legacy per-task worktree branch.
+	// Pass empty targetBranch so resolveSourceBranch skips the [TASK-xxx] tag check (merge is
+	// already in progress; tag verification was done by executeMergeCommit).
+	sourceBranch, err := r.resolveSourceBranch(result, view, taskID, "")
+	if err != nil {
+		return err
+	}
 
 	mergeMsg := fmt.Sprintf("Merge %s into %s\n\nTask: %s\n%s (conflict resolution)",
 		sourceBranch, targetBranch, taskID, view.Task.Title)
