@@ -25,9 +25,9 @@ func (p *claudeProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) 
 	disallowedFlag := buildDisallowedToolsFlag(spec.DenyCommands)
 	var execCmd string
 	if spec.AgentSessionID != "" {
-		execCmd = fmt.Sprintf("exec claude --resume %s --dangerously-skip-permissions", spec.AgentSessionID)
+		execCmd = fmt.Sprintf(NiceExecPrefix+"claude --resume %s --dangerously-skip-permissions", spec.AgentSessionID)
 	} else {
-		execCmd = "exec claude --dangerously-skip-permissions"
+		execCmd = NiceExecPrefix + "claude --dangerously-skip-permissions"
 	}
 	if spec.Model != "" {
 		execCmd += " --model " + spec.Model

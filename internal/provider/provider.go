@@ -17,6 +17,20 @@ type LaunchSpec struct {
 	Model          string // optional; empty means use the CLI's default model
 }
 
+// NiceExecPrefix is the standard exec prefix for all agent runtimes.
+// It runs the runtime process at niceness 10, below interactive processes
+// (nice=0) but above idle background tasks (nice=19). This prevents any
+// agent — and all child processes it spawns — from starving the host UI
+// or other user applications under CPU load.
+//
+// Usage in every provider's LaunchShellSpec:
+//
+//	execCmd = NiceExecPrefix + "myruntime --flag ..."
+//
+// All future providers must use this prefix. Do not inline "exec nice -n 10"
+// directly; use this constant so the niceness level is tuned in one place.
+const NiceExecPrefix = "exec nice -n 10 "
+
 // ShellSpec is the structured output of LaunchShellSpec. The Builder assembles
 // the final sh -lc command from these parts, injecting any operator-level
 // environment (e.g. PATH) before the provider preamble.

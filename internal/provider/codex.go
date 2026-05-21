@@ -32,17 +32,18 @@ func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (
 	if len(spec.DenyCommands) > 0 {
 		preamble = append(preamble, buildCodexWrapperPreamble(spec.SessionID, spec.DenyCommands)...)
 	}
-	// Use "exec nice -n 10 codex ..." so the shell process is replaced by
+	// NiceExecPrefix ("exec nice -n 10 ") ensures the shell is replaced by
 	// nice, which then exec's codex at niceness 10. The OS scheduler will
-	// deprioritise codex relative to interactive processes when CPU is
-	// contested; codex still gets full throughput when cores are free.
+	// deprioritise codex and all child bwrap sandboxes relative to interactive
+	// processes when CPU is contested; codex still gets full throughput when
+	// cores are free.
 	// -c agents.max_threads=2 caps codex's internal sub-agent concurrency
 	// to 2 threads, preventing runaway parallel-tool fan-out.
 	var execCmd string
 	if spec.AgentSessionID != "" {
-		execCmd = fmt.Sprintf("exec nice -n 10 codex resume %s --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true' -c 'agents.max_threads=2'", spec.AgentSessionID)
+		execCmd = fmt.Sprintf(NiceExecPrefix+"codex resume %s --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true' -c 'agents.max_threads=2'", spec.AgentSessionID)
 	} else {
-		execCmd = "exec nice -n 10 codex --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true' -c 'agents.max_threads=2'"
+		execCmd = NiceExecPrefix + "codex --sandbox workspace-write -a never -c 'sandbox_workspace_write.network_access=true' -c 'agents.max_threads=2'"
 	}
 	if spec.Model != "" {
 		execCmd += " -m " + spec.Model
