@@ -102,7 +102,20 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 
 	executionPath := result.Project.RepoPath
 	var taskWorktree *worktree.Record
-	if taskRecord != nil {
+	// Per-Agent Workspace: use workspace path regardless of task binding.
+	// Workspace agents never change CWD — all tasks arrive as artifacts inside
+	// workspace/.agent/tasks/<taskID>/ without the agent moving directories.
+	if agentRecord != nil && strings.TrimSpace(agentRecord.WorkspacePath) != "" {
+		executionPath = agentRecord.WorkspacePath
+		// Still call resolveTaskExecutionPath so writeCurrentTaskFile is applied
+		// and the mapping is available for downstream steps that need it.
+		if taskRecord != nil {
+			taskWorktree, _, err = r.resolveTaskExecutionPath(result, agentRecord, *taskRecord)
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else if taskRecord != nil {
 		taskWorktree, executionPath, err = r.resolveTaskExecutionPath(result, agentRecord, *taskRecord)
 		if err != nil {
 			return nil, err
