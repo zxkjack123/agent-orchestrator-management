@@ -337,7 +337,7 @@ func (s *Service) Reconcile(taskID, repoPath string, hasActiveSession bool) (*Re
 	pathExists := false
 	if _, err := s.stat(record.WorktreePath); err == nil {
 		pathExists = true
-	} else if err != nil && !os.IsNotExist(err) {
+	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("stat worktree path for task %q: %w", taskID, err)
 	}
 
