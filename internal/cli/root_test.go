@@ -682,7 +682,7 @@ func TestExecuteSessionSpawnWithRealClaudeRuntime(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 
-	if err := Execute([]string{"session", "spawn", "reviewer-main", "--real"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"session", "spawn", "reviewer-main", "--real", "--allow-collision"}, &stdout, &stderr); err != nil {
 		t.Fatalf("session spawn failed: %v", err)
 	}
 
@@ -904,7 +904,7 @@ func TestExecuteSessionSpawnWithTaskRealMaterializesClaudeIdentityFile(t *testin
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Execute([]string{"session", "spawn", "frontend-main", "--task", taskID, "--real"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"session", "spawn", "frontend-main", "--task", taskID, "--real", "--allow-collision"}, &stdout, &stderr); err != nil {
 		t.Fatalf("session spawn failed: %v", err)
 	}
 	sessionID := extractSessionID(stdout.String())
@@ -1351,7 +1351,7 @@ func TestExecuteSessionSpawnAllowsReadOnlyRoleAlongsideDedicatedWriter(t *testin
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Execute([]string{"session", "spawn", "reviewer-main", "--task", taskID, "--mock"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"session", "spawn", "reviewer-main", "--task", taskID, "--mock", "--allow-collision"}, &stdout, &stderr); err != nil {
 		t.Fatalf("reviewer session spawn failed: %v", err)
 	}
 	if out := stdout.String(); !strings.Contains(out, "Agent: reviewer-main") {
@@ -4449,7 +4449,7 @@ func TestExecuteReviewReusesExistingReviewerSession(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"review", taskID, "--mock", "--allow-empty-branch"}, &stdout, &stderr); err != nil {
 		t.Fatalf("first review failed: %v", err)
 	}
 	firstOut := stdout.String()
@@ -4466,7 +4466,7 @@ func TestExecuteReviewReusesExistingReviewerSession(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"review", taskID, "--mock", "--allow-empty-branch"}, &stdout, &stderr); err != nil {
 		t.Fatalf("second review failed: %v", err)
 	}
 	secondOut := stdout.String()
@@ -4555,7 +4555,7 @@ func TestExecuteReviewFindingsMoveTaskAndReviewStepToNeedsAttention(t *testing.T
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"review", taskID, "--mock", "--allow-empty-branch"}, &stdout, &stderr); err != nil {
 		t.Fatalf("first review failed: %v", err)
 	}
 	reviewStepID := extractEntityID(stdout.String(), "Review step: ")
@@ -4585,7 +4585,7 @@ func TestExecuteReviewFindingsMoveTaskAndReviewStepToNeedsAttention(t *testing.T
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"review", taskID, "--mock", "--allow-empty-branch"}, &stdout, &stderr); err != nil {
 		t.Fatalf("second review failed: %v", err)
 	}
 	if out := stdout.String(); !strings.Contains(out, "Review findings detected: 1") {
@@ -4680,7 +4680,7 @@ func TestExecuteReviewFindingsResetPreferredOwnerToSharedFindingOwner(t *testing
 	}
 
 	stdout.Reset()
-	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"review", taskID, "--mock", "--allow-empty-branch"}, &stdout, &stderr); err != nil {
 		t.Fatalf("first review failed: %v", err)
 	}
 	stdout.Reset()
@@ -4710,7 +4710,7 @@ func TestExecuteReviewFindingsResetPreferredOwnerToSharedFindingOwner(t *testing
 	}
 
 	stdout.Reset()
-	if err := Execute([]string{"review", taskID, "--mock"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"review", taskID, "--mock", "--allow-empty-branch"}, &stdout, &stderr); err != nil {
 		t.Fatalf("second review failed: %v", err)
 	}
 

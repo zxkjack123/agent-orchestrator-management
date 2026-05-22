@@ -1273,6 +1273,41 @@ this but cannot reach git processes inside bwrap's mount namespace.
 - `TestBuilderBuildResumesCodexSession` updated: expects POSIX-compatible printf format, WSL2-conditional sandbox flag
 - All 13 launch tests pass
 
+#### Step 5 — E2E feedback fixes (2026-05-22)
+
+Four issues from `/tmp/aom-test-005/feedback.md` addressed:
+
+**Fix #2 — workspace collision hard error** (`internal/cli/session_cmd.go`):
+- G1 guard changed from `fmt.Fprintf(Warning: ...)` to `return fmt.Errorf(...)` — spawn is now
+  **blocked** when two agents share the same runtime but neither has a dedicated workspace.
+- New flag `--allow-collision` added to `sessionSpawnParams` and `executeSessionSpawn` to bypass.
+- Tests updated: `--allow-collision` added to tests that spawn reviewer/frontend alongside each other.
+
+**Fix #3 — task.completed gate** (`internal/cli/task_cmd.go`, `project_cmd.go`):
+- `type verifyCheck struct` and `runTaskVerifyChecks(result, view) []verifyCheck` extracted from
+  `executeTaskVerify` as a reusable helper that returns all completion checks (commits, state.md,
+  handoff.md, task.completed in log, invariants).
+- `executeTaskAccept` now runs `runTaskVerifyChecks` and blocks acceptance if any check fails.
+  New `--force` flag bypasses the gate.
+- `autoStopCompletedSessions` now runs `runTaskVerifyChecks` and skips auto-stop if any check fails.
+  Prevents killing sessions where `task.completed` was written prematurely (agent wrote the event
+  but forgot to commit or fill handoff.md).
+
+**Fix #4 — reviewer premature finalization guard** (`internal/cli/review_cmd.go`, reviewer.md.tmpl):
+- `executeReview` checks git log before spawning reviewer: if the task branch has no commits ahead
+  of default branch, spawn is **blocked** with an explanatory error.
+- New `--allow-empty-branch` flag to bypass (e.g. documentation-only tasks).
+- `reviewer.md.tmpl` updated with "Implementation Readiness Check" section and matching step in
+  Review Process.
+- Tests updated: `--allow-empty-branch` added to review tests that spawn on empty branches.
+
+**Fix #5 — repo layout coordination** (`internal/cli/project_cmd.go`, `root.go`, `session_spawn_helpers.go`):
+- `aom project layout` command added: reads `git ls-tree --name-only HEAD` to get top-level structure,
+  writes `.aom/shared/repo-layout.md`, and copies to `.agent/shared/repo-layout.md` in every active
+  worktree.
+- `materializeAgentContext` injects `.aom/shared/repo-layout.md` into new sessions at spawn time,
+  so agents always have the repo layout without manual `aom project layout` calls.
+
 ---
 
 ## Immediate Next Step

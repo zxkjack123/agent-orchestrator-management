@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/plan"
@@ -500,6 +502,86 @@ func (r Runner) executeProjectShare(args []string) error {
 	return nil
 }
 
+// executeProjectLayout generates a repo-layout.md from the current git tree and pushes
+// it to .aom/shared/ and every active worktree's .agent/shared/ directory. Agents
+// injected with this layout at spawn time can avoid directory-structure drift.
+func (r Runner) executeProjectLayout() error {
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	// Collect top-level structure from git (gracefully handles empty repo).
+	treeOut, _ := exec.Command("git", "-C", result.Project.RepoPath, "ls-tree", "--name-only", "HEAD").Output()
+	entries := strings.Split(strings.TrimSpace(string(treeOut)), "\n")
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# Repo Layout — %s\n", result.Project.Name))
+	sb.WriteString(fmt.Sprintf("Generated: %s\n\n", time.Now().Format("2006-01-02")))
+	sb.WriteString("## Directory Structure\n\n")
+	for _, e := range entries {
+		if strings.TrimSpace(e) != "" {
+			sb.WriteString(fmt.Sprintf("- `%s`\n", e))
+		}
+	}
+	if strings.TrimSpace(string(treeOut)) == "" {
+		sb.WriteString("_(no committed files yet — run after first commit)_\n")
+	}
+	sb.WriteString("\n## Layout Conventions\n\n")
+	sb.WriteString("- Before creating a new top-level directory, coordinate with the team via `aom message send`.\n")
+	sb.WriteString("- Keep backend and frontend code in separate subtrees (e.g. `backend/`, `frontend/`).\n")
+	sb.WriteString("- Do not mix build artifacts with source files.\n")
+	sb.WriteString("- Read this file before starting any task that creates new directories or top-level files.\n")
+
+	content := []byte(sb.String())
+
+	// Write to .aom/shared/repo-layout.md (operator-owned canonical copy).
+	sharedDir := filepath.Join(result.Project.RepoPath, ".aom", "shared")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		return fmt.Errorf("create shared dir: %w", err)
+	}
+	destPath := filepath.Join(sharedDir, "repo-layout.md")
+	if err := os.WriteFile(destPath, content, 0o644); err != nil {
+		return fmt.Errorf("write repo-layout.md: %w", err)
+	}
+	fmt.Fprintf(r.stdout, "Layout written: %s\n", destPath)
+
+	// Push to .agent/shared/ in every active worktree.
+	worktreeService, wDB, err := r.app.OpenWorktreeService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer wDB.Close()
+
+	records, err := worktreeService.ListByProject(result.Project.ID)
+	if err != nil {
+		return err
+	}
+
+	pushed := 0
+	for _, wt := range records {
+		if wt.Status != "Ready" && wt.Status != "Active" {
+			continue
+		}
+		wtDir := filepath.Join(wt.WorktreePath, ".agent", "shared")
+		if err := os.MkdirAll(wtDir, 0o755); err != nil {
+			fmt.Fprintf(r.stderr, "Warning: could not create %s: %v\n", wtDir, err)
+			continue
+		}
+		dest := filepath.Join(wtDir, "repo-layout.md")
+		if err := os.WriteFile(dest, content, 0o644); err != nil {
+			fmt.Fprintf(r.stderr, "Warning: could not write to %s: %v\n", dest, err)
+			continue
+		}
+		pushed++
+	}
+
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Pushed to %d active worktree(s)\n", pushed)
+	fmt.Fprintf(r.stdout, "New sessions will receive it automatically at: .agent/shared/repo-layout.md\n")
+	return nil
+}
+
 func (r Runner) executeStatus(args []string) error {
 	activeOnly := false
 	graphMode := false
@@ -581,6 +663,23 @@ func (r Runner) autoStopCompletedSessions(result *project.OpenResult, sessions [
 		logPath := filepath.Join(s.WorktreePath, ".agent", "log.md")
 		if !hasTaskCompletedEvent(logPath) {
 			continue
+		}
+		// Run completion checks before auto-stopping — prevents killing sessions
+		// where task.completed was signalled prematurely (agent wrote the event but
+		// forgot to commit, fill handoff.md, etc.).
+		view, viewErr := r.loadTaskView(result, s.TaskID)
+		if viewErr == nil && view != nil {
+			checks := r.runTaskVerifyChecks(result, view)
+			allOK := true
+			for _, c := range checks {
+				if !c.ok {
+					allOK = false
+					break
+				}
+			}
+			if !allOK {
+				continue
+			}
 		}
 		stopped, _, _ := r.stopSessionRecord(result, s, false)
 		if stopped != nil {

@@ -261,6 +261,8 @@ func (r Runner) executeProject(args []string) error {
 		return r.executeProjectResources(args[1:])
 	case "share":
 		return r.executeProjectShare(args[1:])
+	case "layout":
+		return r.executeProjectLayout()
 	default:
 		return fmt.Errorf("unknown project command %q", strings.Join(args, " "))
 	}

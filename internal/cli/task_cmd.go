@@ -494,12 +494,26 @@ func (r Runner) executeTaskClose(args []string) error {
 
 // executeTaskAccept accepts a completed agent task in one shot:
 // walks all non-terminal steps to Completed, then transitions the task to Done.
+// Flags: --force   skip completion-readiness checks and accept unconditionally.
 func (r Runner) executeTaskAccept(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("task identifier is required")
+	var taskID string
+	force := false
+	for _, arg := range args {
+		switch arg {
+		case "--force":
+			force = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown flag %q", arg)
+			}
+			if taskID != "" {
+				return fmt.Errorf("task accept takes exactly one task identifier")
+			}
+			taskID = strings.TrimSpace(arg)
+		}
 	}
-	if len(args) > 1 {
-		return fmt.Errorf("task accept takes exactly one argument")
+	if taskID == "" {
+		return fmt.Errorf("task identifier is required")
 	}
 
 	result, err := r.app.Projects.Open(".")
@@ -519,8 +533,6 @@ func (r Runner) executeTaskAccept(args []string) error {
 	}
 	defer stepDB.Close()
 
-	taskID := strings.TrimSpace(args[0])
-
 	current, err := taskService.Get(taskID)
 	if err != nil {
 		return err
@@ -530,6 +542,36 @@ func (r Runner) executeTaskAccept(args []string) error {
 	}
 	if current.Status == "Done" || current.Status == "Archived" {
 		return fmt.Errorf("task %q is already %s", taskID, current.Status)
+	}
+
+	// Verify completion readiness unless --force is given.
+	// This prevents accepting tasks where the agent wrote task.completed but
+	// forgot to commit, fill handoff.md, or otherwise finish properly.
+	if !force {
+		view, viewErr := r.loadTaskView(result, taskID)
+		if viewErr == nil && view != nil {
+			checks := r.runTaskVerifyChecks(result, view)
+			var failed []verifyCheck
+			for _, c := range checks {
+				if !c.ok {
+					failed = append(failed, c)
+				}
+			}
+			if len(failed) > 0 {
+				fmt.Fprintln(r.stdout, "Task accept blocked — completion checks failed:")
+				fmt.Fprintln(r.stdout, "")
+				for _, c := range failed {
+					if c.note != "" {
+						fmt.Fprintf(r.stdout, "  [FAIL]  %s — %s\n", c.name, c.note)
+					} else {
+						fmt.Fprintf(r.stdout, "  [FAIL]  %s\n", c.name)
+					}
+				}
+				fmt.Fprintln(r.stdout, "")
+				fmt.Fprintln(r.stdout, "Re-run with --force to accept anyway, or wait for the agent to complete its work.")
+				return fmt.Errorf("task accept blocked: %d completion check(s) failed", len(failed))
+			}
+		}
 	}
 
 	// Walk all non-terminal steps to Completed.
@@ -1462,33 +1504,19 @@ func hasTaskCompletedEvent(logPath string) bool {
 	return strings.Contains(string(data), "task.completed")
 }
 
-// executeTaskVerify checks that a task's worktree evidence is consistent with completion:
-// commits exist on branch, state.md updated, handoff.md filled, task.completed in log.
-func (r Runner) executeTaskVerify(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("task identifier is required")
-	}
-	taskID := strings.TrimSpace(args[0])
+// verifyCheck is one completion-readiness result from runTaskVerifyChecks.
+type verifyCheck struct {
+	name string
+	ok   bool
+	note string
+}
 
-	result, err := r.app.Projects.Open(".")
-	if err != nil {
-		return err
-	}
-
-	view, err := r.loadTaskView(result, taskID)
-	if err != nil {
-		return err
-	}
-	if view == nil {
-		return fmt.Errorf("task %q not found", taskID)
-	}
-
-	type chk struct {
-		name string
-		ok   bool
-		note string
-	}
-	var checks []chk
+// runTaskVerifyChecks evaluates completion readiness for the given task view:
+// commits on branch, state.md updated, handoff.md filled, task.completed in log,
+// and any registered invariants. Returns the full list of checks (never nil for a
+// task that has a worktree; may be short for workspace agents with no branch).
+func (r Runner) runTaskVerifyChecks(result *project.OpenResult, view *taskView) []verifyCheck {
+	var checks []verifyCheck
 
 	// Check 1: commits on branch ahead of default branch.
 	if view.Worktree != nil {
@@ -1501,7 +1529,7 @@ func (r Runner) executeTaskVerify(args []string) error {
 		if !hasCommits {
 			note = fmt.Sprintf("no commits on %q ahead of %q", branch, defaultBranch)
 		}
-		checks = append(checks, chk{"commits on branch", hasCommits, note})
+		checks = append(checks, verifyCheck{"commits on branch", hasCommits, note})
 	}
 
 	// Check 2: state.md has completed work entries.
@@ -1516,7 +1544,7 @@ func (r Runner) executeTaskVerify(args []string) error {
 			stateNote = "state.md still shows 'None recorded yet'"
 		}
 	}
-	checks = append(checks, chk{"state.md updated", stateOK, stateNote})
+	checks = append(checks, verifyCheck{"state.md updated", stateOK, stateNote})
 
 	// Check 3: handoff.md is present and non-trivial.
 	handoffData, handoffErr := os.ReadFile(filepath.Join(artifactRoot, "handoff.md"))
@@ -1529,7 +1557,7 @@ func (r Runner) executeTaskVerify(args []string) error {
 			handoffNote = "handoff.md appears empty or too sparse"
 		}
 	}
-	checks = append(checks, chk{"handoff.md filled", handoffOK, handoffNote})
+	checks = append(checks, verifyCheck{"handoff.md filled", handoffOK, handoffNote})
 
 	// Check 4: task.completed event in log.md.
 	logPath := taskArtifactLogPath(result.Project.RepoPath, result.StateDir, view.Task.ID, view.Worktree)
@@ -1538,7 +1566,7 @@ func (r Runner) executeTaskVerify(args []string) error {
 	if !logOK {
 		logNote = "task.completed event not found in log.md"
 	}
-	checks = append(checks, chk{"task.completed in log", logOK, logNote})
+	checks = append(checks, verifyCheck{"task.completed in log", logOK, logNote})
 
 	// Invariant checks.
 	if view.Worktree != nil {
@@ -1569,7 +1597,7 @@ func (r Runner) executeTaskVerify(args []string) error {
 				if !found {
 					note = fmt.Sprintf("no changed file with prefix %q found on branch", val)
 				}
-				checks = append(checks, chk{"invariant: required-path=" + val, found, note})
+				checks = append(checks, verifyCheck{"invariant: required-path=" + val, found, note})
 			case "forbidden-path":
 				violated := false
 				violatingFile := ""
@@ -1585,10 +1613,36 @@ func (r Runner) executeTaskVerify(args []string) error {
 				if violated {
 					note = fmt.Sprintf("forbidden file found on branch: %q", violatingFile)
 				}
-				checks = append(checks, chk{"invariant: forbidden-path=" + val, !violated, note})
+				checks = append(checks, verifyCheck{"invariant: forbidden-path=" + val, !violated, note})
 			}
 		}
 	}
+
+	return checks
+}
+
+// executeTaskVerify checks that a task's worktree evidence is consistent with completion:
+// commits exist on branch, state.md updated, handoff.md filled, task.completed in log.
+func (r Runner) executeTaskVerify(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("task identifier is required")
+	}
+	taskID := strings.TrimSpace(args[0])
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	view, err := r.loadTaskView(result, taskID)
+	if err != nil {
+		return err
+	}
+	if view == nil {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+
+	checks := r.runTaskVerifyChecks(result, view)
 
 	allOK := true
 	fmt.Fprintln(r.stdout, "Task Verify")

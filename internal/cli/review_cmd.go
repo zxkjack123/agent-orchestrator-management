@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -15,9 +16,10 @@ import (
 )
 
 type reviewParams struct {
-	taskID     string
-	agentName  string
-	launchMode aomruntime.LaunchMode
+	taskID          string
+	agentName       string
+	launchMode      aomruntime.LaunchMode
+	allowEmptyBranch bool
 }
 
 func (r Runner) executeReview(args []string) error {
@@ -49,6 +51,8 @@ func (r Runner) executeReview(args []string) error {
 			if err := setLaunchMode(&params.launchMode, aomruntime.LaunchModeReal); err != nil {
 				return err
 			}
+		case "--allow-empty-branch":
+			params.allowEmptyBranch = true
 		default:
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
@@ -137,6 +141,27 @@ func (r Runner) executeReview(args []string) error {
 			return err
 		}
 		return nil
+	}
+
+	// Guard: block reviewer spawn if the implementation branch has no commits.
+	// Reviewing an empty branch produces misleading or empty reports and wastes
+	// the reviewer's context window. Pass --allow-empty-branch to bypass.
+	if !params.allowEmptyBranch && view.Worktree != nil {
+		branch := view.Worktree.BranchName
+		defaultBranch := result.Project.DefaultBranch
+		if defaultBranch == "" {
+			defaultBranch = "main"
+		}
+		commitsOut, commitsErr := exec.Command("git", "-C", result.Project.RepoPath,
+			"log", "--oneline", defaultBranch+".."+branch, "--").Output()
+		if commitsErr == nil && strings.TrimSpace(string(commitsOut)) == "" {
+			return fmt.Errorf(
+				"reviewer spawn blocked: branch %q has no commits ahead of %q — implementation is not ready for review.\n"+
+					"Wait for the builder to commit work, then re-run: aom review %s\n"+
+					"Pass --allow-empty-branch to bypass (e.g. reviewing a pure-documentation task)",
+				branch, defaultBranch, params.taskID,
+			)
+		}
 	}
 
 	sessionRecord, reused, err := r.resolveReviewSession(result, view.Task.ID, reviewStep.ID, reviewerAgent, params.launchMode)

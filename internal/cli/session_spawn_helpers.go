@@ -196,6 +196,17 @@ func (r Runner) materializeAgentContext(result *project.OpenResult, agentRecord 
 			}
 		}
 
+		// Inject repo layout if the operator has generated one (aom project layout).
+		// Copied into .agent/shared/repo-layout.md so agents can read it without
+		// needing access to the .aom/ operator directory.
+		layoutSrc := filepath.Join(result.Project.RepoPath, ".aom", "shared", "repo-layout.md")
+		if layoutData, readErr := os.ReadFile(layoutSrc); readErr == nil {
+			agentSharedDir := filepath.Join(worktreePath, ".agent", "shared")
+			if mkErr := os.MkdirAll(agentSharedDir, 0o755); mkErr == nil {
+				_ = os.WriteFile(filepath.Join(agentSharedDir, "repo-layout.md"), layoutData, 0o644)
+			}
+		}
+
 		// Write standalone .agent/team-roster.md so the agent can refresh
 		// their team view at any point during work with `aom team roster`.
 		r.writeTeamRosterArtifact(result, agentRecord, worktreePath)

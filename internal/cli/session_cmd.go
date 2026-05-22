@@ -54,6 +54,8 @@ func (r Runner) executeSessionSpawn(args []string) error {
 			}
 		case "--fresh":
 			params.freshStart = true
+		case "--allow-collision":
+			params.allowCollision = true
 		default:
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
@@ -83,24 +85,27 @@ func (r Runner) executeSessionSpawn(args []string) error {
 		}
 	}
 
-	// G1: Same-runtime workspace guard.
+	// G1: Same-runtime workspace collision guard.
 	// If this agent has no dedicated workspace AND another enabled agent with the
 	// same runtime exists (also without a workspace), both would write their
 	// identity files (CLAUDE.md / AGENTS.md) to the repo root — overwriting each
-	// other.  Warn the operator and recommend provisioning.
-	if strings.TrimSpace(agentRecord.WorkspacePath) == "" {
+	// other.  Block spawn and require the operator to provision workspaces first.
+	// Pass --allow-collision to bypass (e.g. for legacy setups or debugging).
+	if !params.allowCollision && strings.TrimSpace(agentRecord.WorkspacePath) == "" {
 		for _, other := range result.Agents {
 			if other.Name != agentRecord.Name &&
 				other.Runtime == agentRecord.Runtime &&
 				other.Enabled &&
 				strings.TrimSpace(other.WorkspacePath) == "" {
-				fmt.Fprintf(r.stdout, "Warning: agent %q and %q both use runtime=%q but neither has a dedicated workspace.\n",
-					agentRecord.Name, other.Name, agentRecord.Runtime)
-				fmt.Fprintln(r.stdout, "         Without per-agent workspaces, both agents write CLAUDE.md/AGENTS.md to the")
-				fmt.Fprintln(r.stdout, "         repo root and will overwrite each other's identity files.")
-				fmt.Fprintf(r.stdout, "         Fix: aom agent provision %s && aom agent provision %s\n", agentRecord.Name, other.Name)
-				fmt.Fprintln(r.stdout, "")
-				break
+				return fmt.Errorf(
+					"workspace collision: agent %q and %q both use runtime=%q but neither has a dedicated workspace.\n"+
+						"Without per-agent workspaces both agents write CLAUDE.md/AGENTS.md to the repo root\n"+
+						"and will overwrite each other's identity files.\n"+
+						"Fix: aom agent provision %s && aom agent provision %s\n"+
+						"     (or pass --allow-collision to bypass this check)",
+					agentRecord.Name, other.Name, agentRecord.Runtime,
+					agentRecord.Name, other.Name,
+				)
 			}
 		}
 	}
@@ -587,6 +592,7 @@ type sessionSpawnParams struct {
 	ignoreSessionID string
 	launchMode      aomruntime.LaunchMode
 	freshStart      bool
+	allowCollision  bool
 }
 
 type sessionReplaceParams struct {
