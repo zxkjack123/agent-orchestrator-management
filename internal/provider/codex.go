@@ -92,13 +92,26 @@ func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (
 	//       files.  GIT_OPTIONAL_LOCKS=0 partially mitigates this but cannot
 	//       reach git processes inside bwrap's mount namespace.
 	//
-	//   --dangerously-bypass-approvals-and-sandbox (spec.BypassSandbox=true)
+	//   --dangerously-bypass-approvals-and-sandbox
 	//       Skips bwrap entirely — no namespace isolation, no lock-file spinning.
 	//       Safe when AOM itself is the external control boundary (it is).
-	//       Required on WSL2 to prevent CPU fan-out from bwrap overlay.
-	//       Enable via policy.yaml:  codex_bypass_sandbox: true
+	//       Triggered automatically on WSL2 (detected via /proc/version) so
+	//       operators do not need to add codex_bypass_sandbox: true to every
+	//       project's policy.yaml. Also triggered by spec.BypassSandbox=true
+	//       (policy.yaml: codex_bypass_sandbox: true) for non-WSL2 environments
+	//       that still want to skip bwrap.
+	bypassSandbox := spec.BypassSandbox
+	if !bypassSandbox {
+		// Auto-detect WSL2: read /proc/version and check for "microsoft" or "wsl".
+		// On WSL2, bwrap overlay causes git to spin at 60–100% CPU — bypass is
+		// always the right choice; AOM is the external security boundary.
+		if data, err := os.ReadFile("/proc/version"); err == nil {
+			lower := strings.ToLower(string(data))
+			bypassSandbox = strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
+		}
+	}
 	sandboxFlag := "--sandbox danger-full-access -a never"
-	if spec.BypassSandbox {
+	if bypassSandbox {
 		sandboxFlag = "--dangerously-bypass-approvals-and-sandbox"
 	}
 

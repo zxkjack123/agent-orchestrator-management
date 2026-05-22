@@ -348,29 +348,23 @@ func (r Runner) executeDoctor(args []string) error {
 			}
 
 			// ── Codex: WSL2 bwrap bypass ──────────────────────────────────────────
-			// On WSL2, codex bundles its own bwrap (bubblewrap) binary and runs ALL
-			// subprocesses through it — even with --sandbox danger-full-access.
-			// The bwrap overlay filesystem causes git to spin at 60–100% CPU on every
-			// file-lock operation. The only fix is --dangerously-bypass-approvals-and-sandbox,
-			// enabled via policy.yaml: codex_bypass_sandbox: true.
+			// AOM auto-detects WSL2 at codex launch time (provider reads /proc/version)
+			// and applies --dangerously-bypass-approvals-and-sandbox automatically.
+			// No policy.yaml entry is required. codex_bypass_sandbox: true is still
+			// honoured for non-WSL2 environments that also want to skip bwrap.
 			procVersion, pvErr := os.ReadFile("/proc/version")
 			isWSL2 := pvErr == nil && (strings.Contains(strings.ToLower(string(procVersion)), "microsoft") ||
 				strings.Contains(strings.ToLower(string(procVersion)), "wsl"))
 			if isWSL2 {
-				hasBypass := cfg.Policy.Policy.CodexBypassSandbox
-				if !hasBypass {
-					results = append(results, doctorResult{
-						label:   "codex: wsl2 bypass",
-						detail:  "WSL2 detected — codex bwrap sandbox causes git to spin at 100% CPU; fix: add 'codex_bypass_sandbox: true' under 'policy:' in .aom/policy.yaml",
-						warning: true,
-					})
-				} else {
-					results = append(results, doctorResult{
-						label:  "codex: wsl2 bypass",
-						detail: "codex_bypass_sandbox enabled — bwrap disabled, git will not spin on WSL2",
-						ok:     true,
-					})
+				detail := "WSL2 detected — bwrap bypass applied automatically (no policy.yaml change needed)"
+				if cfg.Policy.Policy.CodexBypassSandbox {
+					detail = "WSL2 detected — bwrap bypass applied automatically (also set explicitly in policy.yaml)"
 				}
+				results = append(results, doctorResult{
+					label:  "codex: wsl2 bypass",
+					detail: detail,
+					ok:     true,
+				})
 			}
 		}
 	}

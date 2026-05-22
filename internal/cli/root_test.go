@@ -606,9 +606,13 @@ func TestExecuteSessionSpawnWithRealRuntime(t *testing.T) {
 	if len(splitCommands) != 1 {
 		t.Fatalf("len(splitCommands) = %d, want 1", len(splitCommands))
 	}
-	// NiceExecPrefix prepends "exec nice -n 10 " before the binary name.
-	if !strings.Contains(splitCommands[0], "exec nice -n 10 codex --sandbox workspace-write -a never") {
-		t.Fatalf("split command = %q, want codex exec launch with nice prefix", splitCommands[0])
+	// Codex uses nice -n 19 and danger-full-access sandbox by default.
+	// On WSL2 the provider auto-applies --dangerously-bypass-approvals-and-sandbox
+	// instead, so accept either flag when running inside WSL2.
+	wantCodexSandbox := "exec nice -n 19 codex --sandbox danger-full-access -a never"
+	wantCodexBypass := "exec nice -n 19 codex --dangerously-bypass-approvals-and-sandbox"
+	if !strings.Contains(splitCommands[0], wantCodexSandbox) && !strings.Contains(splitCommands[0], wantCodexBypass) {
+		t.Fatalf("split command = %q, want codex exec launch with nice -n 19 and sandbox/bypass flag", splitCommands[0])
 	}
 }
 
@@ -3541,9 +3545,13 @@ func TestExecuteSessionReplaceWithRealRuntimeUsesCodexLaunchCommand(t *testing.T
 	if splitCount != 2 {
 		t.Fatalf("splitCount = %d, want 2 pane launches", splitCount)
 	}
-	// NiceExecPrefix prepends "exec nice -n 10 " before the binary name.
-	if !strings.Contains(splitCommands[len(splitCommands)-1], "exec nice -n 10 codex --sandbox workspace-write -a never") {
-		t.Fatalf("replacement split command = %q, want codex exec launch with nice prefix", splitCommands[len(splitCommands)-1])
+	// Codex uses nice -n 19 and danger-full-access sandbox by default.
+	// On WSL2 the provider auto-applies --dangerously-bypass-approvals-and-sandbox.
+	lastCmd := splitCommands[len(splitCommands)-1]
+	wantReplSandbox := "exec nice -n 19 codex --sandbox danger-full-access -a never"
+	wantReplBypass := "exec nice -n 19 codex --dangerously-bypass-approvals-and-sandbox"
+	if !strings.Contains(lastCmd, wantReplSandbox) && !strings.Contains(lastCmd, wantReplBypass) {
+		t.Fatalf("replacement split command = %q, want codex exec launch with nice -n 19 and sandbox/bypass flag", lastCmd)
 	}
 }
 

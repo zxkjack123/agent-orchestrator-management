@@ -2,11 +2,24 @@ package runtime
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
 )
+
+// testIsWSL2 returns true when the test is running inside a WSL2 kernel.
+// On WSL2, the codex provider auto-applies --dangerously-bypass-approvals-and-sandbox
+// so tests that expect --sandbox danger-full-access must adjust their assertions.
+func testIsWSL2() bool {
+	data, err := os.ReadFile("/proc/version")
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(string(data))
+	return strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl")
+}
 
 func TestBuilderBuildReturnsPlaceholderCommand(t *testing.T) {
 	builder := NewBuilderWithLookPath(func(string) (string, error) { return "", nil })
@@ -54,8 +67,15 @@ func TestBuilderBuildReturnsRealCodexCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	if !strings.Contains(command, "exec nice -n 19 codex --sandbox danger-full-access -a never") {
-		t.Fatalf("command = %q, want codex exec command with danger-full-access", command)
+	if testIsWSL2() {
+		// WSL2: auto-bypass kicks in; danger-full-access is never used.
+		if !strings.Contains(command, "--dangerously-bypass-approvals-and-sandbox") {
+			t.Fatalf("WSL2: command = %q, want --dangerously-bypass-approvals-and-sandbox", command)
+		}
+	} else {
+		if !strings.Contains(command, "exec nice -n 19 codex --sandbox danger-full-access -a never") {
+			t.Fatalf("command = %q, want codex exec command with danger-full-access", command)
+		}
 	}
 }
 
@@ -159,12 +179,17 @@ func TestBuilderBuildFreshStartWhenNoAgentSessionID(t *testing.T) {
 		return "/usr/bin/" + name, nil
 	})
 
+	// codexWant differs on WSL2: auto-bypass replaces danger-full-access.
+	codexWant := "exec nice -n 19 codex --sandbox danger-full-access -a never"
+	if testIsWSL2() {
+		codexWant = "exec nice -n 19 codex --dangerously-bypass-approvals-and-sandbox"
+	}
 	for _, tc := range []struct {
 		runtime     string
 		wantContain string
 	}{
 		{"claude", "exec nice -n 10 claude --dangerously-skip-permissions"},
-		{"codex", "exec nice -n 19 codex --sandbox danger-full-access -a never"},
+		{"codex", codexWant},
 	} {
 		command, err := builder.Build(SessionSpec{Runtime: tc.runtime}, LaunchModeReal)
 		if err != nil {
