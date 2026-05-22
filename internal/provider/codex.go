@@ -206,8 +206,20 @@ func buildCodexWrapperPreamble(sessionID string, denyCommands []string) []string
 						e2.subArg, e.baseCmd, e2.subArg),
 				)
 			}
-			// Pass-through line: strip our wrapper binDir from PATH to avoid infinite recursion.
-			passThroughLine := fmt.Sprintf(`exec env \"PATH=\${PATH#%s:}\" %s \"\$@\"`, binDir, e.baseCmd)
+			// Pass-through line: remove our wrapper binDir from PATH to avoid infinite recursion.
+			//
+			// Bug: ${PATH#prefix} only removes the prefix when PATH *starts* with it.
+			// Inside bwrap (--sandbox workspace-write / danger-full-access), codex-linux-sandbox
+			// prepends .codex/tmp/arg0/... and vendor/codex-path entries BEFORE the AOM policy
+			// dir, so ${PATH#binDir:} never matches → the wrapper re-execs itself indefinitely
+			// at 100% CPU.
+			//
+			// Fix: use sed to remove the policy dir from anywhere in PATH — handles the case
+			// where it appears in the middle or end of PATH (|s| delimiter avoids escaping the
+			// / characters in the path).  Two patterns cover:
+			//   s|binDir:||g  — removes when followed by a colon (start or middle)
+			//   s|:binDir||g  — removes when preceded by a colon (end of PATH)
+			passThroughLine := fmt.Sprintf(`exec env \"PATH=\$(echo \"\$PATH\" | sed 's|%s:||g;s|:%s||g')\" %s \"\$@\"`, binDir, binDir, e.baseCmd)
 
 			body := strings.Join(checkLines, `\n`) + `\n` + passThroughLine
 
