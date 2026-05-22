@@ -28,6 +28,9 @@ type SessionSpec struct {
 	DenyCommands   []string // commands to block at runtime (claude --disallowed-tools only)
 	ProjectBin     string   // absolute path to the aom binary; prepended to PATH for all providers
 	Model          string   // optional; empty means use the CLI's default model
+	// BypassSandbox passes through to provider.LaunchSpec.BypassSandbox.
+	// Set when the project policy has codex_bypass_sandbox: true.
+	BypassSandbox bool
 }
 
 // LookPathFunc resolves a runtime binary path.
@@ -92,6 +95,7 @@ func (b *Builder) realRuntimeShellCommand(spec SessionSpec) (string, error) {
 		AgentSessionID: spec.AgentSessionID,
 		DenyCommands:   spec.DenyCommands,
 		Model:          spec.Model,
+		BypassSandbox:  spec.BypassSandbox,
 	}, b.lookPath)
 	if err != nil {
 		return "", err

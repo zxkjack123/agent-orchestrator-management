@@ -82,11 +82,31 @@ func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (
 	// terminate the outer quoted string. The values here contain no special
 	// characters, so no quoting is needed at all.
 	const codexRuntimeFlags = " -c agents.max_threads=1 -c background_terminal_max_timeout=60000 -c agents.job_max_runtime_seconds=120"
+
+	// sandboxFlag selects between two codex sandbox modes:
+	//
+	//   --sandbox danger-full-access (default)
+	//       Runs all subprocesses through codex-linux-sandbox → bwrap.
+	//       Provides namespace isolation but on WSL2 the bwrap overlay causes
+	//       git to spin at 60–100% CPU in a tight retry loop for optional lock
+	//       files.  GIT_OPTIONAL_LOCKS=0 partially mitigates this but cannot
+	//       reach git processes inside bwrap's mount namespace.
+	//
+	//   --dangerously-bypass-approvals-and-sandbox (spec.BypassSandbox=true)
+	//       Skips bwrap entirely — no namespace isolation, no lock-file spinning.
+	//       Safe when AOM itself is the external control boundary (it is).
+	//       Required on WSL2 to prevent CPU fan-out from bwrap overlay.
+	//       Enable via policy.yaml:  codex_bypass_sandbox: true
+	sandboxFlag := "--sandbox danger-full-access -a never"
+	if spec.BypassSandbox {
+		sandboxFlag = "--dangerously-bypass-approvals-and-sandbox"
+	}
+
 	var execCmd string
 	if spec.AgentSessionID != "" {
-		execCmd = fmt.Sprintf(codexNiceExecPrefix+"codex resume %s --sandbox danger-full-access -a never"+codexRuntimeFlags, spec.AgentSessionID)
+		execCmd = fmt.Sprintf(codexNiceExecPrefix+"codex resume %s %s"+codexRuntimeFlags, spec.AgentSessionID, sandboxFlag)
 	} else {
-		execCmd = codexNiceExecPrefix + "codex --sandbox danger-full-access -a never" + codexRuntimeFlags
+		execCmd = codexNiceExecPrefix + "codex " + sandboxFlag + codexRuntimeFlags
 	}
 	if spec.Model != "" {
 		execCmd += " -m " + spec.Model

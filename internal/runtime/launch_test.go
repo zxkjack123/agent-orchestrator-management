@@ -279,6 +279,46 @@ func TestBuilderBuildCodexWrapsDenyCommands(t *testing.T) {
 	}
 }
 
+func TestBuilderBuildCodexBypassSandbox(t *testing.T) {
+	builder := NewBuilderWithLookPath(func(name string) (string, error) {
+		if name == "codex" {
+			return "/usr/bin/codex", nil
+		}
+		return "", fmt.Errorf("unexpected lookup %q", name)
+	})
+
+	// Fresh start with BypassSandbox=true must use --dangerously-bypass-approvals-and-sandbox.
+	freshCmd, err := builder.Build(SessionSpec{
+		Runtime:       "codex",
+		BypassSandbox: true,
+	}, LaunchModeReal)
+	if err != nil {
+		t.Fatalf("Build (fresh) failed: %v", err)
+	}
+	if !strings.Contains(freshCmd, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("fresh command = %q, want --dangerously-bypass-approvals-and-sandbox", freshCmd)
+	}
+	if strings.Contains(freshCmd, "--sandbox") {
+		t.Fatalf("fresh command = %q, must not contain --sandbox when BypassSandbox=true", freshCmd)
+	}
+
+	// Resume with BypassSandbox=true.
+	resumeCmd, err := builder.Build(SessionSpec{
+		Runtime:        "codex",
+		AgentSessionID: "sess-bypass-001",
+		BypassSandbox:  true,
+	}, LaunchModeReal)
+	if err != nil {
+		t.Fatalf("Build (resume) failed: %v", err)
+	}
+	if !strings.Contains(resumeCmd, "codex resume sess-bypass-001 --dangerously-bypass-approvals-and-sandbox") {
+		t.Fatalf("resume command = %q, want codex resume ... --dangerously-bypass-approvals-and-sandbox", resumeCmd)
+	}
+	if strings.Contains(resumeCmd, "--sandbox") {
+		t.Fatalf("resume command = %q, must not contain --sandbox when BypassSandbox=true", resumeCmd)
+	}
+}
+
 func TestNewBuilderWithRegistryUsesCustomRegistry(t *testing.T) {
 	// A custom provider that returns a sentinel exec command with no preamble.
 	customProvider := &testProvider{name: "custom", execCmd: "exec custom-agent"}

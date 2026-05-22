@@ -15,6 +15,12 @@ type LaunchSpec struct {
 	AgentSessionID string
 	DenyCommands   []string
 	Model          string // optional; empty means use the CLI's default model
+	// BypassSandbox instructs a provider to skip its internal sandbox layer.
+	// For codex this replaces --sandbox danger-full-access with
+	// --dangerously-bypass-approvals-and-sandbox, which prevents bwrap from
+	// being invoked.  Required on WSL2 where bwrap overlay causes git to spin
+	// at 60–100% CPU indefinitely.  Set via policy.yaml codex_bypass_sandbox: true.
+	BypassSandbox bool
 }
 
 // NiceExecPrefix is the standard exec prefix for all agent runtimes.

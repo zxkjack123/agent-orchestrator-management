@@ -136,6 +136,13 @@ type PolicyConfig struct {
 	RequireApproval []string              `yaml:"require_approval"`
 	SessionDefaults SessionDefaultsConfig `yaml:"session_defaults"`
 	OwnerExceptions OwnerExceptionsConfig `yaml:"owner_exceptions"`
+	// CodexBypassSandbox replaces --sandbox danger-full-access with
+	// --dangerously-bypass-approvals-and-sandbox in codex launch commands.
+	// Required on WSL2 where bubblewrap (bwrap), bundled inside codex, causes
+	// git subprocesses to spin at 60–100% CPU on every file operation.
+	// Safe to enable when AOM itself provides the external control boundary.
+	// Set via policy.yaml:  codex_bypass_sandbox: true
+	CodexBypassSandbox bool `yaml:"codex_bypass_sandbox"`
 }
 
 // SessionDefaultsConfig defines session-scoped defaults.

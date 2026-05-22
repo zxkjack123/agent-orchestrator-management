@@ -166,12 +166,13 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 	}
 
 	if _, err := newLaunchBuilder().Build(aomruntime.SessionSpec{
-		SessionID:    "",
-		AgentName:    agentRecord.Name,
-		RoleName:     agentRecord.Role,
-		Runtime:      agentRecord.Runtime,
-		DenyCommands: result.Policy.Policy.DenyCommands,
-		Model:        agentRecord.Model,
+		SessionID:     "",
+		AgentName:     agentRecord.Name,
+		RoleName:      agentRecord.Role,
+		Runtime:       agentRecord.Runtime,
+		DenyCommands:  result.Policy.Policy.DenyCommands,
+		Model:         agentRecord.Model,
+		BypassSandbox: result.Policy.Policy.CodexBypassSandbox,
 	}, params.launchMode); err != nil {
 		return nil, err
 	}
@@ -271,6 +272,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		DenyCommands:   result.Policy.Policy.DenyCommands,
 		ProjectBin:     selfBin,
 		Model:          agentRecord.Model,
+		BypassSandbox:  result.Policy.Policy.CodexBypassSandbox,
 	}, params.launchMode)
 	if err != nil {
 		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "session launch validation failed before session became interactive", err)
@@ -1276,6 +1278,7 @@ func (r Runner) resumeSessionNative(result *project.OpenResult, record *session.
 		DenyCommands:   result.Policy.Policy.DenyCommands,
 		ProjectBin:     selfBin,
 		Model:          record.Model,
+		BypassSandbox:  result.Policy.Policy.CodexBypassSandbox,
 	}, aomruntime.LaunchModeReal)
 	if err != nil {
 		return fmt.Errorf("build resume launch command: %w", err)
