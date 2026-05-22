@@ -1214,7 +1214,7 @@ this but cannot reach git processes inside bwrap's mount namespace.
   `background_terminal_max_timeout = 60000`; global safety net — kills stuck background terminals within 60 s
   (codex default is 1 hour = 3 600 000 ms); must be placed at the **top level** of `config.toml`, not under `[agents]`
 
-#### Step 2 — Root fix: `codex_bypass_sandbox: true` policy option
+#### Step 2 — Root fix: `codex_bypass_sandbox: true` policy option + WSL2 auto-detect
 
 - **New policy field**: `CodexBypassSandbox bool \`yaml:"codex_bypass_sandbox"\`` added to `PolicyConfig` in `internal/config/config.go`
 - Propagation chain: `PolicyConfig.CodexBypassSandbox → SessionSpec.BypassSandbox → LaunchSpec.BypassSandbox → codex provider`
@@ -1224,14 +1224,12 @@ this but cannot reach git processes inside bwrap's mount namespace.
 - Fresh start: `exec nice -n 19 codex --dangerously-bypass-approvals-and-sandbox <flags>`
 - Resume: `exec nice -n 19 codex resume <id> --dangerously-bypass-approvals-and-sandbox <flags>`
 - Safe on WSL2: AOM is the external control boundary; deny_commands are enforced via wrapper scripts
-- Enable via `.aom/policy.yaml`:
-  ```yaml
-  policy:
-    codex_bypass_sandbox: true
-  ```
-- `aom doctor` adds a **`codex: wsl2 bypass`** check: detects WSL2 via `/proc/version` (case-insensitive
-  "microsoft" or "wsl" string match); warns with fix command when `codex_bypass_sandbox` is not set;
-  shows `[PASS]` with confirmation message when enabled
+- **WSL2 auto-detect (2026-05-22)**: bypass is now applied automatically on WSL2 — no `policy.yaml` entry needed.
+  `internal/provider/codex.go` reads `/proc/version` and checks for "microsoft" or "wsl" (case-insensitive);
+  `spec.BypassSandbox` (from policy) is ORed with the auto-detect result. macOS/Windows/Linux-native are unaffected
+  (`/proc/version` doesn't exist → `os.ReadFile` fails → `bypassSandbox` stays false).
+- `aom doctor` **`codex: wsl2 bypass`** check: shows `[PASS]` with auto-detect message on WSL2
+  (with or without the explicit policy field); shows nothing on non-WSL2 platforms.
 
 #### Step 3 — Deny-command wrapper infinite loop on bwrap PATH
 
@@ -1240,13 +1238,30 @@ this but cannot reach git processes inside bwrap's mount namespace.
   Inside bwrap, `codex-linux-sandbox` prepends `.codex/tmp/arg0/...` and `vendor/codex-path` entries **before**
   the AOM policy dir — `${PATH#binDir:}` only strips when PATH *starts* with `binDir:`, so it never matched
   → wrapper exec'd itself recursively at 100% CPU until the session was killed.
-- **Fix**: `passThroughLine` now uses sed:
+- **Fix**: `passThroughLine` now uses sed with **double-quoted** sed expression:
   ```sh
-  exec env "PATH=$(echo "$PATH" | sed 's|/tmp/aom-policy-SESS/bin:||g;s|:/tmp/aom-policy-SESS/bin||g')" git "$@"
+  exec env "PATH=$(echo "$PATH" | sed "s|/tmp/aom-policy-SESS/bin:||g;s|:/tmp/aom-policy-SESS/bin||g")" git "$@"
   ```
   Two patterns cover all positions: `binDir:` (start/middle) and `:binDir` (end of PATH).
 - The fix applies to all smart wrappers regardless of whether `codex_bypass_sandbox` is set, so deny_commands work
   correctly even when bwrap is active.
+
+#### Step 4 — Single-quote bug: `sh -lc` pane closes immediately when deny_commands active (2026-05-22)
+
+- **Root cause**: `passThroughLine` in `buildCodexWrapperPreamble` used `sed 's|binDir:||g'` with **single quotes**.
+  The entire preamble is assembled by `assembleLoginShellCommand` into `sh -lc '...'` (single-quoted outer wrapper).
+  Any `'` inside the inner content prematurely terminates the outer string → `sh` gets a syntax error → exits
+  immediately → tmux pane closes → AOM reports "pane closed immediately after spawn".
+  **Symptom**: `aom session spawn` always fails with the "closed immediately" error when the project
+  `policy.yaml` has any `deny_commands` (the default templates include `rm -rf` and `git push --force`).
+- **Fix**: changed sed expression from `'s|...|g'` to `\"s|...|g\"` (escaped double quotes). The shell strips
+  the quotes before passing the argument to sed; the result is identical — sed receives `s|...|g` either way.
+  No single quotes anywhere in any preamble statement is now the enforced invariant.
+- **Also fixed**: version.json `printf` format changed from `\x7b\x22...\x7d` (hex escapes) to
+  `{\"dismissed_version\":\"9999.0.0\"}` — hex escapes are not supported by POSIX `dash` (the default
+  `/bin/sh` on Ubuntu/Debian/WSL2); `\"` is the correct POSIX approach.
+- **New invariant test**: `TestBuilderBuildCodexWrapsDenyCommands` now verifies that no single quotes
+  appear in the inner content of the assembled `sh -lc '...'` command.
 
 #### New test coverage
 
@@ -1254,7 +1269,9 @@ this but cannot reach git processes inside bwrap's mount namespace.
   - Verifies fresh start with `BypassSandbox: true` contains `--dangerously-bypass-approvals-and-sandbox` and does not contain `--sandbox`
   - Verifies resume with `BypassSandbox: true` produces `codex resume <id> --dangerously-bypass-approvals-and-sandbox`
   - Verifies default (no bypass) still produces `--sandbox danger-full-access`
-  - All 14 launch tests pass
+- `TestBuilderBuildCodexWrapsDenyCommands` enhanced with single-quote invariant check
+- `TestBuilderBuildResumesCodexSession` updated: expects POSIX-compatible printf format, WSL2-conditional sandbox flag
+- All 13 launch tests pass
 
 ---
 

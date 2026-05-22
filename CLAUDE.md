@@ -127,6 +127,7 @@ Defined in full in `docs/state-machine.md`. Summary:
 | E2E feedback rounds 8–11 — codex background terminal cleanup, profile trim, auto-stop | Complete |
 | Per-Agent Workspace (Free-Roam) — A1–A8 + guards G1/G2/G3 + resume fix + task.md fix | Complete |
 | WSL2 bwrap bypass + wrapper loop fix — codex E2E hardening (2026-05-22) | Complete |
+| Single-quote `sh -lc` pane crash fix — deny_commands spawn failure (2026-05-22) | Complete |
 
 **Immediate next work** (see `docs/dev/current-status.md` for full detail):
 
@@ -158,7 +159,9 @@ Defined in full in `docs/state-machine.md`. Summary:
 - `task.md` workspace-agent fix: `SyncParams.AgentWorkspacePath` added; `renderTaskMarkdown` uses 3-way logic — workspace agent gets **absolute** `Artifact Root` path + workspace note; traditional worktree gets relative path + CWD note; unprovisioned gets "not provisioned yet"
 - Runtime test fix: 5 assertions in `internal/runtime/launch_test.go` updated to include `NiceExecPrefix` (`exec nice -n 10`) and `npm_config_cache` that had been added without corresponding test updates
 - WSL2 bwrap root-cause fix: `codex_bypass_sandbox: true` in `policy.yaml` switches codex from `--sandbox danger-full-access` to `--dangerously-bypass-approvals-and-sandbox`, skipping bwrap entirely and preventing git CPU spin on WSL2; `GIT_OPTIONAL_LOCKS=0` + `GIT_TERMINAL_PROMPT=0` preamble env vars as partial mitigation; `aom doctor` adds WSL2 bypass check (`/proc/version` detection) and `codex: bg terminal timeout` check
-- WSL2 deny-command wrapper loop fix: smart wrappers in `buildCodexWrapperPreamble` replaced `${PATH#binDir:}` (only strips prefix) with `sed 's|binDir:||g;s|:binDir||g'` — removes the AOM policy dir from any PATH position, preventing infinite self-exec inside bwrap where codex-linux-sandbox prepends its own entries before the policy dir
+- WSL2 auto-detect: `internal/provider/codex.go` now reads `/proc/version` automatically; bypass is applied on WSL2 without any `policy.yaml` change; `aom doctor` shows `[PASS] codex: wsl2 bypass WSL2 detected — applied automatically`; macOS/Windows unaffected
+- WSL2 deny-command wrapper loop fix: smart wrappers in `buildCodexWrapperPreamble` replaced `${PATH#binDir:}` (only strips prefix) with `sed "s|binDir:||g;s|:binDir||g"` — removes the AOM policy dir from any PATH position, preventing infinite self-exec inside bwrap where codex-linux-sandbox prepends its own entries before the policy dir
+- Single-quote `sh -lc` pane crash fix: `buildCodexWrapperPreamble` `passThroughLine` was using `sed 's|...|'` (single quotes) which terminated the outer `sh -lc '...'` wrapper, causing sh syntax error → immediate pane exit whenever `deny_commands` were configured (all default projects); fixed by using `\"s|...|g\"` (escaped double quotes); also fixed `printf` hex escapes (`\x7b`) → POSIX-compatible `\"` escapes; new invariant test in `TestBuilderBuildCodexWrapsDenyCommands`
 
 ---
 

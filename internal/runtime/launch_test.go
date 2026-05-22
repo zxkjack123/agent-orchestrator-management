@@ -168,7 +168,13 @@ func TestBuilderBuildResumesCodexSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
-	want := "sh -lc 'export AOM_RUNTIME=codex; export PYTHONDONTWRITEBYTECODE=1; export npm_config_cache=\"/tmp/aom-npm-cache-$(id -u)\"; export GIT_OPTIONAL_LOCKS=0; export GIT_TERMINAL_PROMPT=0; [ -f \"$HOME/.codex/version.json\" ] || { mkdir -p \"$HOME/.codex\" && printf \"\\x7b\\x22dismissed_version\\x22:\\x229999.0.0\\x22\\x7d\\n\" > \"$HOME/.codex/version.json\"; }; exec nice -n 19 codex resume sess-xyz-789 --sandbox danger-full-access -a never -c agents.max_threads=1 -c background_terminal_max_timeout=60000 -c agents.job_max_runtime_seconds=120'"
+	// The sandbox flag differs on WSL2 (auto-bypass) vs non-WSL2 (danger-full-access).
+	// The printf format now uses POSIX-compatible \" escapes (not \xNN hex) so dash can execute it.
+	sandboxSuffix := "--sandbox danger-full-access -a never"
+	if testIsWSL2() {
+		sandboxSuffix = "--dangerously-bypass-approvals-and-sandbox"
+	}
+	want := "sh -lc 'export AOM_RUNTIME=codex; export PYTHONDONTWRITEBYTECODE=1; export npm_config_cache=\"/tmp/aom-npm-cache-$(id -u)\"; export GIT_OPTIONAL_LOCKS=0; export GIT_TERMINAL_PROMPT=0; [ -f \"$HOME/.codex/version.json\" ] || { mkdir -p \"$HOME/.codex\" && printf \"{\\\"dismissed_version\\\":\\\"9999.0.0\\\"}\\n\" > \"$HOME/.codex/version.json\"; }; exec nice -n 19 codex resume sess-xyz-789 " + sandboxSuffix + " -c agents.max_threads=1 -c background_terminal_max_timeout=60000 -c agents.job_max_runtime_seconds=120'"
 	if command != want {
 		t.Fatalf("command = %q, want %q", command, want)
 	}
@@ -277,6 +283,15 @@ func TestBuilderBuildCodexWrapsDenyCommands(t *testing.T) {
 	// Smart wrapper uses pass-through via PATH stripping.
 	if !strings.Contains(command, "PATH") || !strings.Contains(command, "exec env") {
 		t.Fatalf("command = %q, want git smart wrapper to contain pass-through logic (PATH/exec env)", command)
+	}
+	// Smart wrapper must use double-quoted sed (\"s|...|g\"), NOT single-quoted sed ('s|...|').
+	// The entire preamble is embedded inside sh -lc '...' by assembleLoginShellCommand; a
+	// literal single quote anywhere in the inner content terminates the outer quoted string,
+	// causing sh to exit immediately with a syntax error and the tmux pane to close.
+	inner := strings.TrimPrefix(command, "sh -lc '")
+	inner = strings.TrimSuffix(inner, "'")
+	if strings.Contains(inner, "'") {
+		t.Fatalf("command inner content contains single quote (breaks sh -lc '...' outer wrapper):\ncommand = %q", command)
 	}
 
 	// Duplicate base commands: rm -rf and rm /tmp produce ONE wrapper that handles both subargs.

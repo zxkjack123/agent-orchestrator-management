@@ -36,12 +36,12 @@ func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (
 		// (which would cause git to hang indefinitely in a non-interactive sandbox).
 		"export GIT_OPTIONAL_LOCKS=0",
 		"export GIT_TERMINAL_PROMPT=0",
-		// IMPORTANT: printf format must use hex escapes for { " } — no single quotes allowed here.
-		// This preamble is assembled inside sh -lc '...' by assembleLoginShellCommand; any single
-		// quote inside the preamble would prematurely close the outer quoted string, truncating the
-		// script and preventing the exec codex line from ever being reached.
-		// \x7b={  \x22="  \x7d=}
-		`[ -f "$HOME/.codex/version.json" ] || { mkdir -p "$HOME/.codex" && printf "\x7b\x22dismissed_version\x22:\x229999.0.0\x22\x7d\n" > "$HOME/.codex/version.json"; }`,
+		// IMPORTANT: this preamble is assembled inside sh -lc '...' by assembleLoginShellCommand.
+		// Rules: NO single quotes anywhere (they would prematurely close the outer wrapper);
+		// use \" for literal double-quotes inside printf "..." format strings;
+		// use only POSIX backslash escapes (\n, \\, \") — avoid \xNN hex escapes (not supported
+		// by dash, the default /bin/sh on Ubuntu/Debian/WSL2).
+		`[ -f "$HOME/.codex/version.json" ] || { mkdir -p "$HOME/.codex" && printf "{\"dismissed_version\":\"9999.0.0\"}\n" > "$HOME/.codex/version.json"; }`,
 	}
 	if len(spec.DenyCommands) > 0 {
 		preamble = append(preamble, buildCodexWrapperPreamble(spec.SessionID, spec.DenyCommands)...)
@@ -221,18 +221,23 @@ func buildCodexWrapperPreamble(sessionID string, denyCommands []string) []string
 			}
 			// Pass-through line: remove our wrapper binDir from PATH to avoid infinite recursion.
 			//
-			// Bug: ${PATH#prefix} only removes the prefix when PATH *starts* with it.
+			// Bug (original): ${PATH#prefix} only removes the prefix when PATH *starts* with it.
 			// Inside bwrap (--sandbox workspace-write / danger-full-access), codex-linux-sandbox
 			// prepends .codex/tmp/arg0/... and vendor/codex-path entries BEFORE the AOM policy
 			// dir, so ${PATH#binDir:} never matches → the wrapper re-execs itself indefinitely
 			// at 100% CPU.
 			//
-			// Fix: use sed to remove the policy dir from anywhere in PATH — handles the case
-			// where it appears in the middle or end of PATH (|s| delimiter avoids escaping the
-			// / characters in the path).  Two patterns cover:
+			// Fix (sed): use sed to remove the policy dir from anywhere in PATH.  Two patterns:
 			//   s|binDir:||g  — removes when followed by a colon (start or middle)
 			//   s|:binDir||g  — removes when preceded by a colon (end of PATH)
-			passThroughLine := fmt.Sprintf(`exec env \"PATH=\$(echo \"\$PATH\" | sed 's|%s:||g;s|:%s||g')\" %s \"\$@\"`, binDir, binDir, e.baseCmd)
+			//
+			// IMPORTANT: use \"s|...|g\" (escaped double quotes) not 's|...|' (single quotes).
+			// The entire preamble is wrapped in sh -lc '...' by assembleLoginShellCommand; any
+			// literal single quote inside the preamble would prematurely close the outer wrapper,
+			// causing sh to exit immediately with a syntax error and the tmux pane to close.
+			// Double-quoted sed expressions are equivalent — the shell strips quotes before
+			// passing the argument to sed, so sed receives the same s|...|g string either way.
+			passThroughLine := fmt.Sprintf(`exec env \"PATH=\$(echo \"\$PATH\" | sed \"s|%s:||g;s|:%s||g\")\" %s \"\$@\"`, binDir, binDir, e.baseCmd)
 
 			body := strings.Join(checkLines, `\n`) + `\n` + passThroughLine
 
