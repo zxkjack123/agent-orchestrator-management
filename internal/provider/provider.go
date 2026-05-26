@@ -21,6 +21,11 @@ type LaunchSpec struct {
 	// being invoked.  Required on WSL2 where bwrap overlay causes git to spin
 	// at 60–100% CPU indefinitely.  Set via policy.yaml codex_bypass_sandbox: true.
 	BypassSandbox bool
+	// WorktreePath is the agent's workspace directory. When non-empty, providers
+	// that tend to navigate away from their CWD (e.g. codex) prepend a
+	// "cd <WorktreePath>" statement to the preamble so the agent starts in the
+	// correct directory even if the runtime later discovers a git root elsewhere.
+	WorktreePath string
 }
 
 // NiceExecPrefix is the standard exec prefix for all agent runtimes.

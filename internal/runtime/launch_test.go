@@ -359,6 +359,51 @@ func TestBuilderBuildCodexBypassSandbox(t *testing.T) {
 	}
 }
 
+func TestBuilderBuildCodexPrependsWorkspaceCd(t *testing.T) {
+	builder := NewBuilderWithLookPath(func(name string) (string, error) {
+		if name == "codex" {
+			return "/usr/bin/codex", nil
+		}
+		return "", fmt.Errorf("unexpected lookup %q", name)
+	})
+
+	workspacePath := "/tmp/e2e-proj/.aom/agents/backend-main/workspace"
+	command, err := builder.Build(SessionSpec{
+		Runtime:      "codex",
+		WorktreePath: workspacePath,
+	}, LaunchModeReal)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	// The cd must appear in the preamble, before the AOM_RUNTIME export.
+	cdStatement := fmt.Sprintf(`cd "%s"`, workspacePath)
+	if !strings.Contains(command, cdStatement) {
+		t.Fatalf("command = %q, want preamble to contain %q", command, cdStatement)
+	}
+	aomRuntimeIdx := strings.Index(command, "export AOM_RUNTIME=codex")
+	cdIdx := strings.Index(command, cdStatement)
+	if cdIdx == -1 || aomRuntimeIdx == -1 || cdIdx >= aomRuntimeIdx {
+		t.Fatalf("command = %q, want cd %q to appear before export AOM_RUNTIME=codex", command, workspacePath)
+	}
+
+	// Without WorktreePath, no cd statement should appear.
+	commandNoCd, err := builder.Build(SessionSpec{Runtime: "codex"}, LaunchModeReal)
+	if err != nil {
+		t.Fatalf("Build (no WorktreePath) failed: %v", err)
+	}
+	if strings.Contains(commandNoCd, `cd "`) {
+		t.Fatalf("command without WorktreePath = %q, must not contain cd statement", commandNoCd)
+	}
+
+	// Inner content must not contain single quotes (breaks sh -lc '...' wrapper).
+	inner := strings.TrimPrefix(command, "sh -lc '")
+	inner = strings.TrimSuffix(inner, "'")
+	if strings.Contains(inner, "'") {
+		t.Fatalf("command inner content contains single quote:\ncommand = %q", command)
+	}
+}
+
 func TestNewBuilderWithRegistryUsesCustomRegistry(t *testing.T) {
 	// A custom provider that returns a sentinel exec command with no preamble.
 	customProvider := &testProvider{name: "custom", execCmd: "exec custom-agent"}

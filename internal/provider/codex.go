@@ -20,7 +20,16 @@ func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (
 	if _, err := lookPath("codex"); err != nil {
 		return ShellSpec{}, fmt.Errorf("real launch for runtime %q requires the %q CLI in PATH", "codex", "codex")
 	}
-	preamble := []string{
+	preamble := []string{}
+	// P0 fix: prepend cd to force codex to start in the agent workspace.
+	// codex tends to navigate to the git repo root during startup — this cd
+	// ensures the initial CWD is the workspace, matching the tmux pane CWD.
+	// Single quotes are forbidden here (outer sh -lc wrapper uses them); use
+	// double-quoted path. Paths with spaces are supported.
+	if spec.WorktreePath != "" {
+		preamble = append(preamble, fmt.Sprintf(`cd "%s"`, spec.WorktreePath))
+	}
+	preamble = append(preamble,
 		"export AOM_RUNTIME=codex",
 		"export PYTHONDONTWRITEBYTECODE=1",
 		// Use a /tmp-based npm cache so npm install never hits EPERM from the
@@ -42,7 +51,7 @@ func (p *codexProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) (
 		// use only POSIX backslash escapes (\n, \\, \") — avoid \xNN hex escapes (not supported
 		// by dash, the default /bin/sh on Ubuntu/Debian/WSL2).
 		`[ -f "$HOME/.codex/version.json" ] || { mkdir -p "$HOME/.codex" && printf "{\"dismissed_version\":\"9999.0.0\"}\n" > "$HOME/.codex/version.json"; }`,
-	}
+	)
 	if len(spec.DenyCommands) > 0 {
 		preamble = append(preamble, buildCodexWrapperPreamble(spec.SessionID, spec.DenyCommands)...)
 	}

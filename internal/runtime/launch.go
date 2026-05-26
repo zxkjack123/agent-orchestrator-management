@@ -31,6 +31,11 @@ type SessionSpec struct {
 	// BypassSandbox passes through to provider.LaunchSpec.BypassSandbox.
 	// Set when the project policy has codex_bypass_sandbox: true.
 	BypassSandbox bool
+	// WorktreePath passes through to provider.LaunchSpec.WorktreePath.
+	// It is the agent's workspace directory; the codex provider uses it to
+	// prepend a "cd <WorktreePath>" to the preamble so codex starts in the
+	// correct directory rather than navigating to the git repo root.
+	WorktreePath string
 }
 
 // LookPathFunc resolves a runtime binary path.
@@ -96,6 +101,7 @@ func (b *Builder) realRuntimeShellCommand(spec SessionSpec) (string, error) {
 		DenyCommands:   spec.DenyCommands,
 		Model:          spec.Model,
 		BypassSandbox:  spec.BypassSandbox,
+		WorktreePath:   spec.WorktreePath,
 	}, b.lookPath)
 	if err != nil {
 		return "", err

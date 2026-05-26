@@ -178,6 +178,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		DenyCommands:  result.Policy.Policy.DenyCommands,
 		Model:         agentRecord.Model,
 		BypassSandbox: result.Policy.Policy.CodexBypassSandbox,
+		WorktreePath:  executionPath,
 	}, params.launchMode); err != nil {
 		return nil, err
 	}
@@ -278,6 +279,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		ProjectBin:     selfBin,
 		Model:          agentRecord.Model,
 		BypassSandbox:  result.Policy.Policy.CodexBypassSandbox,
+		WorktreePath:   executionPath,
 	}, params.launchMode)
 	if err != nil {
 		return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "session launch validation failed before session became interactive", err)
@@ -1306,6 +1308,7 @@ func (r Runner) resumeSessionNative(result *project.OpenResult, record *session.
 		ProjectBin:     selfBin,
 		Model:          record.Model,
 		BypassSandbox:  result.Policy.Policy.CodexBypassSandbox,
+		WorktreePath:   executionPath,
 	}, aomruntime.LaunchModeReal)
 	if err != nil {
 		return fmt.Errorf("build resume launch command: %w", err)
