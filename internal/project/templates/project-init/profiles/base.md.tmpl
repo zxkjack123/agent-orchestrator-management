@@ -33,6 +33,12 @@
    - "## Completed Work" — what was built/fixed
    - "## Touched Files" — list every file changed
    - "## Open Questions" — anything unresolved
+1b. Fill in .agent/handoff.md before signaling:
+   - "From Role / To Role" — who passes to whom
+   - "Completed" — concrete summary of what was delivered
+   - "Remaining" — what still needs to happen
+   - "Files Changed" — key files the next agent should read
+   (handoff.md is checked by aom task verify — template placeholder text causes verify to fail)
 2. Commit synchronously in the foreground (NOT in a background terminal):
    git add -A && git commit -m "..."
    CODEX: never use the background terminal feature — run every command sequentially in the

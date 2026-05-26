@@ -15,6 +15,9 @@
 - Never commit `.aom/` directory files — `git add -A` will include `.aom/sessions.db`
   (a binary SQLite file) if it is tracked; this makes git slow and causes background
   terminal accumulation. `.aom/` must be in `.gitignore` before the first commit.
+- **Workspace agents (codex)**: your workspace is shown in .agent/task.md under "Artifact Root".
+  Verify with `pwd` before creating files. Do NOT write files to parent directories or the
+  git repo root — all output must stay inside your workspace directory.
 - **Workspace agent commit convention**: prefix every commit with `[TASK-xxx]` where
   xxx is the current task ID (shown in .agent/task.md under "Task ID").
   This tag lets `aom merge commit` identify which commits belong to this task.
