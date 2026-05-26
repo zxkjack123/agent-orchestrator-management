@@ -561,10 +561,19 @@ Implemented after second real WSL test session analysis (AOM_FEEDBACK.md):
 
 ## Verified State
 
-Last verified state before this handoff (2026-05-26, after Phase 2 + Phase 4 + Phase 5 completion):
-- `go build ./...` passes — `aom task signal`, `aom switch`, `aom dashboard`, `aom status --action-items`, `aom task verify --watch` all compile cleanly
-- `go test ./...` passes — new tests included: `TestAppendSignalToWorkspaceLog`, `TestTaskSignalValidation`, `TestRenderTaskMarkdownWorkspaceAgentHasCompletionSection`, `TestHandoffSentinelRejection`
-- WSL2 E2E: builder → reviewer full pipeline passed 5/5 verify checks; `aom task accept` without `--force`; `aom merge commit` to main (see `E2E-REPORT-WSL2-CLAUDE.md`)
+Last verified state before this handoff (2026-05-26, after Phase 3.3 cross-provider E2E v2):
+- `go build ./...` passes — all Phase 5 commands + P0 codex workspace-cd fix compile cleanly
+- `go test ./...` passes — all unit tests including `TestHasTaskCompletedEventAcceptsTaskClosed`, `TestPromoteWorkspaceHandoffCopiesWhenArtifactHasTemplate`, `TestPromoteWorkspaceHandoffSkipsWhenArtifactAlreadyGood`, `TestBuilderBuildCodexPrependsWorkspaceCd`
+- **Phase 3.3 cross-provider E2E v2** (WSL2, codex-be + claude-fe, 2026-05-26):
+  - Both agents used permanent per-agent workspaces (free-roam mode)
+  - codex-be: `server.py` + `test_server.py` committed to `agents/codex-be` with `[TASK-xxx]` prefix ✅
+  - claude-fe: `index.html` committed to `agents/claude-fe` with `[TASK-xxx]` prefix ✅
+  - claude-fe: **5/5 verify checks** autonomously — used `aom task signal task.completed` correctly
+  - codex-be: **5/5 verify checks** after operator sends `aom task signal task.completed` — work was complete but codex used `step.completed`+`checkpoint.created` instead of the final task signal
+  - Both tasks accepted (`aom task accept`) and merged to main (`aom merge commit --prefer-branch`) cleanly
+  - Fixes confirmed working: handoff.md path mismatch (promoteWorkspaceHandoff), task.closed accepted (hasTaskCompletedEvent), state.md update (profile enforcement)
+  - Remaining compliance gap: codex runtime sometimes uses `step.completed`/`checkpoint.created` instead of `task.completed` as final signal — operator can unblock by running `aom task signal task.completed` manually
+- WSL2 E2E (earlier): builder → reviewer full pipeline passed 5/5 verify checks; `aom task accept` without `--force`; `aom merge commit` to main (see `E2E-REPORT-WSL2-CLAUDE.md`)
 - (Preserved below: earlier flow records from milestones 2–4 and worktree repair/session/artifact coverage)
 - `go test ./...` passes (earlier milestone baseline)
 - live local Milestone 2 flow passes on macOS:
