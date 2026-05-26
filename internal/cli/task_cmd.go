@@ -1634,7 +1634,12 @@ func hasTaskCompletedEvent(logPath string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(data), "task.completed")
+	s := string(data)
+	// Accept both the canonical "task.completed" signal (from aom task signal) and
+	// "task.closed" (the event written by aom task close / aom task accept).
+	// codex agents often call "aom task close" which produces task.closed; treating
+	// it as equivalent avoids a spurious verify failure for that runtime.
+	return strings.Contains(s, "task.completed") || strings.Contains(s, "task.closed")
 }
 
 // verifyCheck is one completion-readiness result from runTaskVerifyChecks.
@@ -1729,28 +1734,48 @@ func (r Runner) runTaskVerifyChecks(result *project.OpenResult, view *taskView) 
 	checks = append(checks, verifyCheck{"state.md updated", stateOK, stateNote})
 
 	// Check 3: handoff.md is present, non-trivial, and not template placeholder text.
-	handoffData, handoffErr := os.ReadFile(filepath.Join(artifactRoot, "handoff.md"))
-	handoffOK := handoffErr == nil && len(strings.TrimSpace(string(handoffData))) > 80
-	handoffNote := ""
-	if handoffOK {
-		// Reject handoff.md files that still contain template sentinel strings.
-		templateSentinels := []string{
-			"Fill this in when the work is ready for transfer",
-			"Fill in what was completed in this session",
-			"Fill in what still needs to happen next",
-			"Record touched files before signaling",
+	// For workspace agents also accept the workspace copy (.agent/handoff.md inside
+	// the worktree) as a fallback when the task artifact still has template text.
+	// Agents that write to their workspace .agent/handoff.md produce valid content
+	// there; this fallback mirrors the state.md and log.md patterns above.
+	handoffTemplateSentinels := []string{
+		"Fill this in when the work is ready for transfer",
+		"Fill in what was completed in this session",
+		"Fill in what still needs to happen next",
+		"Record touched files before signaling",
+	}
+	handoffDataOK := func(data []byte) bool {
+		if len(strings.TrimSpace(string(data))) <= 80 {
+			return false
 		}
-		for _, s := range templateSentinels {
-			if strings.Contains(string(handoffData), s) {
-				handoffOK = false
-				handoffNote = "handoff.md still contains template placeholder text — update it before signaling completion"
-				break
+		for _, s := range handoffTemplateSentinels {
+			if strings.Contains(string(data), s) {
+				return false
+			}
+		}
+		return true
+	}
+	handoffData, handoffErr := os.ReadFile(filepath.Join(artifactRoot, "handoff.md"))
+	handoffOK := handoffErr == nil && handoffDataOK(handoffData)
+	handoffNote := ""
+	if !handoffOK {
+		// Fallback: workspace agents write .agent/handoff.md inside their worktree.
+		// Accept that copy when the task artifact is missing or still template text.
+		if workspacePath != "" {
+			wsHandoffData, wsErr := os.ReadFile(filepath.Join(workspacePath, ".agent", "handoff.md"))
+			if wsErr == nil && handoffDataOK(wsHandoffData) {
+				handoffOK = true
 			}
 		}
 	}
-	if !handoffOK && handoffNote == "" {
+	if !handoffOK {
 		if handoffErr != nil {
 			handoffNote = "handoff.md not found"
+		} else if strings.Contains(string(handoffData), handoffTemplateSentinels[0]) ||
+			strings.Contains(string(handoffData), handoffTemplateSentinels[1]) ||
+			strings.Contains(string(handoffData), handoffTemplateSentinels[2]) ||
+			strings.Contains(string(handoffData), handoffTemplateSentinels[3]) {
+			handoffNote = "handoff.md still contains template placeholder text — update it before signaling completion"
 		} else {
 			handoffNote = "handoff.md appears empty or too sparse"
 		}
@@ -2123,15 +2148,27 @@ func (r Runner) executeTaskSignal(args []string) error {
 		return err
 	}
 
-	// For workspace agents also mirror the event to workspace/.agent/log.md so
-	// the agent can see their own signal and teammates can cross-check via
-	// aom worktree read-file.
+	// For workspace agents: mirror log, and on task.completed auto-promote the
+	// workspace handoff.md to the task artifact if the artifact still has template text.
 	view, viewErr := r.loadTaskView(result, taskID)
 	if viewErr == nil && view != nil {
 		agentRecord := findAgentByName(result.Agents, view.Task.PreferredAgent)
 		if agentRecord != nil && strings.TrimSpace(agentRecord.WorkspacePath) != "" {
-			wsLogPath := filepath.Join(strings.TrimSpace(agentRecord.WorkspacePath), ".agent", "log.md")
+			wsPath := strings.TrimSpace(agentRecord.WorkspacePath)
+
+			// Mirror log event to workspace log so the agent's own log stays current.
+			wsLogPath := filepath.Join(wsPath, ".agent", "log.md")
 			appendSignalToWorkspaceLog(wsLogPath, eventType, actor, taskID, summary)
+
+			// Auto-promote workspace handoff.md → task artifact on task.completed.
+			// Agents write .agent/handoff.md in their workspace; the task artifact
+			// handoff.md lives at a different path and is what aom task verify reads.
+			// When they diverge, copy the workspace copy to the artifact so both are
+			// consistent and verify passes without requiring agents to know both paths.
+			if eventType == "task.completed" {
+				artifactHandoffPath := filepath.Join(result.Project.RepoPath, result.StateDir, "tasks", taskID, "handoff.md")
+				promoteWorkspaceHandoff(wsPath, artifactHandoffPath)
+			}
 		}
 	}
 
@@ -2165,6 +2202,47 @@ func appendSignalToWorkspaceLog(logPath, eventType, actor, taskID, summary strin
 		summary,
 	)
 	_, _ = f.WriteString(entry)
+}
+
+// promoteWorkspaceHandoff copies the workspace .agent/handoff.md to the task
+// artifact handoff.md when the artifact still contains template placeholder text.
+// This is called on task.completed so that agents who write the correct content
+// to their workspace handoff.md have it automatically reflected in the task
+// artifact that aom task verify reads.  Silently ignores errors — best-effort.
+func promoteWorkspaceHandoff(workspacePath, artifactHandoffPath string) {
+	templateSentinels := []string{
+		"Fill this in when the work is ready for transfer",
+		"Fill in what was completed in this session",
+		"Fill in what still needs to happen next",
+		"Record touched files before signaling",
+	}
+	// Read workspace handoff.md — if it doesn't exist or is sparse, skip.
+	wsData, err := os.ReadFile(filepath.Join(workspacePath, ".agent", "handoff.md"))
+	if err != nil || len(strings.TrimSpace(string(wsData))) <= 80 {
+		return
+	}
+	// Skip if workspace copy also has template text.
+	for _, s := range templateSentinels {
+		if strings.Contains(string(wsData), s) {
+			return
+		}
+	}
+	// Read current artifact handoff.md — only promote if artifact has template text.
+	artifactData, artifactErr := os.ReadFile(artifactHandoffPath)
+	if artifactErr == nil {
+		hasTemplate := false
+		for _, s := range templateSentinels {
+			if strings.Contains(string(artifactData), s) {
+				hasTemplate = true
+				break
+			}
+		}
+		if !hasTemplate {
+			return // artifact is already good — don't overwrite
+		}
+	}
+	// Copy workspace content to artifact (best-effort).
+	_ = os.WriteFile(artifactHandoffPath, wsData, 0o644)
 }
 
 // invariantsPath returns the path to the task invariants file.

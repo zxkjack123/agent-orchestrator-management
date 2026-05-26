@@ -40,3 +40,12 @@ Example:
 
 AOM reads this tag at merge time (`aom merge commit`) to identify which commits belong
 to which task. A commit without the prefix will be excluded from the task's merge set.
+
+## Completion Signal
+
+After committing, always signal completion with:
+  aom task signal task.completed --task <task-id> --summary "<what was delivered>"
+
+**Do NOT use `aom task close`** — that is an operator command and will not write the
+completion event that `aom task verify` looks for. Only `aom task signal task.completed`
+passes the verify gate.

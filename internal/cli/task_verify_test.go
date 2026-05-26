@@ -142,6 +142,141 @@ func TestAppendSignalToWorkspaceLog(t *testing.T) {
 	}
 }
 
+// TestHasTaskCompletedEventAcceptsTaskClosed verifies that hasTaskCompletedEvent
+// returns true for both "task.completed" and "task.closed" log entries.
+// codex agents often call "aom task close" which produces task.closed; the verify
+// check must accept both to avoid a spurious failure for that runtime.
+func TestHasTaskCompletedEventAcceptsTaskClosed(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "log.md")
+
+	closedLog := "# Agent Log\n\n### task.closed\n- Actor: operator\n- Summary: Task closed\n"
+	if err := os.WriteFile(logPath, []byte(closedLog), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !hasTaskCompletedEvent(logPath) {
+		t.Fatal("want true for task.closed event — should be treated as equivalent to task.completed")
+	}
+}
+
+// TestPromoteWorkspaceHandoffCopiesWhenArtifactHasTemplate verifies that
+// promoteWorkspaceHandoff copies workspace handoff.md content to the task artifact
+// path when the artifact still contains template placeholder text.
+func TestPromoteWorkspaceHandoffCopiesWhenArtifactHasTemplate(t *testing.T) {
+	workspaceDir := t.TempDir()
+	agentDir := filepath.Join(workspaceDir, ".agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	artifactDir := t.TempDir()
+	artifactHandoffPath := filepath.Join(artifactDir, "handoff.md")
+
+	realContent := `# Handoff
+
+## From Role / To Role
+- backend / operator
+
+## Completed
+- Implemented GET /hello server with JSON response and 2 passing tests.
+
+## Remaining
+- none
+
+## Files Changed
+- server.py
+- test_server.py
+`
+	templateContent := `# Handoff
+
+## Transfer
+- Reason: Fill this in when the work is ready for transfer
+
+## Completed
+- Fill in what was completed in this session
+
+## Remaining
+- Fill in what still needs to happen next
+`
+
+	// Write real content to workspace .agent/handoff.md.
+	if err := os.WriteFile(filepath.Join(agentDir, "handoff.md"), []byte(realContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Write template content to task artifact handoff.md.
+	if err := os.WriteFile(artifactHandoffPath, []byte(templateContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	promoteWorkspaceHandoff(workspaceDir, artifactHandoffPath)
+
+	// Artifact should now have real content.
+	promoted, err := os.ReadFile(artifactHandoffPath)
+	if err != nil {
+		t.Fatalf("read promoted artifact: %v", err)
+	}
+	if string(promoted) != realContent {
+		t.Fatalf("artifact = %q, want workspace content %q", promoted, realContent)
+	}
+}
+
+// TestPromoteWorkspaceHandoffSkipsWhenArtifactAlreadyGood verifies that
+// promoteWorkspaceHandoff does NOT overwrite an already-filled task artifact.
+func TestPromoteWorkspaceHandoffSkipsWhenArtifactAlreadyGood(t *testing.T) {
+	workspaceDir := t.TempDir()
+	agentDir := filepath.Join(workspaceDir, ".agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	artifactDir := t.TempDir()
+	artifactHandoffPath := filepath.Join(artifactDir, "handoff.md")
+
+	workspaceContent := `# Handoff
+
+## From Role / To Role
+- backend / operator
+
+## Completed
+- Workspace content (newer).
+
+## Remaining
+- none
+
+## Files Changed
+- server.py
+`
+	alreadyGoodArtifact := `# Handoff
+
+## From Role / To Role
+- backend / reviewer
+
+## Completed
+- Good content already here — should not be overwritten.
+
+## Remaining
+- none
+
+## Files Changed
+- main.go
+`
+	if err := os.WriteFile(filepath.Join(agentDir, "handoff.md"), []byte(workspaceContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifactHandoffPath, []byte(alreadyGoodArtifact), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	promoteWorkspaceHandoff(workspaceDir, artifactHandoffPath)
+
+	// Artifact must remain unchanged.
+	after, err := os.ReadFile(artifactHandoffPath)
+	if err != nil {
+		t.Fatalf("read artifact: %v", err)
+	}
+	if string(after) != alreadyGoodArtifact {
+		t.Fatalf("artifact was overwritten — want original %q, got %q", alreadyGoodArtifact, after)
+	}
+}
+
 // TestTaskSignalValidation verifies that executeTaskSignal rejects unknown event
 // types and missing --task flag before touching any files.
 func TestTaskSignalValidation(t *testing.T) {

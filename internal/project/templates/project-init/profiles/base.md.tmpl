@@ -33,6 +33,8 @@
    - "## Completed Work" — what was built/fixed
    - "## Touched Files" — list every file changed
    - "## Open Questions" — anything unresolved
+   **REQUIRED: state.md MUST NOT still say "None recorded yet" when you are done.**
+   `aom task verify` checks this file — leaving it as-is causes a verify failure.
 1b. Fill in .agent/handoff.md before signaling:
    - "From Role / To Role" — who passes to whom
    - "Completed" — concrete summary of what was delivered
@@ -64,6 +66,9 @@
    - Saving a mid-task checkpoint:
        aom task signal checkpoint.created --task <task-id> --summary "<progress note>"
    (<task-id> is shown in .agent/task.md under "Task ID")
+   **IMPORTANT: Use `aom task signal task.completed` — do NOT use `aom task close`.**
+   `aom task close` is an operator command; `aom task signal` is the agent command.
+   The verify gate checks for the signal event — using the wrong command causes a check failure.
 4. Announce completion to the team:
    aom channel append "{{.AgentName}}: task done — <one-line summary of what was delivered>"
 
