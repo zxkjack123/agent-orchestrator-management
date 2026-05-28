@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/session"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/worktree"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/session"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/step"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/task"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/worktree"
 )
 
 func TestServiceSeedTaskArtifactsCreatesCoreFiles(t *testing.T) {

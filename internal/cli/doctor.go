@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
 )
 
 type doctorResult struct {

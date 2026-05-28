@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
 )
 
 func (r Runner) executeOutbox(args []string) error {

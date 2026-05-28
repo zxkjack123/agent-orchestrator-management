@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
 )
 
 func (r Runner) executeApprove(args []string) error {

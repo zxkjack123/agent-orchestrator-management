@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/step"
 )
 
 func (r Runner) executeStepList(args []string) error {

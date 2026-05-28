@@ -1,4 +1,4 @@
-module github.com/lattapon-aek/agents-orchestrator-management-private
+module github.com/lattapon-aek/agent-orchestrator-management
 
 go 1.24.0
 

@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/app"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
-	aomruntime "github.com/lattapon-aek/agents-orchestrator-management-private/internal/runtime"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/app"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
+	aomruntime "github.com/lattapon-aek/agent-orchestrator-management/internal/runtime"
 )
 
 var newApp = app.New

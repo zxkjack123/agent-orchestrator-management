@@ -9,16 +9,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
-	aomruntime "github.com/lattapon-aek/agents-orchestrator-management-private/internal/runtime"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/session"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/worktree"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/agent"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
+	aomruntime "github.com/lattapon-aek/agent-orchestrator-management/internal/runtime"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/session"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/step"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/task"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/worktree"
 )
 
 func (r Runner) executeSessionSpawn(args []string) error {

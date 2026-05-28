@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/worktree"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/worktree"
 )
 
 func (r Runner) executeWorktreeRepair(args []string) error {

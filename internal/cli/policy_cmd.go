@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
 )
 
 func (r Runner) executePolicy(args []string) error {

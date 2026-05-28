@@ -3,8 +3,8 @@ package app
 import (
 	"database/sql"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/session"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/db"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/session"
 )
 
 // OpenSessionService opens the project database and returns a session service bound to it.

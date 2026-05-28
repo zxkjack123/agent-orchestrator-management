@@ -5,10 +5,10 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
-	aommerge "github.com/lattapon-aek/agents-orchestrator-management-private/internal/merge"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
+	aommerge "github.com/lattapon-aek/agent-orchestrator-management/internal/merge"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/step"
 )
 
 // aomIdentityFiles are AOM-generated runtime identity files. When these appear

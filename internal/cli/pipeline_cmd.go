@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	aomruntime "github.com/lattapon-aek/agents-orchestrator-management-private/internal/runtime"
+	aomruntime "github.com/lattapon-aek/agent-orchestrator-management/internal/runtime"
 )
 
 // executeRunPipeline runs a complete task pipeline in sequence without operator

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/db"
 )
 
 func TestServiceUpdateStatusAndOwnership(t *testing.T) {

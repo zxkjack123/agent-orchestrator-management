@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/agent"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
 )
 
 func (r Runner) executeAgent(args []string) error {

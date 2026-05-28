@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
 )
 
 // TestMain seeds the known-runtime registries with the built-in provider names

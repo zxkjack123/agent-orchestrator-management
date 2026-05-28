@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/step"
 )
 
 var defaultIDSequence atomic.Int64

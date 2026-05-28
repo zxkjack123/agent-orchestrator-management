@@ -10,13 +10,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/app"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
-	aomruntime "github.com/lattapon-aek/agents-orchestrator-management-private/internal/runtime"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/tmux"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/worktree"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/app"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
+	aomruntime "github.com/lattapon-aek/agent-orchestrator-management/internal/runtime"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/step"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/tmux"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/worktree"
 )
 
 func TestExecuteProjectInitCreatesAOMStructure(t *testing.T) {

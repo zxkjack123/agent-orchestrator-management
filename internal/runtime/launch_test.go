@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/provider"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
 )
 
 // testIsWSL2 returns true when the test is running inside a WSL2 kernel.

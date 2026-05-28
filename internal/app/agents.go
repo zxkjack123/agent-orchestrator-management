@@ -3,8 +3,8 @@ package app
 import (
 	"database/sql"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/agent"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/db"
 )
 
 // OpenAgentRepository opens the project database and returns an agent repository bound to it.

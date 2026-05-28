@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/step"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/task"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/step"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/task"
 )
 
 // handoffTemplateSentinels is the set of placeholder strings that AOM seeds into

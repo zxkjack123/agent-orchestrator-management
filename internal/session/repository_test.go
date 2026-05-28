@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/db"
 )
 
 func TestRepositoryUpsertAndListByProjectID(t *testing.T) {

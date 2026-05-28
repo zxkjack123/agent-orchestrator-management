@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/agent"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/db"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/agent"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/db"
 	"gopkg.in/yaml.v3"
 )
 

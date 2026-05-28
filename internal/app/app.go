@@ -1,9 +1,9 @@
 package app
 
 import (
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/plan"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/project"
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/tmux"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/plan"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/tmux"
 )
 
 // App holds top-level application dependencies as the CLI grows.

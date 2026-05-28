@@ -10,7 +10,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/config"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
 	"gopkg.in/yaml.v3"
 )
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lattapon-aek/agents-orchestrator-management-private/internal/artifact"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
 )
 
 func (r Runner) executeAttach(args []string) error {
