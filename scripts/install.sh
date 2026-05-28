@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # install.sh — build and install aom inside WSL
 #
-# Usage (from WSL terminal, any directory):
-#   cd /mnt/c/Users/lattapon.kea/Desktop/agents-orchestrator-management-private
+# Usage (from any terminal inside the repo):
+#   cd /path/to/agent-orchestrator-management
 #   ./scripts/install.sh          # build + install
 #   ./scripts/install.sh --test   # build + run quick tests + install
 #   ./scripts/install.sh --dry    # build only, don't install
@@ -78,11 +78,11 @@ if git -C "$PROJECT_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
 fi
 
 LDFLAGS=(
-    "-X github.com/lattapon-aek/agents-orchestrator-management-private/internal/cli.Version=$VERSION"
-    "-X github.com/lattapon-aek/agents-orchestrator-management-private/internal/cli.Commit=$COMMIT"
-    "-X github.com/lattapon-aek/agents-orchestrator-management-private/internal/cli.BuiltAt=$BUILD_TIME"
-    "-X github.com/lattapon-aek/agents-orchestrator-management-private/internal/cli.GoVersion=$GO_BUILD_VERSION"
-    "-X github.com/lattapon-aek/agents-orchestrator-management-private/internal/cli.Dirty=$DIRTY"
+    "-X github.com/lattapon-aek/agent-orchestrator-management/internal/cli.Version=$VERSION"
+    "-X github.com/lattapon-aek/agent-orchestrator-management/internal/cli.Commit=$COMMIT"
+    "-X github.com/lattapon-aek/agent-orchestrator-management/internal/cli.BuiltAt=$BUILD_TIME"
+    "-X github.com/lattapon-aek/agent-orchestrator-management/internal/cli.GoVersion=$GO_BUILD_VERSION"
+    "-X github.com/lattapon-aek/agent-orchestrator-management/internal/cli.Dirty=$DIRTY"
 )
 
 # ── Build ─────────────────────────────────────────────────────────────────────
