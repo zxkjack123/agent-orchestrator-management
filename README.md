@@ -34,6 +34,8 @@ Each agent has a permanent workspace. Operator walks freely between agent termin
 - **Go 1.24+** — to build from source
 - At least one supported AI agent runtime: [Claude Code](https://claude.ai/code), [Codex CLI](https://github.com/openai/codex), or Kiro CLI
 
+> **macOS tip**: [iTerm2](https://iterm2.com) with native tmux integration (`tmux -CC`) gives each agent its own pane in a single native window — the most ergonomic way to watch the team grid. See [docs/iterm2-tmux-setup.md](docs/iterm2-tmux-setup.md).
+
 ## Installation
 
 ### Build from source
@@ -119,17 +121,24 @@ aom merge check / prepare / commit    # Merge coordination pipeline
 aom run-pipeline <task-id>            # Full automated pipeline: spawn → verify → accept → merge
 ```
 
+### Team Grid
+
+```bash
+aom orchestrate [--layout tiled] [--real|--mock]  # Spawn all agents into one shared tmux window (grid view)
+aom team view                                      # Attach to the team window without respawning
+```
+
 ### Monitoring & Communication
 
 ```bash
-aom status                     # Project-wide status summary
-aom status --action-items      # Show only items requiring operator action
-aom dashboard                  # Live ANSI terminal dashboard (Ctrl+C to exit)
-aom events tail                # Stream live log events
-aom broadcast <message>        # Broadcast message to all active agent worktrees
-aom message send <agent> <msg> # Send a targeted message to one agent
-aom channel read               # Read the shared team channel
-aom metrics                    # Velocity report from task/step events
+aom status                            # Project-wide status summary
+aom status --action-items             # Show only items requiring operator action
+aom dashboard                         # Live ANSI terminal dashboard (Ctrl+C to exit)
+aom events tail                       # Stream live log events
+aom broadcast "<message>"             # Push message to all live agent sessions + channel log
+aom message send <agent> "<message>"  # Send a direct message (DM) — recipient notified instantly
+aom channel read                      # Read the shared team channel log
+aom metrics                           # Velocity report from task/step events
 ```
 
 ## Architecture
@@ -173,6 +182,7 @@ See [docs/project-config.md](docs/project-config.md) for the full configuration 
 | [docs/cli-spec.md](docs/cli-spec.md) | Full CLI command specifications |
 | [docs/engineering-guidelines.md](docs/engineering-guidelines.md) | Code style and design guardrails |
 | [docs/project-config.md](docs/project-config.md) | `.aom/` config file layout and schemas |
+| [docs/iterm2-tmux-setup.md](docs/iterm2-tmux-setup.md) | iTerm2 + tmux integration guide (recommended for macOS) |
 
 ## Contributing
 
