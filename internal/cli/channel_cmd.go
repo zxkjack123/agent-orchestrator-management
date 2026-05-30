@@ -73,7 +73,47 @@ func (r Runner) executeChannelAppend(args []string) error {
 	fmt.Fprintf(r.stdout, "Agent: %s\n", agentName)
 	fmt.Fprintf(r.stdout, "Message: %s\n", message)
 	fmt.Fprintf(r.stdout, "Channel: %s\n", channelFilePath(repoPath))
+
+	// Best-effort: notify all live sessions via tmux so teammates see the message
+	// immediately without having to poll channel read.
+	r.notifyLiveSessions(repoPath, agentName, message)
 	return nil
+}
+
+// notifyLiveSessions sends a tmux notification to every live session in the
+// project except the sender. Errors are intentionally ignored — channel writes
+// succeed even if tmux delivery fails (e.g. sessions stopped between the write
+// and the notification).
+func (r Runner) notifyLiveSessions(repoPath, fromAgent, message string) {
+	result, err := r.app.Projects.Open(repoPath)
+	if err != nil {
+		return
+	}
+	svc, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return
+	}
+	defer sqlDB.Close()
+
+	all, err := svc.ListByProject(result.Project.ID)
+	if err != nil {
+		return
+	}
+
+	notification := fmt.Sprintf("[Team] from %s: %s", fromAgent, message)
+	for _, s := range all {
+		if s.AgentName == fromAgent {
+			continue // don't echo back to sender
+		}
+		if !sendableSessionStatus(s.Status) || strings.TrimSpace(s.TmuxPane) == "" {
+			continue
+		}
+		alive, _ := r.app.Tmux.PaneExists(s.TmuxPane)
+		if !alive {
+			continue
+		}
+		_ = r.app.Tmux.SendKeys(s.TmuxPane, notification)
+	}
 }
 
 func (r Runner) executeChannelRead(args []string) error {

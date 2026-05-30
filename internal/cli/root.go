@@ -523,7 +523,7 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom team view [--layout <layout>] : attach operator to the shared team tmux window (all agent panes in one grid)")
 	fmt.Fprintln(r.stdout, "aom session spawn <agent> --grid [--layout <layout>] : place pane in team window instead of own window")
 
-	fmt.Fprintln(r.stdout, "aom broadcast \"<message>\" --sessions <id,id,...> [--file <path>] : deliver the same prompt to multiple sessions at once")
+	fmt.Fprintln(r.stdout, "aom broadcast \"<message>\" [--from <agent>] [--exclude-self] [--sessions <id,...>] [--file <path>] : push to all live sessions + channel.md; omit --sessions to reach everyone")
 	fmt.Fprintln(r.stdout, "aom policy list [--task <task-id>] : show project deny_commands and enforcement level; add --task to see per-task agent enforcement")
 	fmt.Fprintln(r.stdout, "aom channel append \"<message>\" [--agent <name>] : append a message to the shared .aom/channel.md")
 	fmt.Fprintln(r.stdout, "aom channel read : print current shared channel contents")

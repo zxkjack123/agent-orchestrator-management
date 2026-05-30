@@ -110,12 +110,19 @@ func (b *Builder) realRuntimeShellCommand(spec SessionSpec) (string, error) {
 	// Prepend project bin directory to PATH for all providers. This ensures the
 	// aom binary is reachable inside agent sessions regardless of how the shell
 	// was launched, without requiring each provider to repeat this logic.
+	//
+	// AOM_AGENT_NAME is also injected here so every agent knows its own name
+	// without needing --from / --agent flags in broadcast and channel commands.
+	prefix := []string{}
 	if spec.ProjectBin != "" {
 		projectDir := filepath.Dir(spec.ProjectBin)
-		shellSpec.Preamble = append(
-			[]string{fmt.Sprintf(`export PATH="%s":$PATH`, projectDir)},
-			shellSpec.Preamble...,
-		)
+		prefix = append(prefix, fmt.Sprintf(`export PATH="%s":$PATH`, projectDir))
+	}
+	if spec.AgentName != "" {
+		prefix = append(prefix, fmt.Sprintf(`export AOM_AGENT_NAME="%s"`, spec.AgentName))
+	}
+	if len(prefix) > 0 {
+		shellSpec.Preamble = append(prefix, shellSpec.Preamble...)
 	}
 
 	return assembleLoginShellCommand(shellSpec), nil

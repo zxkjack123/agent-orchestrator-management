@@ -17,10 +17,8 @@ func (r Runner) executeMessageSend(args []string) error {
 
 	agentName := strings.TrimSpace(args[0])
 	message := strings.TrimSpace(args[1])
-	fromSender := os.Getenv("AOM_ACTOR")
-	if fromSender == "" {
-		fromSender = "operator"
-	}
+	// Prefer AOM_AGENT_NAME (injected at spawn), fall back to AOM_ACTOR, then operator.
+	fromSender := senderName()
 
 	for i := 2; i < len(args); i++ {
 		switch args[i] {
@@ -62,7 +60,58 @@ func (r Runner) executeMessageSend(args []string) error {
 	}
 
 	fmt.Fprintf(r.stdout, "Message sent to %s\n", agentName)
+
+	// Notify recipient immediately via tmux so they don't have to poll inbox.
+	r.notifyAgentInbox(repoPath, agentName, fromSender, message)
 	return nil
+}
+
+// senderName returns the best available agent name for the current process:
+// AOM_AGENT_NAME (injected at spawn) → AOM_ACTOR → "operator".
+func senderName() string {
+	if v := strings.TrimSpace(os.Getenv("AOM_AGENT_NAME")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("AOM_ACTOR")); v != "" {
+		return v
+	}
+	return "operator"
+}
+
+// notifyAgentInbox sends a tmux notification to the recipient's live pane so
+// they are alerted about a new DM without having to poll their inbox. Errors
+// are intentionally ignored — the mailbox write already succeeded.
+func (r Runner) notifyAgentInbox(repoPath, toAgent, fromAgent, message string) {
+	result, err := r.app.Projects.Open(repoPath)
+	if err != nil {
+		return
+	}
+	svc, sqlDB, err := r.app.OpenSessionService(result.DBPath)
+	if err != nil {
+		return
+	}
+	defer sqlDB.Close()
+
+	all, err := svc.ListByProject(result.Project.ID)
+	if err != nil {
+		return
+	}
+
+	notification := fmt.Sprintf("[DM] from %s: %s", fromAgent, message)
+	for _, s := range all {
+		if s.AgentName != toAgent {
+			continue
+		}
+		if !sendableSessionStatus(s.Status) || strings.TrimSpace(s.TmuxPane) == "" {
+			continue
+		}
+		alive, _ := r.app.Tmux.PaneExists(s.TmuxPane)
+		if !alive {
+			continue
+		}
+		_ = r.app.Tmux.SendKeys(s.TmuxPane, notification)
+		return // deliver to the most-recent live session only
+	}
 }
 
 func (r Runner) executeMessageRead(args []string) error {
@@ -251,16 +300,15 @@ func (r Runner) executeMessageReply(args []string) error {
 		return fmt.Errorf("message %q not found in any mailbox", msgID)
 	}
 
-	selfName := os.Getenv("AOM_ACTOR")
-	if selfName == "" {
-		selfName = "operator"
-	}
+	selfName := senderName()
 
-	if err := appendMailboxMessage(repoPath, senderAgent, "[reply to "+msgID+"] "+replyText, selfName, time.Now()); err != nil {
+	replyMsg := "[reply to " + msgID + "] " + replyText
+	if err := appendMailboxMessage(repoPath, senderAgent, replyMsg, selfName, time.Now()); err != nil {
 		return err
 	}
 
 	fmt.Fprintf(r.stdout, "Reply sent to %s\n", senderAgent)
+	r.notifyAgentInbox(repoPath, senderAgent, selfName, replyMsg)
 	return nil
 }
 

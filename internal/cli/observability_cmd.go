@@ -408,21 +408,21 @@ func (r Runner) executeTeamView(args []string) error {
 	}
 
 	const teamWindowName = "team"
-	windowID, err := r.app.Tmux.EnsureTeamWindow(workspace.Target, teamWindowName)
+	windowTarget, _, err := r.app.Tmux.EnsureTeamWindow(workspace.Target, teamWindowName)
 	if err != nil {
 		return fmt.Errorf("ensure team window: %w", err)
 	}
 
 	if layout != "" {
-		if err := r.app.Tmux.SelectLayout(windowID, layout); err != nil {
+		if err := r.app.Tmux.SelectLayout(windowTarget, layout); err != nil {
 			fmt.Fprintf(r.stderr, "warning: select-layout %q: %v\n", layout, err)
 		}
 	}
 
-	fmt.Fprintf(r.stdout, "Attaching to team window %s in session %s\n", windowID, workspace.Target)
+	fmt.Fprintf(r.stdout, "Attaching to team window in session %s\n", workspace.Target)
 	fmt.Fprintf(r.stdout, "Use Ctrl+B then arrow keys to navigate panes.\n")
 
-	return r.app.Tmux.AttachWindow(workspace.Target, windowID)
+	return r.app.Tmux.AttachWindow(workspace.Target, windowTarget)
 }
 
 func (r Runner) executeTeamBrief(args []string) error {
@@ -741,18 +741,6 @@ func (r Runner) executeOrchestrate(args []string) error {
 		_ = r.app.Tmux.SetSessionEnv(workspace.Target, "AOM_BIN", selfBinEarly)
 	}
 
-	// Collect existing live sessions so we skip already-running agents.
-	livePanes := make(map[string]bool) // agentName → has live pane
-	sessions, _ := r.loadProjectSessions(result)
-	for _, s := range sessions {
-		if strings.TrimSpace(s.TmuxPane) == "" {
-			continue
-		}
-		if alive, _ := r.app.Tmux.PaneExists(s.TmuxPane); alive {
-			livePanes[s.AgentName] = true
-		}
-	}
-
 	enabled := make([]string, 0, len(result.Agents))
 	for _, a := range result.Agents {
 		if a.Enabled {
@@ -763,14 +751,59 @@ func (r Runner) executeOrchestrate(args []string) error {
 		return fmt.Errorf("no enabled agents found — add agents to agents.yaml first")
 	}
 
+	// Resolve the team window early so we can check whether live panes are
+	// already inside it. This prevents falsely skipping an agent whose pane is
+	// alive in a *solo* window — it still needs to be spawned into the team grid.
+	const teamWindowName = "team"
+	teamWindowTarget, blankPaneEarly, teamErr := r.app.Tmux.EnsureTeamWindow(workspace.Target, teamWindowName)
+	if teamErr != nil {
+		return fmt.Errorf("ensure team window: %w", teamErr)
+	}
+	// Kill the initial blank pane created by EnsureTeamWindow (only if this is a
+	// brand-new window; blankPaneEarly is empty when the window already existed).
+	if blankPaneEarly != "" {
+		_ = r.app.Tmux.KillPane(blankPaneEarly)
+	}
+
+	// Build set of pane IDs currently inside the team window.
+	teamPaneSet := make(map[string]bool)
+	if panes, pErr := r.app.Tmux.ListPanesInWindow(teamWindowTarget); pErr == nil {
+		for _, p := range panes {
+			teamPaneSet[p] = true
+		}
+	}
+
+	// Collect live sessions — only mark an agent as "already in team" when its
+	// pane is confirmed to be inside the team window. A pane alive in a solo
+	// window is not in the team grid and must be (re-)spawned.
+	inTeam := make(map[string]bool)   // agentName → pane confirmed in team window
+	inTeamPane := make(map[string]string) // agentName → pane ID
+	sessions, _ := r.loadProjectSessions(result)
+	for _, s := range sessions {
+		if strings.TrimSpace(s.TmuxPane) == "" {
+			continue
+		}
+		if alive, _ := r.app.Tmux.PaneExists(s.TmuxPane); alive && teamPaneSet[s.TmuxPane] {
+			inTeam[s.AgentName] = true
+			inTeamPane[s.AgentName] = s.TmuxPane
+		}
+	}
+
 	fmt.Fprintf(r.stdout, "Orchestrating %d agent(s) into team window (layout: %s)\n\n", len(enabled), layout)
 
 	spawned := 0
 	skipped := 0
+	var firstAgentPane string
+	// Track which agents are confirmed in the team window (for cleanup).
+	confirmedInTeam := make(map[string]bool)
 	for _, name := range enabled {
-		if livePanes[name] {
-			fmt.Fprintf(r.stdout, "  %-24s skipped (already running)\n", name)
+		if inTeam[name] {
+			fmt.Fprintf(r.stdout, "  %-24s skipped (already in team window)\n", name)
 			skipped++
+			confirmedInTeam[name] = true
+			if firstAgentPane == "" {
+				firstAgentPane = inTeamPane[name]
+			}
 			continue
 		}
 		agentRecord, aErr := findAgent(result.Agents, name)
@@ -778,7 +811,7 @@ func (r Runner) executeOrchestrate(args []string) error {
 			fmt.Fprintf(r.stdout, "  %-24s error: %v\n", name, aErr)
 			continue
 		}
-		_, spawnErr := r.executeResolvedSessionSpawn(result, agentRecord, sessionSpawnParams{
+		rec, spawnErr := r.executeResolvedSessionSpawn(result, agentRecord, sessionSpawnParams{
 			agentName:      name,
 			launchMode:     launchMode,
 			allowCollision: allowCollision,
@@ -791,6 +824,10 @@ func (r Runner) executeOrchestrate(args []string) error {
 		}
 		fmt.Fprintf(r.stdout, "  %-24s spawned\n", name)
 		spawned++
+		confirmedInTeam[name] = true
+		if firstAgentPane == "" && rec != nil && rec.TmuxPane != "" {
+			firstAgentPane = rec.TmuxPane
+		}
 	}
 
 	fmt.Fprintf(r.stdout, "\nSpawned: %d  Skipped: %d\n", spawned, skipped)
@@ -799,16 +836,34 @@ func (r Runner) executeOrchestrate(args []string) error {
 		return fmt.Errorf("all agents failed to spawn — check the errors above")
 	}
 
-	// Apply final layout across all panes in the team window.
-	const teamWindowName = "team"
-	teamWindowID, wErr := r.app.Tmux.EnsureTeamWindow(workspace.Target, teamWindowName)
-	if wErr == nil {
-		_ = r.app.Tmux.SelectLayout(teamWindowID, layout)
-		fmt.Fprintf(r.stdout, "\nAttaching to team window (Ctrl+B then arrow keys to navigate panes)...\n")
-		if err := r.app.Tmux.AttachWindow(workspace.Target, teamWindowID); err != nil {
-			fmt.Fprintf(r.stderr, "note: could not auto-attach: %v\n", err)
-			fmt.Fprintf(r.stdout, "To view the team window manually: aom team view\n")
+	_ = r.app.Tmux.SelectLayout(teamWindowTarget, layout)
+	if firstAgentPane != "" {
+		_ = r.app.Tmux.FocusPane(firstAgentPane)
+	}
+
+	// Remove stale solo windows ONLY for agents confirmed in the team window.
+	// Agents that failed to spawn are left untouched so their existing pane
+	// (if any) survives. In iTerm2 -CC mode each tmux window is a separate
+	// native window, so solo ghosts must be cleaned up to keep the view tidy.
+	teamWindowID := teamWindowTarget
+	if idx := strings.LastIndex(teamWindowTarget, ":"); idx >= 0 {
+		teamWindowID = teamWindowTarget[idx+1:]
+	}
+	if windows, listErr := r.app.Tmux.ListWindowsInSession(workspace.Target); listErr == nil {
+		for _, w := range windows {
+			if w.ID == teamWindowID {
+				continue // never kill the team window itself
+			}
+			if confirmedInTeam[w.Name] {
+				_ = r.app.Tmux.KillWindow(workspace.Target + ":" + w.ID)
+			}
 		}
+	}
+
+	fmt.Fprintf(r.stdout, "\nAttaching to team window (Ctrl+B then arrow keys to navigate panes)...\n")
+	if err := r.app.Tmux.AttachWindow(workspace.Target, teamWindowTarget); err != nil {
+		fmt.Fprintf(r.stderr, "note: could not auto-attach: %v\n", err)
+		fmt.Fprintf(r.stdout, "To view the team window manually: aom team view\n")
 	}
 
 	return nil

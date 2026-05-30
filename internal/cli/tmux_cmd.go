@@ -486,6 +486,8 @@ func (r Runner) executeBroadcast(args []string) error {
 	var sessionIDs []string
 	var msgParts []string
 	var filePath string
+	var fromAgent string   // agent name of the sender (for labelling + self-exclude)
+	var excludeSelf bool   // skip the session whose pane is running this process
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--sessions":
@@ -504,12 +506,20 @@ func (r Runner) executeBroadcast(args []string) error {
 				return fmt.Errorf("--file requires a path")
 			}
 			filePath = args[i]
+		case "--from":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--from requires a value")
+			}
+			fromAgent = strings.TrimSpace(args[i])
+		case "--exclude-self":
+			excludeSelf = true
 		default:
 			msgParts = append(msgParts, args[i])
 		}
 	}
 
-	var message string
+	var rawMessage string
 	if filePath != "" {
 		if len(msgParts) > 0 {
 			return fmt.Errorf("--file and inline message are mutually exclusive")
@@ -518,16 +528,21 @@ func (r Runner) executeBroadcast(args []string) error {
 		if err != nil {
 			return fmt.Errorf("read --file %q: %w", filePath, err)
 		}
-		message = strings.TrimSpace(string(data))
+		rawMessage = strings.TrimSpace(string(data))
 	} else {
-		message = strings.TrimSpace(strings.Join(msgParts, " "))
+		rawMessage = strings.TrimSpace(strings.Join(msgParts, " "))
 	}
 
-	if message == "" {
+	if rawMessage == "" {
 		return fmt.Errorf("message is required (use --file <path> or pass message directly)")
 	}
-	if len(sessionIDs) == 0 {
-		return fmt.Errorf("--sessions is required (e.g. --sessions SESS-001,SESS-002)")
+
+	// If --from is not set, fall back to AOM_AGENT_NAME env (set at spawn time).
+	if fromAgent == "" {
+		fromAgent = strings.TrimSpace(os.Getenv("AOM_AGENT_NAME"))
+	}
+	if fromAgent == "" {
+		fromAgent = "operator"
 	}
 
 	result, err := r.app.Projects.Open(".")
@@ -535,13 +550,37 @@ func (r Runner) executeBroadcast(args []string) error {
 		return err
 	}
 
+	// Write to channel.md for a persistent record visible to all teammates.
+	_ = appendChannelMessage(result.Project.RepoPath, fromAgent, rawMessage, time.Now())
+
 	sessionService, sqlDB, err := r.app.OpenSessionService(result.DBPath)
 	if err != nil {
 		return err
 	}
 	defer sqlDB.Close()
 
-	fmt.Fprintf(r.stdout, "Broadcasting to %d sessions\n\n", len(sessionIDs))
+	// When --sessions is omitted, broadcast to every live session in the project.
+	if len(sessionIDs) == 0 {
+		all, lErr := sessionService.ListByProject(result.Project.ID)
+		if lErr != nil {
+			return fmt.Errorf("list sessions: %w", lErr)
+		}
+		for _, s := range all {
+			if sendableSessionStatus(s.Status) && strings.TrimSpace(s.TmuxPane) != "" {
+				sessionIDs = append(sessionIDs, s.ID)
+			}
+		}
+	}
+
+	if len(sessionIDs) == 0 {
+		fmt.Fprintln(r.stdout, "No live sessions to notify (message written to channel.md).")
+		return nil
+	}
+
+	// Format the notification that will appear in each agent's pane.
+	notification := fmt.Sprintf("[Team] from %s: %s", fromAgent, rawMessage)
+
+	fmt.Fprintf(r.stdout, "Broadcasting to %d session(s)\n\n", len(sessionIDs))
 
 	delivered := 0
 	failed := 0
@@ -552,22 +591,33 @@ func (r Runner) executeBroadcast(args []string) error {
 			failed++
 			continue
 		}
+		// Skip self when --exclude-self or sender matches agent name.
+		if excludeSelf && record.AgentName == fromAgent {
+			fmt.Fprintf(r.stdout, "  %-30s skipped (self)\n", id)
+			continue
+		}
 		if !sendableSessionStatus(record.Status) || strings.TrimSpace(record.TmuxPane) == "" {
 			fmt.Fprintf(r.stdout, "  %-30s no live pane (status: %s)\n", id, record.Status)
 			failed++
 			continue
 		}
-		if err := r.app.Tmux.SendKeys(record.TmuxPane, message); err != nil {
+		alive, _ := r.app.Tmux.PaneExists(record.TmuxPane)
+		if !alive {
+			fmt.Fprintf(r.stdout, "  %-30s pane gone (%s)\n", id, record.AgentName)
+			failed++
+			continue
+		}
+		if err := r.app.Tmux.SendKeys(record.TmuxPane, notification); err != nil {
 			fmt.Fprintf(r.stdout, "  %-30s send failed: %v\n", id, err)
 			failed++
 			continue
 		}
-		fmt.Fprintf(r.stdout, "  %-30s delivered (%s)\n", id, record.AgentName)
+		fmt.Fprintf(r.stdout, "  %-30s delivered → %s\n", id, record.AgentName)
 		delivered++
 	}
 
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Delivered: %d  Failed: %d\n", delivered, failed)
-	fmt.Fprintf(r.stdout, "Message: %s\n", message)
+	fmt.Fprintf(r.stdout, "Message written to channel.md\n")
 	return nil
 }

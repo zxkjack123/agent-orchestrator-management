@@ -225,6 +225,9 @@ func (m *Manager) AnnotatePane(paneID string, metadata map[string]string) error 
 }
 
 // AttachPane selects the pane and attaches the operator to the tmux workspace.
+// When already inside a tmux session ($TMUX is set) it uses switch-client
+// instead of attach-session to avoid the "sessions should be nested with care"
+// error that tmux raises on nested attaches.
 func (m *Manager) AttachPane(sessionTarget, paneID string) error {
 	availability := m.Availability()
 	if !availability.Available {
@@ -240,15 +243,15 @@ func (m *Manager) AttachPane(sessionTarget, paneID string) error {
 		return fmt.Errorf("select tmux pane %q: %w", paneID, err)
 	}
 
-	if err := m.run(
-		availability.BinaryPath,
-		"attach-session",
-		"-t",
-		sessionTarget,
-	); err != nil {
+	if insideTmux() {
+		if err := m.run(availability.BinaryPath, "switch-client", "-t", sessionTarget); err != nil {
+			return fmt.Errorf("switch to tmux session %q: %w", sessionTarget, err)
+		}
+		return nil
+	}
+	if err := m.run(availability.BinaryPath, "attach-session", "-t", sessionTarget); err != nil {
 		return fmt.Errorf("attach to tmux workspace %q: %w", sessionTarget, err)
 	}
-
 	return nil
 }
 
@@ -405,34 +408,76 @@ func (m *Manager) RenameWindow(windowID, name string) error {
 }
 
 // EnsureTeamWindow creates or reuses a named window in the given session.
-// Returns the window ID (e.g. "@3"). If the window already exists it is not
-// recreated; the existing ID is returned via list-windows.
-func (m *Manager) EnsureTeamWindow(sessionTarget, windowName string) (string, error) {
+// Returns a fully-qualified window target "session:@windowID" and the pane ID
+// of the initial blank shell pane created with the window (empty string when
+// the window already existed). Callers that spawn agents into the window should
+// kill the blank pane after all agents are placed so the grid has no empty slot.
+// Automatic-rename is disabled so agent process names cannot clobber the window
+// name and cause subsequent EnsureTeamWindow calls to create duplicate windows.
+func (m *Manager) EnsureTeamWindow(sessionTarget, windowName string) (windowTarget, blankPaneID string, err error) {
 	availability := m.Availability()
 	if !availability.Available {
-		return "", fmt.Errorf("tmux is not available in the current environment")
+		return "", "", fmt.Errorf("tmux is not available in the current environment")
 	}
 	// Check whether a window with this name already exists.
-	out, err := m.exec(availability.BinaryPath, "list-windows", "-t", sessionTarget, "-F", "#{window_id} #{window_name}")
-	if err == nil {
+	out, listErr := m.exec(availability.BinaryPath, "list-windows", "-t", sessionTarget, "-F", "#{window_id} #{window_name}")
+	if listErr == nil {
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			parts := strings.SplitN(strings.TrimSpace(line), " ", 2)
 			if len(parts) == 2 && parts[1] == windowName {
-				return parts[0], nil
+				return sessionTarget + ":" + parts[0], "", nil
 			}
 		}
 	}
-	// Create a new window.
-	out, err = m.exec(availability.BinaryPath, "new-window", "-d", "-P", "-F", "#{window_id}", "-t", sessionTarget, "-n", windowName)
+	// Create a new window; capture both window_id and pane_id so we can return
+	// the initial blank pane ID for the caller to kill after agents are placed.
+	out, err = m.exec(availability.BinaryPath, "new-window", "-d", "-P", "-F", "#{window_id} #{pane_id}", "-t", sessionTarget, "-n", windowName)
 	if err != nil {
-		return "", fmt.Errorf("create team window %q: %w", windowName, err)
+		return "", "", fmt.Errorf("create team window %q: %w", windowName, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("unexpected new-window output %q", string(out))
+	}
+	windowID, blankPane := parts[0], parts[1]
+	qualifiedTarget := sessionTarget + ":" + windowID
+	// Disable automatic-rename so tmux won't replace "team" with the agent
+	// process name (e.g. "claude") when a pane inside the window starts running.
+	_, _ = m.exec(availability.BinaryPath, "set-option", "-wt", qualifiedTarget, "automatic-rename", "off")
+	return qualifiedTarget, blankPane, nil
 }
 
-// CreatePaneInWindow splits a horizontal pane inside an existing window rather
-// than creating a new window. Returns the pane binding of the new pane.
-func (m *Manager) CreatePaneInWindow(windowID, cwd, command string) (*PaneBinding, error) {
+// SetPaneTitle sets a visible title on a tmux pane so operators can identify
+// which agent is running in each grid cell.
+func (m *Manager) SetPaneTitle(paneID, title string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available in the current environment")
+	}
+	if _, err := m.exec(availability.BinaryPath, "select-pane", "-t", paneID, "-T", title); err != nil {
+		return fmt.Errorf("set pane title on %q: %w", paneID, err)
+	}
+	return nil
+}
+
+// FocusPane makes a pane the active pane within its window without attaching.
+func (m *Manager) FocusPane(paneID string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available in the current environment")
+	}
+	if _, err := m.exec(availability.BinaryPath, "select-pane", "-t", paneID); err != nil {
+		return fmt.Errorf("focus pane %q: %w", paneID, err)
+	}
+	return nil
+}
+
+// CreatePaneInWindow splits a pane inside an existing window rather than
+// creating a new window. windowTarget must be a fully-qualified tmux target
+// in "session:@windowID" format (as returned by EnsureTeamWindow) so that the
+// split is always applied to the correct window even when the calling process
+// is attached to a different tmux session.
+func (m *Manager) CreatePaneInWindow(windowTarget, cwd, command string) (*PaneBinding, error) {
 	availability := m.Availability()
 	if !availability.Available {
 		return nil, fmt.Errorf("tmux is not available in the current environment")
@@ -443,43 +488,116 @@ func (m *Manager) CreatePaneInWindow(windowID, cwd, command string) (*PaneBindin
 		"-d",
 		"-P",
 		"-F", "#{window_id} #{pane_id}",
-		"-t", windowID,
+		"-t", windowTarget,
 		"-c", cwd,
 		command,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("split pane in window %q: %w", windowID, err)
+		return nil, fmt.Errorf("split pane in window %q: %w", windowTarget, err)
 	}
 	return parsePaneBindingOutput(out)
 }
 
 // SelectLayout applies a tmux layout to all panes in a window.
+// windowTarget must be a fully-qualified target (e.g. "session:@windowID").
 // layout is one of: tiled, even-horizontal, even-vertical, main-horizontal, main-vertical.
-func (m *Manager) SelectLayout(windowID, layout string) error {
+func (m *Manager) SelectLayout(windowTarget, layout string) error {
 	availability := m.Availability()
 	if !availability.Available {
 		return fmt.Errorf("tmux is not available in the current environment")
 	}
-	if _, err := m.exec(availability.BinaryPath, "select-layout", "-t", windowID, layout); err != nil {
-		return fmt.Errorf("select-layout %q on %q: %w", layout, windowID, err)
+	if _, err := m.exec(availability.BinaryPath, "select-layout", "-t", windowTarget, layout); err != nil {
+		return fmt.Errorf("select-layout %q on %q: %w", layout, windowTarget, err)
 	}
 	return nil
 }
 
 // AttachWindow focuses the given window and attaches the operator to the session.
-// windowID is a tmux window ID (e.g. "@3"); sessionTarget is the session name or target.
-func (m *Manager) AttachWindow(sessionTarget, windowID string) error {
+// windowTarget should be the fully-qualified "session:@windowID" string returned
+// by EnsureTeamWindow; sessionTarget is the session name used for the final
+// attach/switch-client call.
+// When already inside a tmux session ($TMUX is set) it uses switch-client to
+// avoid the nested-attach error.
+func (m *Manager) AttachWindow(sessionTarget, windowTarget string) error {
 	availability := m.Availability()
 	if !availability.Available {
 		return fmt.Errorf("tmux is not available in the current environment")
 	}
-	if _, err := m.exec(availability.BinaryPath, "select-window", "-t", windowID); err != nil {
-		return fmt.Errorf("select window %q: %w", windowID, err)
+	if _, err := m.exec(availability.BinaryPath, "select-window", "-t", windowTarget); err != nil {
+		return fmt.Errorf("select window %q: %w", windowTarget, err)
+	}
+	if insideTmux() {
+		if err := m.run(availability.BinaryPath, "switch-client", "-t", sessionTarget); err != nil {
+			return fmt.Errorf("switch to tmux session %q: %w", sessionTarget, err)
+		}
+		return nil
 	}
 	if err := m.run(availability.BinaryPath, "attach-session", "-t", sessionTarget); err != nil {
 		return fmt.Errorf("attach to tmux session %q: %w", sessionTarget, err)
 	}
 	return nil
+}
+
+// WindowInfo holds the ID and name of a tmux window.
+type WindowInfo struct {
+	ID   string // e.g. "@6"
+	Name string // e.g. "team"
+}
+
+// ListWindowsInSession returns all windows in the given tmux session.
+func (m *Manager) ListWindowsInSession(sessionTarget string) ([]WindowInfo, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return nil, fmt.Errorf("tmux is not available in the current environment")
+	}
+	out, err := m.exec(availability.BinaryPath, "list-windows", "-t", sessionTarget, "-F", "#{window_id} #{window_name}")
+	if err != nil {
+		return nil, fmt.Errorf("list windows in %q: %w", sessionTarget, err)
+	}
+	var windows []WindowInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), " ", 2)
+		if len(parts) == 2 {
+			windows = append(windows, WindowInfo{ID: parts[0], Name: parts[1]})
+		}
+	}
+	return windows, nil
+}
+
+// ListPanesInWindow returns the pane IDs of all panes in the given window target.
+func (m *Manager) ListPanesInWindow(windowTarget string) ([]string, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return nil, fmt.Errorf("tmux is not available in the current environment")
+	}
+	out, err := m.exec(availability.BinaryPath, "list-panes", "-t", windowTarget, "-F", "#{pane_id}")
+	if err != nil {
+		return nil, fmt.Errorf("list panes in %q: %w", windowTarget, err)
+	}
+	var panes []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			panes = append(panes, p)
+		}
+	}
+	return panes, nil
+}
+
+// KillWindow removes a tmux window by its fully-qualified target.
+func (m *Manager) KillWindow(windowTarget string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available in the current environment")
+	}
+	if _, err := m.exec(availability.BinaryPath, "kill-window", "-t", windowTarget); err != nil {
+		return fmt.Errorf("kill window %q: %w", windowTarget, err)
+	}
+	return nil
+}
+
+// insideTmux reports whether the current process is running inside a tmux session.
+func insideTmux() bool {
+	return os.Getenv("TMUX") != ""
 }
 
 // KillPane intentionally removes a pane from the tmux workspace.

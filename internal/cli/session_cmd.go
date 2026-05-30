@@ -326,7 +326,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		if layout == "" {
 			layout = "tiled"
 		}
-		teamWindowID, wErr := r.app.Tmux.EnsureTeamWindow(workspace.Target, teamWindowName)
+		teamWindowID, blankPane, wErr := r.app.Tmux.EnsureTeamWindow(workspace.Target, teamWindowName)
 		if wErr != nil {
 			return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "ensure team window failed", wErr)
 		}
@@ -334,6 +334,13 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		if err != nil {
 			return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "pane creation in team window failed", err)
 		}
+		// Kill the blank initial pane that new-window created so the grid has no
+		// empty slot. Only safe after at least one agent pane exists.
+		if blankPane != "" {
+			_ = r.app.Tmux.KillPane(blankPane)
+		}
+		// Label the pane so the operator knows which agent is in each grid cell.
+		_ = r.app.Tmux.SetPaneTitle(paneBinding.PaneID, agentRecord.Name)
 		_ = r.app.Tmux.SelectLayout(teamWindowID, layout)
 	} else {
 		paneBinding, err = r.app.Tmux.CreatePane(workspace.Target, executionPath, launchCommand)
@@ -370,8 +377,12 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 
 	record.Status = "Idle"
 
-	// Label the window with the agent name so operators can identify sessions at a glance.
-	_ = r.app.Tmux.RenameWindow(paneBinding.WindowID, agentRecord.Name)
+	// In grid mode the pane lives inside the shared "team" window — don't rename
+	// it or EnsureTeamWindow will fail to find the window on the next spawn.
+	// In normal mode, label the window with the agent name for easy identification.
+	if !params.gridMode {
+		_ = r.app.Tmux.RenameWindow(paneBinding.WindowID, agentRecord.Name)
+	}
 
 	record, err = sessionService.Save(*record)
 	if err != nil {

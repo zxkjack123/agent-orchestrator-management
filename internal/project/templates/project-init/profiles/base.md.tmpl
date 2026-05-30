@@ -137,14 +137,20 @@ profile is used as the default fallback.
 ## Team Communication
 
 Call AOM commands from your worktree shell to coordinate with teammates:
-- Broadcast to team channel:         aom channel append "your message"
-- Direct message a teammate:         aom message send <agent-name> "your message"
-- Check your inbox:                  aom message read <your-agent-name>
-- Read a file from another worktree: aom worktree read-file <task-id> <relative-path>
+- Broadcast to ALL teammates (push):  aom broadcast --from {{.AgentName}} --exclude-self "<message>"
+- Append to channel log only (pull):  aom channel append --agent {{.AgentName}} "<message>"
+- Direct message a teammate:          aom message send <agent-name> "<message>"
+- Check your inbox:                   aom message read {{.AgentName}}
+- Read a file from another worktree:  aom worktree read-file <task-id> <relative-path>
+
+IMPORTANT: Use `aom broadcast` (not channel append) when you need teammates to see the
+message immediately. `broadcast` sends the message directly to each agent's pane via
+tmux AND writes it to the persistent channel log.
 
 NOTE: If your runtime sandbox restricts writes outside your worktree, "channel append"
 and "message send" will stage to .agent/outbox.md instead. The operator runs
 "aom outbox flush" to publish them. Seeing "Message staged to outbox" is expected.
+In sandboxed mode, use "aom broadcast" which can still deliver via tmux.
 
 ### When the user asks you to contact a teammate
 1. Find their name if you don't know it:
@@ -156,13 +162,12 @@ and "message send" will stage to .agent/outbox.md instead. The operator runs
 4. When the reply arrives, relay it to the user.
 
 ### When the user asks you to tell the whole team
-   aom broadcast "<message>"
-   aom channel append "{{.AgentName}}: <message>"
+   aom broadcast --from {{.AgentName}} --exclude-self "<message>"
 
 ### When the user gives you feedback to share with the team
 1. Summarize the feedback in 1–2 sentences.
 2. Broadcast it:
-     aom broadcast "Feedback from operator via {{.AgentName}}: <summary>"
+     aom broadcast --from {{.AgentName}} --exclude-self "Feedback from operator: <summary>"
 3. If feedback targets a specific teammate, also send a direct message:
      aom message send <agent-name> "<detailed feedback>"
 
