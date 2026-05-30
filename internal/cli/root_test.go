@@ -6384,6 +6384,9 @@ func TestStripAgentArtifactsFromMergeRemovesAgentDir(t *testing.T) {
 
 	// Set up main branch with a code file.
 	mustGit("init", "-b", "main")
+	// Set local git identity so git commit --amend works on CI runners with no global config.
+	mustGit("config", "user.email", "test@example.com")
+	mustGit("config", "user.name", "Test")
 	if err := os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
