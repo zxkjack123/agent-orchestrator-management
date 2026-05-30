@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/app"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/events"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
 	aomruntime "github.com/lattapon-aek/agent-orchestrator-management/internal/runtime"
 )
@@ -18,6 +19,7 @@ var newRegistry = func() provider.Registry { return provider.DefaultRegistry() }
 // Runner executes top-level CLI behavior.
 type Runner struct {
 	app      *app.App
+	bus      *events.Bus
 	stdin    io.Reader
 	stdout   io.Writer
 	stderr   io.Writer
@@ -27,8 +29,11 @@ type Runner struct {
 
 // Execute runs the AOM CLI using the provided arguments and streams.
 func Execute(args []string, stdout, stderr io.Writer) error {
+	bus := &events.Bus{}
+	bus.SubscribeAsync(hookRunnerSubscriber())
 	r := Runner{
 		app:      newApp(),
+		bus:      bus,
 		stdin:    os.Stdin,
 		stdout:   stdout,
 		stderr:   stderr,
@@ -193,6 +198,12 @@ func (r Runner) executeTask(args []string) error {
 		return r.executeTaskVerify(args[1:])
 	case "signal":
 		return r.executeTaskSignal(args[1:])
+	case "propose-plan":
+		return r.executeTaskProposePlan(args[1:])
+	case "plan-approve":
+		return r.executeTaskPlanApprove(args[1:])
+	case "plan-reject":
+		return r.executeTaskPlanReject(args[1:])
 	default:
 		return fmt.Errorf("unknown task command %q", strings.Join(args, " "))
 	}

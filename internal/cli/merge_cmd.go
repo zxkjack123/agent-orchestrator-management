@@ -115,6 +115,49 @@ func resolveAgentArtifactConflicts(repoPath string) (bool, error) {
 	return true, nil
 }
 
+// stripAgentArtifactsFromMerge removes .agent/ and .aom/ files that the agent branch
+// introduced into the target branch via the merge commit. These directories are
+// AOM-internal bookkeeping that must never live on a shared branch like main.
+//
+// Strategy: after a successful merge, diff ORIG_HEAD..HEAD for those paths.
+// If any changed, remove them from the index, restore what ORIG_HEAD had (if anything),
+// and amend the merge commit. This is idempotent — if nothing changed, returns nil.
+func stripAgentArtifactsFromMerge(repoPath string) error {
+	diffOut, err := exec.Command("git", "-C", repoPath,
+		"diff", "--name-only", "ORIG_HEAD", "HEAD", "--", ".agent/", ".aom/").Output()
+	if err != nil || strings.TrimSpace(string(diffOut)) == "" {
+		return nil // no agent artifacts leaked into the merge — nothing to do
+	}
+
+	// Remove .agent/ and .aom/ from the index entirely.
+	if o, err := exec.Command("git", "-C", repoPath,
+		"rm", "--cached", "-r", "--ignore-unmatch", ".agent/", ".aom/").CombinedOutput(); err != nil {
+		return fmt.Errorf("strip .agent/ from merge: rm --cached: %s", strings.TrimSpace(string(o)))
+	}
+
+	// Restore any .agent/ and .aom/ files that existed on the target branch (ORIG_HEAD).
+	// ls-tree returns nothing if ORIG_HEAD had no such files — that is the common case.
+	origFilesOut, _ := exec.Command("git", "-C", repoPath,
+		"ls-tree", "-r", "--name-only", "ORIG_HEAD", "--", ".agent/", ".aom/").Output()
+	if origFiles := strings.Fields(string(origFilesOut)); len(origFiles) > 0 {
+		checkoutArgs := append([]string{"-C", repoPath, "checkout", "ORIG_HEAD", "--"}, origFiles...)
+		if o, err := exec.Command("git", checkoutArgs...).CombinedOutput(); err != nil {
+			return fmt.Errorf("strip .agent/ from merge: restore ORIG_HEAD: %s", strings.TrimSpace(string(o)))
+		}
+		addArgs := append([]string{"-C", repoPath, "add", "--"}, origFiles...)
+		if o, err := exec.Command("git", addArgs...).CombinedOutput(); err != nil {
+			return fmt.Errorf("strip .agent/ from merge: re-add: %s", strings.TrimSpace(string(o)))
+		}
+	}
+
+	// Amend the merge commit to exclude the agent artifacts.
+	if o, err := exec.Command("git", "-C", repoPath,
+		"commit", "--amend", "--no-edit").CombinedOutput(); err != nil {
+		return fmt.Errorf("strip .agent/ from merge: amend: %s", strings.TrimSpace(string(o)))
+	}
+	return nil
+}
+
 // resolveAddAddConflicts resolves add/add conflicts using the source branch version
 // ("theirs"). Used when --prefer-branch is set: skeleton files added independently
 // in both branches are resolved by keeping the source branch's copy.
@@ -579,6 +622,13 @@ func (r Runner) executeMergeCommit(args []string) error {
 			)
 		}
 		out, _ = exec.Command("git", "-C", result.Project.RepoPath, "log", "--oneline", "-1").Output()
+	}
+
+	// Remove any .agent/ and .aom/ files that leaked into the target branch via the merge.
+	// Agent artifacts must never live on a shared branch like main — they are bookkeeping
+	// for AOM's own state and would pollute the codebase history for other contributors.
+	if stripErr := stripAgentArtifactsFromMerge(result.Project.RepoPath); stripErr != nil {
+		fmt.Fprintf(r.stderr, "warning: could not strip .agent/ from merge commit: %v\n", stripErr)
 	}
 
 	stepService, stepDB, err := r.app.OpenStepService(result.DBPath)

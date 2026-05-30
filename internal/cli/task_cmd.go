@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/agent"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/events"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/step"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/task"
@@ -143,6 +146,11 @@ func (r Runner) executeTaskCreate(args []string) error {
 	}, true); err != nil {
 		return err
 	}
+
+	_ = r.bus.Emit(events.Event{
+		Type: events.TaskCreated, RepoPath: result.Project.RepoPath,
+		TaskID: createResult.Task.ID, Title: createResult.Task.Title, Status: createResult.Task.Status,
+	})
 
 	_ = r.refreshProjectBoard(result)
 
@@ -372,15 +380,32 @@ type taskUpdateParams struct {
 }
 
 func (r Runner) executeTaskClose(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("task identifier is required")
+	var taskID string
+	operatorOverride := false
+	for _, arg := range args {
+		switch arg {
+		case "--operator":
+			operatorOverride = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown flag %q", arg)
+			}
+			if taskID != "" {
+				return fmt.Errorf("task close accepts exactly one task identifier")
+			}
+			taskID = strings.TrimSpace(arg)
+		}
 	}
-	if len(args) > 1 {
-		return fmt.Errorf("task close does not accept extra positional arguments in the current milestone")
+	if taskID == "" {
+		return fmt.Errorf("task identifier is required")
 	}
 
 	result, err := r.app.Projects.Open(".")
 	if err != nil {
+		return err
+	}
+
+	if err := checkTaskCloseGate(resolvedActor(), operatorOverride, result.Agents, result.RoleConfigs); err != nil {
 		return err
 	}
 
@@ -389,8 +414,6 @@ func (r Runner) executeTaskClose(args []string) error {
 		return err
 	}
 	defer sqlDB.Close()
-
-	taskID := strings.TrimSpace(args[0])
 
 	// Check current task status before attempting close so we can give an actionable error.
 	current, err := taskService.Get(taskID)
@@ -506,16 +529,20 @@ func (r Runner) executeTaskClose(args []string) error {
 		return err
 	}
 
+	actor := resolvedActor()
 	if err := r.syncTaskArtifacts(result, record.ID, artifact.Event{
 		Type:        "task.closed",
-		Actor:       "operator",
-		Summary:     "Task closed explicitly by operator",
+		Actor:       actor,
+		Summary:     fmt.Sprintf("Task closed by %s", actor),
 		StateEffect: fmt.Sprintf("Task %s", record.Status),
 	}, false); err != nil {
 		return err
 	}
 
-	go runHook(result.Project.RepoPath, "on-task-done", record.ID, record.Title, record.Status)
+	_ = r.bus.Emit(events.Event{
+		Type: events.TaskDone, RepoPath: result.Project.RepoPath,
+		TaskID: record.ID, Title: record.Title, Status: record.Status,
+	})
 
 	// Emit task.unblocked events for any dependents whose blockers are all Done.
 	dependents, depErr := taskService.Unblocks(taskID)
@@ -564,6 +591,7 @@ func (r Runner) executeTaskAccept(args []string) error {
 	var taskID string
 	force := false
 	autoMode := false
+	operatorOverride := false
 	autoInterval := 15 * time.Second
 	autoTimeout := 30 * time.Minute
 
@@ -571,6 +599,8 @@ func (r Runner) executeTaskAccept(args []string) error {
 		switch args[i] {
 		case "--force":
 			force = true
+		case "--operator":
+			operatorOverride = true
 		case "--auto":
 			autoMode = true
 		case "--interval":
@@ -609,6 +639,10 @@ func (r Runner) executeTaskAccept(args []string) error {
 
 	result, err := r.app.Projects.Open(".")
 	if err != nil {
+		return err
+	}
+
+	if err := checkTaskCloseGate(resolvedActor(), operatorOverride, result.Agents, result.RoleConfigs); err != nil {
 		return err
 	}
 
@@ -750,16 +784,20 @@ func (r Runner) executeTaskAccept(args []string) error {
 		taskRecord = current
 	}
 
+	acceptActor := resolvedActor()
 	if err := r.syncTaskArtifacts(result, taskID, artifact.Event{
 		Type:        "task.closed",
-		Actor:       "operator",
-		Summary:     fmt.Sprintf("Task accepted: %d step(s) completed, task closed", len(completedStepIDs)),
+		Actor:       acceptActor,
+		Summary:     fmt.Sprintf("Task accepted by %s: %d step(s) completed, task closed", acceptActor, len(completedStepIDs)),
 		StateEffect: fmt.Sprintf("Task %s", taskRecord.Status),
 	}, false); err != nil {
 		return err
 	}
 
-	go runHook(result.Project.RepoPath, "on-task-done", taskRecord.ID, taskRecord.Title, taskRecord.Status)
+	_ = r.bus.Emit(events.Event{
+		Type: events.TaskDone, RepoPath: result.Project.RepoPath,
+		TaskID: taskRecord.ID, Title: taskRecord.Title, Status: taskRecord.Status,
+	})
 
 	_ = r.refreshProjectBoard(result)
 
@@ -888,7 +926,10 @@ func (r Runner) executeTaskReady(args []string) error {
 		return err
 	}
 
-	go runHook(result.Project.RepoPath, "on-task-ready", taskRecord.ID, taskRecord.Title, taskRecord.Status)
+	_ = r.bus.Emit(events.Event{
+		Type: events.TaskReady, RepoPath: result.Project.RepoPath,
+		TaskID: taskRecord.ID, Title: taskRecord.Title, Status: taskRecord.Status,
+	})
 
 	_ = r.refreshProjectBoard(result)
 
@@ -1436,6 +1477,11 @@ func (r Runner) executeTaskRecordResult(args []string) error {
 			if _, err := taskService.Update(taskID, task.UpdateParams{Status: "NeedsAttention"}); err != nil {
 				// Non-fatal: log event already appended.
 				fmt.Fprintf(r.stderr, "warning: could not transition task to NeedsAttention: %v\n", err)
+			} else {
+				_ = r.bus.Emit(events.Event{
+					Type: events.TaskNeedsAttention, RepoPath: result.Project.RepoPath,
+					TaskID: taskID, Status: "NeedsAttention",
+				})
 			}
 		}
 	}
@@ -1673,10 +1719,26 @@ func (r Runner) runTaskVerifyChecks(result *project.OpenResult, view *taskView) 
 		workspacePath = strings.TrimSpace(agentRecord.WorkspacePath)
 	}
 
+	// Resolve role class to apply per-role check policy.
+	// Prefer agent-record role (most accurate); fall back to task.PreferredRole.
+	roleClass := ""
+	if agentRecord != nil {
+		if rc, ok := result.RoleConfigs[agentRecord.Role]; ok {
+			roleClass = rc.Class
+		}
+	}
+	if roleClass == "" && view.Task.PreferredRole != "" {
+		if rc, ok := result.RoleConfigs[view.Task.PreferredRole]; ok {
+			roleClass = rc.Class
+		}
+	}
+	isReviewer := strings.EqualFold(roleClass, "reviewer")
+
 	// Check 1: commits on branch ahead of default branch.
+	// Reviewers skip this — they deliver via review-notes.md, not git commits.
 	// Traditional agents: check per-task worktree branch.
 	// Workspace agents:   check agents/<name> permanent branch.
-	if view.Worktree != nil {
+	if !isReviewer && view.Worktree != nil {
 		branch := view.Worktree.BranchName
 		defaultBranch := result.Project.DefaultBranch
 		commitsOut, commitsErr := exec.Command("git", "-C", result.Project.RepoPath,
@@ -1687,7 +1749,7 @@ func (r Runner) runTaskVerifyChecks(result *project.OpenResult, view *taskView) 
 			note = fmt.Sprintf("no commits on %q ahead of %q", branch, defaultBranch)
 		}
 		checks = append(checks, verifyCheck{"commits on branch", hasCommits, note})
-	} else if workspacePath != "" && strings.TrimSpace(view.Task.PreferredAgent) != "" {
+	} else if !isReviewer && workspacePath != "" && strings.TrimSpace(view.Task.PreferredAgent) != "" {
 		branch := "agents/" + strings.TrimSpace(view.Task.PreferredAgent)
 		taskID := view.Task.ID
 		defaultBranch := result.Project.DefaultBranch
@@ -1743,54 +1805,67 @@ func (r Runner) runTaskVerifyChecks(result *project.OpenResult, view *taskView) 
 	}
 	checks = append(checks, verifyCheck{"state.md updated", stateOK, stateNote})
 
-	// Check 3: handoff.md is present, non-trivial, and not template placeholder text.
-	// For workspace agents also accept the workspace copy (.agent/handoff.md inside
-	// the worktree) as a fallback when the task artifact still has template text.
-	// Agents that write to their workspace .agent/handoff.md produce valid content
-	// there; this fallback mirrors the state.md and log.md patterns above.
-	handoffDataOK := func(data []byte) bool {
-		if len(strings.TrimSpace(string(data))) <= 80 {
-			return false
+	// Check 3: handoff vs review-notes — depends on role class.
+	// Reviewer: check that review-notes.md exists and has no unresolved items.
+	// All other roles: check that handoff.md is present, non-trivial, and template-free.
+	if isReviewer {
+		reviewNotesPath := filepath.Join(artifactRoot, "review-notes.md")
+		unresolved := artifact.CountUnresolvedReviewItems(reviewNotesPath)
+		reviewNotesNote := ""
+		var reviewNotesOK bool
+		if _, err := os.Stat(reviewNotesPath); os.IsNotExist(err) {
+			reviewNotesNote = "review-notes.md not found — run \"aom review start\" to create it"
+		} else if unresolved > 0 {
+			reviewNotesNote = fmt.Sprintf("%d unresolved review item(s) in review-notes.md", unresolved)
+		} else {
+			reviewNotesOK = true
 		}
-		for _, s := range handoffTemplateSentinels {
-			if strings.Contains(string(data), s) {
+		checks = append(checks, verifyCheck{"review-notes.md resolved", reviewNotesOK, reviewNotesNote})
+	} else {
+		// For workspace agents also accept the workspace copy (.agent/handoff.md inside
+		// the worktree) as a fallback when the task artifact still has template text.
+		handoffDataOK := func(data []byte) bool {
+			if len(strings.TrimSpace(string(data))) <= 80 {
 				return false
 			}
-		}
-		return true
-	}
-	handoffData, handoffErr := os.ReadFile(filepath.Join(artifactRoot, "handoff.md"))
-	handoffOK := handoffErr == nil && handoffDataOK(handoffData)
-	handoffNote := ""
-	if !handoffOK {
-		// Fallback: workspace agents write .agent/handoff.md inside their worktree.
-		// Accept that copy when the task artifact is missing or still template text.
-		if workspacePath != "" {
-			wsHandoffData, wsErr := os.ReadFile(filepath.Join(workspacePath, ".agent", "handoff.md"))
-			if wsErr == nil && handoffDataOK(wsHandoffData) {
-				handoffOK = true
-			}
-		}
-	}
-	if !handoffOK {
-		if handoffErr != nil {
-			handoffNote = "handoff.md not found"
-		} else {
-			hasTemplate := false
 			for _, s := range handoffTemplateSentinels {
-				if strings.Contains(string(handoffData), s) {
-					hasTemplate = true
-					break
+				if strings.Contains(string(data), s) {
+					return false
 				}
 			}
-			if hasTemplate {
-				handoffNote = "handoff.md still contains template placeholder text — update it before signaling completion"
-			} else {
-				handoffNote = "handoff.md appears empty or too sparse"
+			return true
+		}
+		handoffData, handoffErr := os.ReadFile(filepath.Join(artifactRoot, "handoff.md"))
+		handoffOK := handoffErr == nil && handoffDataOK(handoffData)
+		handoffNote := ""
+		if !handoffOK {
+			if workspacePath != "" {
+				wsHandoffData, wsErr := os.ReadFile(filepath.Join(workspacePath, ".agent", "handoff.md"))
+				if wsErr == nil && handoffDataOK(wsHandoffData) {
+					handoffOK = true
+				}
 			}
 		}
+		if !handoffOK {
+			if handoffErr != nil {
+				handoffNote = "handoff.md not found"
+			} else {
+				hasTemplate := false
+				for _, s := range handoffTemplateSentinels {
+					if strings.Contains(string(handoffData), s) {
+						hasTemplate = true
+						break
+					}
+				}
+				if hasTemplate {
+					handoffNote = "handoff.md still contains template placeholder text — update it before signaling completion"
+				} else {
+					handoffNote = "handoff.md appears empty or too sparse"
+				}
+			}
+		}
+		checks = append(checks, verifyCheck{"handoff.md filled", handoffOK, handoffNote})
 	}
-	checks = append(checks, verifyCheck{"handoff.md filled", handoffOK, handoffNote})
 
 	// Check 4: task.completed event in log.md.
 	// For workspace agents also accept the event from workspace/.agent/log.md since that
@@ -2254,6 +2329,39 @@ func invariantsPath(repoPath, stateDir, taskID string) string {
 	return filepath.Join(repoPath, ".aom", stateDir, taskID, "invariants.txt")
 }
 
+// resolvedActor returns the AOM_ACTOR env var when set (injected by session spawn),
+// or "operator" when the command is run directly by a human with no actor context.
+func resolvedActor() string {
+	if actor := strings.TrimSpace(os.Getenv("AOM_ACTOR")); actor != "" {
+		return actor
+	}
+	return "operator"
+}
+
+// checkTaskCloseGate returns an error when a non-orchestrator agent tries to
+// close or accept a task.  It is a guard against accidental governance bypass —
+// not a hard security boundary — so unknown actors are allowed through.
+// Pass operatorOverride=true (--operator flag) to bypass the gate explicitly.
+func checkTaskCloseGate(actor string, operatorOverride bool, agents []agent.Record, roleConfigs map[string]config.RoleConfig) error {
+	if actor == "operator" || operatorOverride {
+		return nil
+	}
+	rec := findAgentByName(agents, actor)
+	if rec == nil {
+		return nil // unknown actor — allow; gate only blocks known non-orchestrator agents
+	}
+	roleCfg, ok := roleConfigs[rec.Role]
+	if !ok || strings.EqualFold(roleCfg.Class, "orchestrator") {
+		return nil
+	}
+	return fmt.Errorf(
+		"agent %q (role %q, class %q) may not close or accept tasks — "+
+			"only an operator or orchestrator agent may do this.\n"+
+			"If the work is complete, signal it with: aom task signal task.completed --task <id>",
+		actor, rec.Role, roleCfg.Class,
+	)
+}
+
 // loadTaskInvariants reads the invariants file for a task. Returns nil if not found.
 func loadTaskInvariants(result *project.OpenResult, taskID string) []string {
 	data, err := os.ReadFile(invariantsPath(result.Project.RepoPath, result.StateDir, taskID))
@@ -2268,4 +2376,256 @@ func loadTaskInvariants(result *project.OpenResult, taskID string) []string {
 		}
 	}
 	return invs
+}
+
+// executeTaskProposePlan transitions a task to PendingApproval so an operator or
+// orchestrator can review and approve the agent's plan before work begins.
+// Usage: aom task propose-plan <task-id> --summary <text>
+func (r Runner) executeTaskProposePlan(args []string) error {
+	var taskID, summary string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--summary":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--summary requires a value")
+			}
+			summary = strings.TrimSpace(args[i])
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return fmt.Errorf("unknown flag %q", args[i])
+			}
+			if taskID != "" {
+				return fmt.Errorf("propose-plan accepts exactly one task identifier")
+			}
+			taskID = strings.TrimSpace(args[i])
+		}
+	}
+	if taskID == "" {
+		return fmt.Errorf("task identifier is required")
+	}
+	if summary == "" {
+		return fmt.Errorf("--summary is required")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	record, err := taskService.Get(taskID)
+	if err != nil {
+		return err
+	}
+
+	actor := resolvedActor()
+	updated, err := taskService.Update(record.ID, task.UpdateParams{Status: "PendingApproval"})
+	if err != nil {
+		return fmt.Errorf("propose plan: %w", err)
+	}
+
+	artifactSummary := fmt.Sprintf("Plan proposed by %s: %s", actor, summary)
+	_ = r.syncTaskArtifacts(result, updated.ID, artifact.Event{
+		Type:        "plan.proposed",
+		Actor:       actor,
+		Summary:     artifactSummary,
+		StateEffect: "Task PendingApproval",
+	}, false)
+
+	_ = r.bus.Emit(events.Event{
+		Type: events.TaskPlanProposed, RepoPath: result.Project.RepoPath,
+		TaskID: updated.ID, Title: updated.Title, Status: updated.Status,
+	})
+
+	fmt.Fprintln(r.stdout, "Plan proposed")
+	fmt.Fprintf(r.stdout, "Task:    %s\n", updated.ID)
+	fmt.Fprintf(r.stdout, "Status:  %s\n", updated.Status)
+	fmt.Fprintf(r.stdout, "Summary: %s\n", summary)
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "To approve: aom task plan-approve %s\n", updated.ID)
+	fmt.Fprintf(r.stdout, "To reject:  aom task plan-reject %s --reason <text>\n", updated.ID)
+	return nil
+}
+
+// executeTaskPlanApprove transitions a PendingApproval task to Ready, unblocking the worker.
+// Only an operator or orchestrator-class agent may approve.
+// Usage: aom task plan-approve <task-id> [--operator]
+func (r Runner) executeTaskPlanApprove(args []string) error {
+	var taskID string
+	operatorOverride := false
+	for _, arg := range args {
+		switch arg {
+		case "--operator":
+			operatorOverride = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown flag %q", arg)
+			}
+			if taskID != "" {
+				return fmt.Errorf("plan-approve accepts exactly one task identifier")
+			}
+			taskID = strings.TrimSpace(arg)
+		}
+	}
+	if taskID == "" {
+		return fmt.Errorf("task identifier is required")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	if err := checkPlanApprovalGate(resolvedActor(), operatorOverride, result.Agents, result.RoleConfigs); err != nil {
+		return err
+	}
+
+	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	record, err := taskService.Get(taskID)
+	if err != nil {
+		return err
+	}
+	if record.Status != "PendingApproval" {
+		return fmt.Errorf("task %q is not pending approval (status: %s)", record.ID, record.Status)
+	}
+
+	actor := resolvedActor()
+	updated, err := taskService.Update(record.ID, task.UpdateParams{Status: "Ready"})
+	if err != nil {
+		return fmt.Errorf("plan-approve: %w", err)
+	}
+
+	_ = r.syncTaskArtifacts(result, updated.ID, artifact.Event{
+		Type:        "plan.approved",
+		Actor:       actor,
+		Summary:     fmt.Sprintf("Plan approved by %s — task is Ready", actor),
+		StateEffect: "Task Ready",
+	}, false)
+
+	_ = r.bus.Emit(events.Event{
+		Type: events.TaskPlanApproved, RepoPath: result.Project.RepoPath,
+		TaskID: updated.ID, Title: updated.Title, Status: updated.Status,
+	})
+
+	fmt.Fprintln(r.stdout, "Plan approved")
+	fmt.Fprintf(r.stdout, "Task:   %s\n", updated.ID)
+	fmt.Fprintf(r.stdout, "Status: %s\n", updated.Status)
+	return nil
+}
+
+// executeTaskPlanReject transitions a PendingApproval task to Blocked with an optional reason.
+// Only an operator or orchestrator-class agent may reject.
+// Usage: aom task plan-reject <task-id> [--reason <text>] [--operator]
+func (r Runner) executeTaskPlanReject(args []string) error {
+	var taskID, reason string
+	operatorOverride := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--operator":
+			operatorOverride = true
+		case "--reason":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--reason requires a value")
+			}
+			reason = strings.TrimSpace(args[i])
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				return fmt.Errorf("unknown flag %q", args[i])
+			}
+			if taskID != "" {
+				return fmt.Errorf("plan-reject accepts exactly one task identifier")
+			}
+			taskID = strings.TrimSpace(args[i])
+		}
+	}
+	if taskID == "" {
+		return fmt.Errorf("task identifier is required")
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	if err := checkPlanApprovalGate(resolvedActor(), operatorOverride, result.Agents, result.RoleConfigs); err != nil {
+		return err
+	}
+
+	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	record, err := taskService.Get(taskID)
+	if err != nil {
+		return err
+	}
+	if record.Status != "PendingApproval" {
+		return fmt.Errorf("task %q is not pending approval (status: %s)", record.ID, record.Status)
+	}
+
+	actor := resolvedActor()
+	updated, err := taskService.Update(record.ID, task.UpdateParams{Status: "Blocked"})
+	if err != nil {
+		return fmt.Errorf("plan-reject: %w", err)
+	}
+
+	artifactSummary := fmt.Sprintf("Plan rejected by %s", actor)
+	if reason != "" {
+		artifactSummary += ": " + reason
+	}
+	_ = r.syncTaskArtifacts(result, updated.ID, artifact.Event{
+		Type:        "plan.rejected",
+		Actor:       actor,
+		Summary:     artifactSummary,
+		StateEffect: "Task Blocked",
+	}, false)
+
+	_ = r.bus.Emit(events.Event{
+		Type: events.TaskPlanRejected, RepoPath: result.Project.RepoPath,
+		TaskID: updated.ID, Title: updated.Title, Status: updated.Status,
+	})
+
+	fmt.Fprintln(r.stdout, "Plan rejected")
+	fmt.Fprintf(r.stdout, "Task:   %s\n", updated.ID)
+	fmt.Fprintf(r.stdout, "Status: %s\n", updated.Status)
+	if reason != "" {
+		fmt.Fprintf(r.stdout, "Reason: %s\n", reason)
+	}
+	return nil
+}
+
+// checkPlanApprovalGate returns an error when a non-orchestrator worker tries to
+// approve or reject a plan. Same governance model as checkTaskCloseGate.
+func checkPlanApprovalGate(actor string, operatorOverride bool, agents []agent.Record, roleConfigs map[string]config.RoleConfig) error {
+	if actor == "operator" || operatorOverride {
+		return nil
+	}
+	rec := findAgentByName(agents, actor)
+	if rec == nil {
+		return nil // unknown actor — allow through
+	}
+	roleCfg, ok := roleConfigs[rec.Role]
+	if !ok || strings.EqualFold(roleCfg.Class, "orchestrator") {
+		return nil
+	}
+	return fmt.Errorf(
+		"agent %q (role %q, class %q) may not approve or reject plans — "+
+			"only an operator or orchestrator agent may do this.\n"+
+			"Use --operator to override if running as a human.",
+		actor, rec.Role, roleCfg.Class,
+	)
 }

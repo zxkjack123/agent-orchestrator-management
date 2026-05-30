@@ -6,18 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Skills
 
-The following skills are available in `.claude/skills/`. When the user types the trigger, invoke the Skill tool immediately before doing anything else.
+The following skills are installed via `skills-lock.json`. When the user types the trigger, invoke the Skill tool immediately before doing anything else.
 
-- **task-intake** (`.claude/skills/task-intake/SKILL.md`) — Convert vague or underspecified requests into a clear execution brief. Trigger: `/task-intake`
-  When the user types `/task-intake`, invoke the Skill tool with `skill: "task-intake"` before doing anything else.
+- **software-engineering-core** — One evidence-first workflow covering clarification, planning, debugging, and implementation. Use for most engineering work. Trigger: `/software-engineering-core`
+  When the user types `/software-engineering-core`, invoke the Skill tool with `skill: "software-engineering-core"` before doing anything else.
 
-- **change-implementation** (`.claude/skills/change-implementation/SKILL.md`) — Implement repository changes with an evidence-first, scope-first workflow. Trigger: `/change-implementation`
-  When the user types `/change-implementation`, invoke the Skill tool with `skill: "change-implementation"` before doing anything else.
-
-- **root-cause-debugging** (`.claude/skills/root-cause-debugging/SKILL.md`) — Investigate software defects with an evidence-first, root-cause-driven workflow. Trigger: `/root-cause-debugging`
-  When the user types `/root-cause-debugging`, invoke the Skill tool with `skill: "root-cause-debugging"` before doing anything else.
-
-- **change-review** (`.claude/skills/change-review/SKILL.md`) — Review repository changes with an evidence-first, impact-aware workflow. Trigger: `/change-review`
+- **change-review** — Review repository changes with an evidence-first, impact-aware workflow. Use after implementation is complete. Trigger: `/change-review`
   When the user types `/change-review`, invoke the Skill tool with `skill: "change-review"` before doing anything else.
 
 ---
@@ -34,8 +28,13 @@ read the relevant documentation before advising or implementing any area.
 ## Commands
 
 ```bash
-# Build
-go build -o aom cmd/aom/main.go
+# Build (embeds version metadata — bare go build leaves Version=dev/Commit=unknown)
+VERSION=$(git describe --tags --match 'v[0-9]*' --dirty --always --abbrev=8 2>/dev/null || echo dev)
+COMMIT=$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+PKG=github.com/lattapon-aek/agent-orchestrator-management/internal/cli
+go build \
+  -ldflags "-X $PKG.Version=$VERSION -X $PKG.Commit=$COMMIT -X $PKG.BuiltAt=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X $PKG.GoVersion=$(go env GOVERSION)" \
+  -o aom cmd/aom/main.go
 
 # Run
 go run cmd/aom/main.go <command>

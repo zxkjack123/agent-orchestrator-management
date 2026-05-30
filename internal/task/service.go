@@ -391,6 +391,8 @@ func normalizeTaskStatus(input string) (string, error) {
 		return "Blocked", nil
 	case "needsattention", "needs-attention":
 		return "NeedsAttention", nil
+	case "pendingapproval", "pending-approval":
+		return "PendingApproval", nil
 	case "done":
 		return "Done", nil
 	case "archived":
@@ -411,19 +413,22 @@ func validateTaskTransition(current, next string) error {
 			"Archived": true,
 		},
 		"Planned": {
-			"Ready":          true,
-			"NeedsAttention": true,
-			"Archived":       true,
+			"Ready":           true,
+			"NeedsAttention":  true,
+			"PendingApproval": true,
+			"Archived":        true,
 		},
 		"Ready": {
-			"InProgress": true,
-			"Archived":   true,
+			"InProgress":      true,
+			"PendingApproval": true,
+			"Archived":        true,
 		},
 		"InProgress": {
-			"Blocked":        true,
-			"NeedsAttention": true,
-			"Ready":          true,
-			"Done":           true,
+			"Blocked":         true,
+			"NeedsAttention":  true,
+			"Ready":           true,
+			"PendingApproval": true,
+			"Done":            true,
 		},
 		"Blocked": {
 			"Ready":          true,
@@ -434,6 +439,10 @@ func validateTaskTransition(current, next string) error {
 			"Ready":      true,
 			"InProgress": true,
 			"Done":       true,
+		},
+		"PendingApproval": {
+			"Ready":   true,
+			"Blocked": true,
 		},
 		"Done": {
 			"Archived": true,

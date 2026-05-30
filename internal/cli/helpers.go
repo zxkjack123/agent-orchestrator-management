@@ -532,6 +532,11 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 		}
 		fmt.Fprintf(r.stdout, "  - %s | role=%s | runtime=%s | enabled=%t%s\n", agent.Name, agent.Role, agent.Runtime, agent.Enabled, modelSuffix)
 	}
+	sessionTaskStatusMap := map[string]string{}
+	for _, tv := range taskViews {
+		sessionTaskStatusMap[tv.Task.ID] = tv.Task.Status
+	}
+
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, sectionLabel("Sessions:", r.stdout))
 	if len(sessions) == 0 {
@@ -568,7 +573,8 @@ func (r Runner) printProjectSummary(title string, result *project.OpenResult, wo
 				}
 			}
 			bgCount := r.app.Tmux.CountDescendants(item.TmuxPane)
-			if readiness := sessionReadiness(result.Project.RepoPath, item, bgCount); readiness != "" {
+			taskStatus := sessionTaskStatusMap[item.TaskID]
+			if readiness := sessionReadiness(result.Project.RepoPath, item, bgCount, taskStatus); readiness != "" {
 				fmt.Fprintf(r.stdout, "    readiness=%s\n", readiness)
 				if readiness == "stuck-retrying" {
 					fmt.Fprintf(r.stdout, "    bg-terminals=%d — agent may be retry-looping; run: aom session stop %s\n", bgCount, item.ID)

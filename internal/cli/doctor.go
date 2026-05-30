@@ -63,7 +63,8 @@ func (r Runner) executeDoctor(args []string) error {
 		})
 	}
 
-	if aomPath, err := exec.LookPath("aom"); err != nil {
+	aomPath, aomLookErr := exec.LookPath("aom")
+	if aomLookErr != nil {
 		results = append(results, doctorResult{
 			label:   "aom in PATH",
 			detail:  "not found — agents cannot run \"aom\" commands; add the binary to your PATH or symlink to /usr/local/bin/aom",
@@ -75,6 +76,17 @@ func (r Runner) executeDoctor(args []string) error {
 			detail: aomPath,
 			ok:     true,
 		})
+	}
+
+	// Multi-binary check: warn when the running binary and the PATH-resolved aom
+	// are in different directories — agents will then use a different (possibly
+	// older) build than the operator, causing version-skew failures.
+	if aomLookErr == nil {
+		if exePath, err := os.Executable(); err == nil {
+			if warn := multiBinaryCheck(exePath, aomPath); warn != nil {
+				results = append(results, *warn)
+			}
+		}
 	}
 
 	if globalOnly {
@@ -694,6 +706,26 @@ func (r Runner) executeDoctorFix() error {
 		return fmt.Errorf("doctor --fix: %d item(s) could not be fixed", failed)
 	}
 	return nil
+}
+
+// multiBinaryCheck returns a warning result when the running executable and the
+// PATH-resolved aom binary live in different directories, indicating that agents
+// will pick up a different (possibly stale) build than the operator is using.
+// Returns nil when the directories match or when either path is empty.
+func multiBinaryCheck(exePath, aomPath string) *doctorResult {
+	if exePath == "" || aomPath == "" {
+		return nil
+	}
+	exeDir := filepath.Dir(exePath)
+	aomDir := filepath.Dir(aomPath)
+	if exeDir == aomDir {
+		return nil
+	}
+	return &doctorResult{
+		label:   "aom: multi-binary",
+		detail:  fmt.Sprintf("running binary is %s but PATH resolves to %s — agents may run a different aom version; fix: update PATH or reinstall aom to %s", exePath, aomPath, exeDir),
+		warning: true,
+	}
 }
 
 // sortedKeys returns map keys in sorted order.

@@ -10,10 +10,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/agent"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/app"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
 	aomruntime "github.com/lattapon-aek/agent-orchestrator-management/internal/runtime"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/session"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/step"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/tmux"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/worktree"
@@ -5649,6 +5652,127 @@ func TestDoctorPassesOnInitializedProject(t *testing.T) {
 	}
 }
 
+func TestCheckTaskCloseGate(t *testing.T) {
+	builderAgents := []agent.Record{
+		{Name: "builder-main", Role: "builder"},
+		{Name: "orchestrator-ai", Role: "orchestrator"},
+	}
+	roleConfigs := map[string]config.RoleConfig{
+		"builder":      {Class: "builder"},
+		"orchestrator": {Class: "orchestrator"},
+	}
+
+	// human operator (no AOM_ACTOR) → always allowed
+	if err := checkTaskCloseGate("operator", false, builderAgents, roleConfigs); err != nil {
+		t.Errorf("operator: want nil, got %v", err)
+	}
+
+	// orchestrator agent → allowed
+	if err := checkTaskCloseGate("orchestrator-ai", false, builderAgents, roleConfigs); err != nil {
+		t.Errorf("orchestrator agent: want nil, got %v", err)
+	}
+
+	// builder agent (worker) → blocked
+	err := checkTaskCloseGate("builder-main", false, builderAgents, roleConfigs)
+	if err == nil {
+		t.Fatal("builder agent: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "builder-main") {
+		t.Errorf("error should mention agent name, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "aom task signal") {
+		t.Errorf("error should mention aom task signal, got: %v", err)
+	}
+
+	// builder agent + --operator flag → bypass allowed
+	if err := checkTaskCloseGate("builder-main", true, builderAgents, roleConfigs); err != nil {
+		t.Errorf("builder + --operator: want nil, got %v", err)
+	}
+
+	// unknown actor (not in agents list) → allowed (permissive for unknown)
+	if err := checkTaskCloseGate("unknown-agent", false, builderAgents, roleConfigs); err != nil {
+		t.Errorf("unknown actor: want nil, got %v", err)
+	}
+}
+
+func TestResolvedActor(t *testing.T) {
+	// no env set → "operator"
+	t.Setenv("AOM_ACTOR", "")
+	if got := resolvedActor(); got != "operator" {
+		t.Errorf("no AOM_ACTOR: want \"operator\", got %q", got)
+	}
+
+	// env set → that value
+	t.Setenv("AOM_ACTOR", "builder-main")
+	if got := resolvedActor(); got != "builder-main" {
+		t.Errorf("AOM_ACTOR=builder-main: want \"builder-main\", got %q", got)
+	}
+}
+
+func TestTaskCloseRejectsWorkerAgent(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "test-proj", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// add a builder agent
+	stdout.Reset()
+	_ = Execute([]string{"agent", "add", "builder-main", "--runtime", "claude", "--role", "builder"}, &stdout, &stderr)
+
+	// set AOM_ACTOR to the builder agent
+	t.Setenv("AOM_ACTOR", "builder-main")
+
+	stdout.Reset()
+	err := Execute([]string{"task", "close", "TASK-nonexistent"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("want error when worker tries to close task, got nil")
+	}
+	if !strings.Contains(err.Error(), "may not close or accept") {
+		t.Errorf("want role gate error, got: %v", err)
+	}
+}
+
+func TestMultiBinaryCheck(t *testing.T) {
+	// same directory → no warning
+	if got := multiBinaryCheck("/usr/local/bin/aom", "/usr/local/bin/aom"); got != nil {
+		t.Errorf("same path: want nil, got %+v", got)
+	}
+	if got := multiBinaryCheck("/usr/local/bin/aom", "/usr/local/bin/aom2"); got != nil {
+		t.Errorf("same dir, different name: want nil, got %+v", got)
+	}
+
+	// different directories → warning
+	got := multiBinaryCheck("/tmp/aom", "/usr/local/bin/aom")
+	if got == nil {
+		t.Fatal("different dirs: want warning result, got nil")
+	}
+	if !got.warning {
+		t.Errorf("want warning=true, got ok=%v warning=%v", got.ok, got.warning)
+	}
+	if !strings.Contains(got.detail, "/tmp/aom") {
+		t.Errorf("detail should contain running exe path, got %q", got.detail)
+	}
+	if !strings.Contains(got.detail, "/usr/local/bin/aom") {
+		t.Errorf("detail should contain PATH-resolved path, got %q", got.detail)
+	}
+	if got.label != "aom: multi-binary" {
+		t.Errorf("label = %q, want \"aom: multi-binary\"", got.label)
+	}
+
+	// empty inputs → nil (graceful skip)
+	if got := multiBinaryCheck("", "/usr/local/bin/aom"); got != nil {
+		t.Errorf("empty exePath: want nil, got %+v", got)
+	}
+	if got := multiBinaryCheck("/usr/local/bin/aom", ""); got != nil {
+		t.Errorf("empty aomPath: want nil, got %+v", got)
+	}
+}
+
 func TestRuntimeListRequiresProject(t *testing.T) {
 	repoRoot := t.TempDir()
 	oldWD, err := os.Getwd()
@@ -6019,5 +6143,502 @@ func TestExecuteSessionRebindRejectsNonDetached(t *testing.T) {
 	}
 	if !strings.Contains(rebindErr.Error(), "rebind only applies to Detached") {
 		t.Fatalf("error = %q, want detached message", rebindErr.Error())
+	}
+}
+
+// TestAutoStopSessionWhenTaskDone verifies that aom status auto-stops an Idle session
+// whose bound task has been accepted (status=Done) via aom task accept --force.
+func TestAutoStopSessionWhenTaskDone(t *testing.T) {
+	repoRoot := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(repoRoot); err == nil {
+		repoRoot = resolved
+	}
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	firstHasSession := true
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(name string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
+			case "set-option":
+				return nil, nil
+			case "display-message":
+				// PaneExists and PanePID both use display-message.
+				// Return the pane ID so PaneExists → true for auto-stop path.
+				return []byte("%5\n"), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// Create a task and spawn a session for it.
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Auto-stop test task", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+	if taskID == "" {
+		t.Fatalf("could not extract task ID from %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"session", "spawn", "backend-main", "--mock", "--task", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("session spawn: %v", err)
+	}
+
+	// Accept the task with --force to bypass verify checks → sets task status to Done.
+	stdout.Reset()
+	if err := Execute([]string{"task", "accept", taskID, "--force"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task accept --force: %v", err)
+	}
+
+	// aom status triggers autoStopCompletedSessions — the session should be auto-stopped.
+	stdout.Reset()
+	_ = Execute([]string{"status"}, &stdout, &stderr)
+
+	// Session list should now show the session as Stopped.
+	stdout.Reset()
+	if err := Execute([]string{"session", "list"}, &stdout, &stderr); err != nil {
+		t.Fatalf("session list: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "status=Stopped") {
+		t.Errorf("session list: want auto-stopped session (status=Stopped), got:\n%s", out)
+	}
+}
+
+// TestSessionReadinessDoneWhenTaskDone verifies that sessionReadiness returns "done"
+// when the bound task is in Done or Archived state, regardless of artifact state.
+func TestSessionReadinessDoneWhenTaskDone(t *testing.T) {
+	rec := session.Record{
+		TaskID:    "TASK-001",
+		Status:    "Idle",
+		AgentName: "builder-main",
+	}
+
+	for _, taskStatus := range []string{"Done", "Archived"} {
+		got := sessionReadiness("", rec, 0, taskStatus)
+		if got != "done" {
+			t.Errorf("taskStatus=%q: want \"done\", got %q", taskStatus, got)
+		}
+	}
+}
+
+// TestSessionReadinessChannelCheckNoCRLFSensitivity verifies that the channel check
+// matches an agent name in the channel even without a trailing newline (Windows CRLF
+// tolerance).
+func TestSessionReadinessChannelCheckNoCRLFSensitivity(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	// Write a channel file using CRLF line endings to simulate Windows.
+	channelPath := filepath.Join(repoRoot, ".aom", "channel.md")
+	if err := os.MkdirAll(filepath.Dir(channelPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	channelContent := "# AOM Team Channel\r\n\r\n## Messages\r\n\r\n" +
+		"### 2026-01-01T00:00:00Z | MSG-1 | backend-main\r\n" +
+		"- Summary: some progress\r\n\r\n"
+	if err := os.WriteFile(channelPath, []byte(channelContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	rec := session.Record{
+		TaskID:    "TASK-001",
+		Status:    "Working",
+		AgentName: "backend-main",
+	}
+	got := sessionReadiness(repoRoot, rec, 0, "InProgress")
+	if got != "in-progress" {
+		t.Errorf("CRLF channel: want \"in-progress\", got %q", got)
+	}
+}
+
+// TestTaskVerifyReviewerRoleUsesReviewNotesCheck verifies that a task assigned to a
+// reviewer-class role shows "review-notes.md resolved" in task verify output and does
+// NOT show "handoff.md filled" or "commits on branch".
+func TestTaskVerifyReviewerRoleUsesReviewNotesCheck(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// Create a task assigned to the reviewer role (class: reviewer in default agents.yaml).
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Review the PR", "--role", "reviewer", "--agent", "reviewer-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+	if taskID == "" {
+		t.Fatalf("could not extract task ID from %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	_ = Execute([]string{"task", "verify", taskID}, &stdout, &stderr)
+	out := stdout.String()
+
+	if !strings.Contains(out, "review-notes.md resolved") {
+		t.Errorf("reviewer task verify: want \"review-notes.md resolved\" in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "handoff.md filled") {
+		t.Errorf("reviewer task verify: must NOT contain \"handoff.md filled\", got:\n%s", out)
+	}
+	if strings.Contains(out, "commits on branch") {
+		t.Errorf("reviewer task verify: must NOT contain \"commits on branch\" (reviewer has no branch), got:\n%s", out)
+	}
+}
+
+// TestTaskVerifyBuilderRoleUsesHandoffCheck verifies that a task assigned to a
+// builder-class role shows "handoff.md filled" in task verify output and does NOT
+// show "review-notes.md resolved".
+func TestTaskVerifyBuilderRoleUsesHandoffCheck(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// Create a task assigned to the backend role (class: builder in default agents.yaml).
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Implement feature", "--role", "backend", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create: %v", err)
+	}
+	taskID := extractEntityID(stdout.String(), "Task: ")
+	if taskID == "" {
+		t.Fatalf("could not extract task ID from %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	_ = Execute([]string{"task", "verify", taskID}, &stdout, &stderr)
+	out := stdout.String()
+
+	if !strings.Contains(out, "handoff.md filled") {
+		t.Errorf("builder task verify: want \"handoff.md filled\" in output, got:\n%s", out)
+	}
+	if strings.Contains(out, "review-notes.md resolved") {
+		t.Errorf("builder task verify: must NOT contain \"review-notes.md resolved\", got:\n%s", out)
+	}
+}
+
+// TestStripAgentArtifactsFromMergeRemovesAgentDir verifies that stripAgentArtifactsFromMerge
+// removes .agent/ files that an agent branch committed before they can pollute main.
+func TestStripAgentArtifactsFromMergeRemovesAgentDir(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	repoDir := t.TempDir()
+
+	git := func(args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoDir
+		// Supply minimal git config so commits work in any CI environment.
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	mustGit := func(args ...string) {
+		t.Helper()
+		if out, err := git(args...); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	// Set up main branch with a code file.
+	mustGit("init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repoDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit("add", "main.go")
+	mustGit("commit", "-m", "initial commit")
+
+	// Create agent branch with code changes AND .agent/ files.
+	mustGit("checkout", "-b", "agents/backend-main")
+	if err := os.WriteFile(filepath.Join(repoDir, "feature.go"), []byte("package main\n// feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, ".agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".agent", "task.md"), []byte("# Task\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit("add", "feature.go", ".agent/task.md")
+	mustGit("commit", "-m", "[TASK-1] add feature + agent artifact")
+
+	// Merge agent branch into main (simulating what executeMergeCommit does).
+	mustGit("checkout", "main")
+	mustGit("merge", "--no-ff", "agents/backend-main", "-m", "Merge agents/backend-main into main")
+
+	// Verify that .agent/ leaked into main BEFORE our fix (sanity check).
+	if _, err := os.Stat(filepath.Join(repoDir, ".agent", "task.md")); err != nil {
+		t.Fatalf("pre-strip: want .agent/task.md on main after merge, got: %v", err)
+	}
+
+	// Run the strip function — this is what executeMergeCommit now calls.
+	if err := stripAgentArtifactsFromMerge(repoDir); err != nil {
+		t.Fatalf("stripAgentArtifactsFromMerge: %v", err)
+	}
+
+	// .agent/task.md must not be in the HEAD commit anymore.
+	filesOut, err := git("ls-tree", "-r", "--name-only", "HEAD")
+	if err != nil {
+		t.Fatalf("ls-tree HEAD: %v", err)
+	}
+	for _, f := range strings.Split(filesOut, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(f), ".agent/") {
+			t.Errorf("HEAD still contains .agent/ file after strip: %q", f)
+		}
+	}
+	// feature.go (real code change) must still be present.
+	if !strings.Contains(filesOut, "feature.go") {
+		t.Errorf("HEAD is missing feature.go after strip; files:\n%s", filesOut)
+	}
+}
+
+// TestCheckPlanApprovalGate verifies that only orchestrator/operator may approve plans.
+func TestCheckPlanApprovalGate(t *testing.T) {
+	agents := []agent.Record{
+		{Name: "builder-main", Role: "builder"},
+		{Name: "orchestrator-ai", Role: "orchestrator"},
+		{Name: "frontend-agent", Role: "frontend"},
+	}
+	roleConfigs := map[string]config.RoleConfig{
+		"builder":      {Class: "builder"},
+		"orchestrator": {Class: "orchestrator"},
+		"frontend":     {Class: "frontend"},
+	}
+
+	// operator → allowed
+	if err := checkPlanApprovalGate("operator", false, agents, roleConfigs); err != nil {
+		t.Errorf("operator: want nil, got %v", err)
+	}
+
+	// orchestrator agent → allowed
+	if err := checkPlanApprovalGate("orchestrator-ai", false, agents, roleConfigs); err != nil {
+		t.Errorf("orchestrator agent: want nil, got %v", err)
+	}
+
+	// builder agent (worker) → blocked
+	err := checkPlanApprovalGate("builder-main", false, agents, roleConfigs)
+	if err == nil {
+		t.Fatal("builder agent: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "builder-main") {
+		t.Errorf("error should mention agent name, got: %v", err)
+	}
+
+	// frontend agent (worker) → blocked
+	err = checkPlanApprovalGate("frontend-agent", false, agents, roleConfigs)
+	if err == nil {
+		t.Fatal("frontend agent: want error, got nil")
+	}
+
+	// builder + --operator flag → bypass allowed
+	if err := checkPlanApprovalGate("builder-main", true, agents, roleConfigs); err != nil {
+		t.Errorf("builder + --operator: want nil, got %v", err)
+	}
+
+	// unknown actor → allowed (permissive)
+	if err := checkPlanApprovalGate("unknown-agent", false, agents, roleConfigs); err != nil {
+		t.Errorf("unknown actor: want nil, got %v", err)
+	}
+}
+
+// TestTaskProposePlanAndApprove verifies the full plan-approval workflow:
+// worker proposes → task PendingApproval; operator approves → task Ready.
+func TestTaskProposePlanAndApprove(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "test-proj", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// Create a task in Ready state
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Add login page"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create: %v", err)
+	}
+	out := stdout.String()
+	taskID := ""
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Task:") {
+			taskID = strings.TrimSpace(strings.TrimPrefix(line, "Task:"))
+		}
+	}
+	if taskID == "" {
+		t.Fatalf("could not parse task ID from output: %s", out)
+	}
+
+	// Advance task to Ready
+	stdout.Reset()
+	if err := Execute([]string{"task", "ready", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task ready: %v", err)
+	}
+
+	// Propose plan (as any agent — no gate on propose)
+	stdout.Reset()
+	if err := Execute([]string{"task", "propose-plan", taskID, "--summary", "Implement login using JWT"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task propose-plan: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Plan proposed") {
+		t.Errorf("want 'Plan proposed' in output, got: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "PendingApproval") {
+		t.Errorf("want 'PendingApproval' in output, got: %s", stdout.String())
+	}
+
+	// Approve plan (as operator — no AOM_ACTOR)
+	t.Setenv("AOM_ACTOR", "")
+	stdout.Reset()
+	if err := Execute([]string{"task", "plan-approve", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task plan-approve: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Plan approved") {
+		t.Errorf("want 'Plan approved' in output, got: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Ready") {
+		t.Errorf("want 'Ready' in output, got: %s", stdout.String())
+	}
+}
+
+// TestTaskProposePlanAndReject verifies that plan rejection transitions to Blocked.
+func TestTaskProposePlanAndReject(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "test-proj2", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Refactor auth module"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create: %v", err)
+	}
+	taskID := ""
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(line, "Task:") {
+			taskID = strings.TrimSpace(strings.TrimPrefix(line, "Task:"))
+		}
+	}
+	if taskID == "" {
+		t.Fatalf("could not parse task ID")
+	}
+
+	// Advance to Ready then propose
+	_ = Execute([]string{"task", "ready", taskID}, &stdout, &stderr)
+	stdout.Reset()
+	if err := Execute([]string{"task", "propose-plan", taskID, "--summary", "Rewrite from scratch"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task propose-plan: %v", err)
+	}
+
+	// Reject plan
+	t.Setenv("AOM_ACTOR", "")
+	stdout.Reset()
+	if err := Execute([]string{"task", "plan-reject", taskID, "--reason", "Too risky"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task plan-reject: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Plan rejected") {
+		t.Errorf("want 'Plan rejected' in output, got: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Blocked") {
+		t.Errorf("want 'Blocked' in output, got: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Too risky") {
+		t.Errorf("want reason 'Too risky' in output, got: %s", stdout.String())
+	}
+}
+
+// TestTaskPlanApproveRejectsWorkerAgent verifies the C3d role gate.
+func TestTaskPlanApproveRejectsWorkerAgent(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "test-proj3", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// Add a builder agent
+	stdout.Reset()
+	_ = Execute([]string{"agent", "add", "builder-main", "--runtime", "claude", "--role", "builder"}, &stdout, &stderr)
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Add feature X"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create: %v", err)
+	}
+	taskID := ""
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(line, "Task:") {
+			taskID = strings.TrimSpace(strings.TrimPrefix(line, "Task:"))
+		}
+	}
+	if taskID == "" {
+		t.Fatalf("could not parse task ID")
+	}
+
+	_ = Execute([]string{"task", "ready", taskID}, &stdout, &stderr)
+	stdout.Reset()
+	_ = Execute([]string{"task", "propose-plan", taskID, "--summary", "My approach"}, &stdout, &stderr)
+
+	// Worker tries to approve their own plan — should fail
+	t.Setenv("AOM_ACTOR", "builder-main")
+	stdout.Reset()
+	err := Execute([]string{"task", "plan-approve", taskID}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("want error when worker tries to plan-approve, got nil")
+	}
+	if !strings.Contains(err.Error(), "builder-main") {
+		t.Errorf("error should mention agent name, got: %v", err)
 	}
 }

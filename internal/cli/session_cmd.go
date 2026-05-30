@@ -12,6 +12,7 @@ import (
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/agent"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/config"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/events"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
 	aomruntime "github.com/lattapon-aek/agent-orchestrator-management/internal/runtime"
@@ -288,6 +289,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 	// Always print the effective launch command to stderr so operators can
 	// diagnose pane-exit failures without needing a debug flag.
 	fmt.Fprintf(r.stderr, "Launch command: %s\n", launchCommand)
+	fmt.Fprintf(r.stderr, "AOM binary: %s (version=%s commit=%s)\n", selfBin, Version, Commit)
 
 	if err := r.materializeAgentContext(result, agentRecord, executionPath); err != nil {
 		return nil, fmt.Errorf("materialize agent context: %w", err)
@@ -364,7 +366,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 			Actor:       "aom",
 			StepID:      params.stepID,
 			SessionID:   record.ID,
-			Summary:     fmt.Sprintf("Session pane attached for %s and ready for operator inspection", agentRecord.Name),
+			Summary:     fmt.Sprintf("Session pane attached for %s and ready for operator inspection (aom %s/%s @ %s)", agentRecord.Name, Version, Commit, selfBin),
 			StateEffect: fmt.Sprintf("Session %s", record.Status),
 		}); err != nil {
 			return nil, err
@@ -464,7 +466,10 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		}
 	}
 
-	go runHook(result.Project.RepoPath, "on-session-spawn", record.ID, record.AgentName, record.TaskID)
+	_ = r.bus.Emit(events.Event{
+		Type: events.SessionSpawned, RepoPath: result.Project.RepoPath,
+		TaskID: record.TaskID, AgentName: record.AgentName,
+	})
 
 	// For real-mode codex sessions with a task, auto-send a commit reminder so
 	// codex knows to commit its work before signaling completion. Sent after the
@@ -624,6 +629,17 @@ func (r Runner) executeSessionList(args []string) error {
 		return err
 	}
 
+	// Build task status map for readiness labelling (one query, avoids N+1 lookups).
+	taskStatusMap := map[string]string{}
+	if taskSvc, sqlDB, err := r.app.OpenTaskService(result.DBPath); err == nil {
+		defer sqlDB.Close()
+		if tasks, err := taskSvc.ListByProject(result.Project.ID); err == nil {
+			for _, t := range tasks {
+				taskStatusMap[t.ID] = t.Status
+			}
+		}
+	}
+
 	if activeOnly {
 		fmt.Fprintln(r.stdout, "Sessions (active)")
 	} else {
@@ -658,7 +674,8 @@ func (r Runner) executeSessionList(args []string) error {
 			fmt.Fprintf(r.stdout, "    next=%s\n", detachedSessionHint(item))
 		}
 		bgCount := r.app.Tmux.CountDescendants(item.TmuxPane)
-		if readiness := sessionReadiness(result.Project.RepoPath, item, bgCount); readiness != "" {
+		taskStatus := taskStatusMap[item.TaskID]
+		if readiness := sessionReadiness(result.Project.RepoPath, item, bgCount, taskStatus); readiness != "" {
 			fmt.Fprintf(r.stdout, "    readiness=%s\n", readiness)
 			if readiness == "stuck-retrying" {
 				fmt.Fprintf(r.stdout, "    bg-terminals=%d — agent may be retry-looping; run: aom session stop %s\n", bgCount, item.ID)
@@ -688,7 +705,7 @@ const bgTerminalWarningThreshold = 6
 // operators a quick signal beyond just the status string.
 // bgCount is the number of live descendant processes in the session's tmux pane
 // (pass 0 when tmux is unavailable or the pane ID is unknown).
-func sessionReadiness(repoPath string, s session.Record, bgCount int) string {
+func sessionReadiness(repoPath string, s session.Record, bgCount int, taskStatus string) string {
 	if s.TaskID == "" {
 		return ""
 	}
@@ -697,6 +714,10 @@ func sessionReadiness(repoPath string, s session.Record, bgCount int) string {
 		return "needs-operator"
 	case "Stopped", "Failed", "Detached", "Archived":
 		return ""
+	}
+	// Task already accepted/archived — no further action needed.
+	if taskStatus == "Done" || taskStatus == "Archived" {
+		return "done"
 	}
 	// Idle or Working — check for runaway background terminal accumulation first.
 	// When codex cannot complete a command it retries via new background terminals;
@@ -715,9 +736,10 @@ func sessionReadiness(repoPath string, s session.Record, bgCount int) string {
 			return "awaiting-peer"
 		}
 	}
-	// Check if agent posted to channel.
+	// Check if agent posted to channel. Use "| agentName" (no trailing newline) to
+	// tolerate Windows CRLF line endings and avoid false negatives.
 	channelData, _ := readChannelFile(repoPath)
-	if strings.Contains(channelData, "| "+s.AgentName+"\n") {
+	if strings.Contains(channelData, "| "+s.AgentName) {
 		return "in-progress"
 	}
 	return "no-progress"

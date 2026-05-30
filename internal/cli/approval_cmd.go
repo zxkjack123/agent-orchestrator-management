@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/events"
 )
 
 func (r Runner) executeApprove(args []string) error {
@@ -184,6 +185,10 @@ func (r Runner) executePauseAll(args []string) error {
 		}
 
 		paused = append(paused, s.ID)
+		_ = r.bus.Emit(events.Event{
+			Type: events.TaskApprovalNeeded, RepoPath: result.Project.RepoPath,
+			TaskID: s.TaskID, AgentName: s.AgentName,
+		})
 	}
 
 	fmt.Fprintf(r.stdout, "Paused %d session(s)\n", len(paused))

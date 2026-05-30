@@ -788,17 +788,46 @@ func (r Runner) printActionItems(result *project.OpenResult, sessions []session.
 	return nil
 }
 
-// autoStopCompletedSessions stops any Idle sessions whose bound task has signalled
-// task.completed in log.md. Returns the updated slice with those sessions showing
-// status=Stopped. Runs during aom status so that background processes (codex
-// background terminals, caffeinate, policy wrappers) are cleaned up the first time
-// the operator checks status after work is done — without needing explicit action.
+// autoStopCompletedSessions stops any Idle sessions whose bound task is Done/Archived
+// in the DB, or has signalled task.completed in log.md and all verify checks pass.
+// Returns the updated slice with those sessions showing status=Stopped. Runs during
+// aom status so that background processes are cleaned up the first time the operator
+// checks status after work is done — without needing explicit action.
 func (r Runner) autoStopCompletedSessions(result *project.OpenResult, sessions []session.Record) []session.Record {
+	// Build task status map once to avoid N+1 DB lookups in the loop.
+	taskStatusByID := map[string]string{}
+	if taskSvc, sqlDB, err := r.app.OpenTaskService(result.DBPath); err == nil {
+		defer sqlDB.Close()
+		if tasks, err := taskSvc.ListByProject(result.Project.ID); err == nil {
+			for _, t := range tasks {
+				taskStatusByID[t.ID] = t.Status
+			}
+		}
+	}
+
 	for i, s := range sessions {
-		if s.Status != "Idle" || s.TmuxPane == "" || s.TaskID == "" || s.WorktreePath == "" {
+		if s.Status != "Idle" || s.TmuxPane == "" || s.TaskID == "" {
 			continue
 		}
 		if alive, _ := r.app.Tmux.PaneExists(s.TmuxPane); !alive {
+			continue
+		}
+
+		// Fast path: task already accepted/archived in DB — stop without verify checks
+		// (verify already passed before accept could complete).
+		taskStatus := taskStatusByID[s.TaskID]
+		if taskStatus == "Done" || taskStatus == "Archived" {
+			stopped, _, _ := r.stopSessionRecord(result, s, false)
+			if stopped != nil {
+				sessions[i] = *stopped
+				fmt.Fprintf(r.stdout, "ℹ  auto-stopped %s (%s): task %s — background processes cleaned up\n", s.ID, s.AgentName, taskStatus)
+			}
+			continue
+		}
+
+		// Slow path: task not yet accepted — check for task.completed signal in log.md
+		// and require all verify checks to pass before stopping.
+		if s.WorktreePath == "" {
 			continue
 		}
 		logPath := filepath.Join(s.WorktreePath, ".agent", "log.md")
@@ -910,6 +939,12 @@ func (r Runner) printStatusJSON(result *project.OpenResult, sessions []session.R
 		})
 	}
 
+	// Build task status map for accurate readiness labels.
+	taskStatusMap := map[string]string{}
+	for _, tv := range taskViews {
+		taskStatusMap[tv.Task.ID] = tv.Task.Status
+	}
+
 	// Sessions.
 	out.Sessions = make([]statusJSONSession, 0, len(sessions))
 	for _, s := range sessions {
@@ -918,7 +953,7 @@ func (r Runner) printStatusJSON(result *project.OpenResult, sessions []session.R
 			Agent:     s.AgentName,
 			Role:      s.RoleName,
 			Status:    s.Status,
-			Readiness: sessionReadiness(result.Project.RepoPath, s, r.app.Tmux.CountDescendants(s.TmuxPane)),
+			Readiness: sessionReadiness(result.Project.RepoPath, s, r.app.Tmux.CountDescendants(s.TmuxPane), taskStatusMap[s.TaskID]),
 			TaskID:    s.TaskID,
 			Runtime:   s.Runtime,
 		})

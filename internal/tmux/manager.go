@@ -462,7 +462,12 @@ func (m *Manager) CountDescendants(paneID string) int {
 // This is important for runtimes like codex that spawn background terminal children
 // which outlive the pane when it is killed directly. For runtimes that do not
 // accumulate background children (e.g. claude) the call is a safe no-op.
+// If the pane is already gone this function returns nil (idempotent).
 func (m *Manager) KillPaneAndDescendants(paneID string) error {
+	// Idempotent: if pane is already gone there is nothing to clean up.
+	if alive, _ := m.PaneExists(paneID); !alive {
+		return nil
+	}
 	if pid := m.PanePID(paneID); pid > 0 {
 		if descendants := paneDescendants(pid); len(descendants) > 0 {
 			// Send SIGTERM first to allow graceful cleanup.

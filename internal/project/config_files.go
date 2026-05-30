@@ -138,11 +138,11 @@ func ensureHooksDir(aomPath string) error {
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return fmt.Errorf("create hooks dir: %w", err)
 	}
-	hookPath := filepath.Join(hooksDir, "on-task-done.sh")
-	if _, err := os.Stat(hookPath); err == nil {
-		return nil
-	}
-	const hookContent = `#!/bin/bash
+
+	// on-task-done.sh — live by default so the operator sees hook output immediately.
+	taskDonePath := filepath.Join(hooksDir, "on-task-done.sh")
+	if _, err := os.Stat(taskDonePath); err != nil {
+		const content = `#!/bin/bash
 # on-task-done.sh — triggered when a task is closed or accepted
 # Args: $1=task_id  $2=task_title  $3=final_status
 # Env:  AOM_REPO, AOM_HOOK
@@ -154,8 +154,70 @@ func ensureHooksDir(aomPath string) error {
 # fi
 echo "[aom hook] on-task-done: $1 ($2) -> $3"
 `
-	if err := os.WriteFile(hookPath, []byte(hookContent), 0o755); err != nil {
-		return fmt.Errorf("write hook: %w", err)
+		if err := os.WriteFile(taskDonePath, []byte(content), 0o755); err != nil {
+			return fmt.Errorf("write on-task-done hook: %w", err)
+		}
+	}
+
+	// Additional hooks shipped as .sh.example — operator activates by removing .example suffix.
+	examples := []struct {
+		name    string
+		content string
+	}{
+		{"on-task-created.sh.example", `#!/bin/bash
+# on-task-created.sh — triggered when a new task is created
+# Args: $1=task_id  $2=task_title  $3=initial_status
+# Env:  AOM_REPO, AOM_HOOK
+echo "[aom hook] on-task-created: $1 ($2)"
+`},
+		{"on-blocked.sh.example", `#!/bin/bash
+# on-blocked.sh — triggered when a task or plan is blocked
+# Args: $1=task_id  $2=task_title  $3=status
+# Env:  AOM_REPO, AOM_HOOK
+# Exit code 2 blocks the originating operation and returns the script output as an error.
+echo "[aom hook] on-blocked: $1 ($2)"
+`},
+		{"on-needs-attention.sh.example", `#!/bin/bash
+# on-needs-attention.sh — triggered when a task transitions to NeedsAttention
+# (e.g. review findings detected, QA failure recorded)
+# Args: $1=task_id  $2=task_title  $3=status
+# Env:  AOM_REPO, AOM_HOOK
+echo "[aom hook] on-needs-attention: $1 ($2)"
+`},
+		{"on-approval-required.sh.example", `#!/bin/bash
+# on-approval-required.sh — triggered when a session requests operator approval
+# Args: $1=task_id  $2=agent_name  $3=status
+# Env:  AOM_REPO, AOM_HOOK
+echo "[aom hook] on-approval-required: task=$1 agent=$2"
+`},
+		{"on-plan-proposed.sh.example", `#!/bin/bash
+# on-plan-proposed.sh — triggered when a worker proposes a plan (task → PendingApproval)
+# Args: $1=task_id  $2=task_title  $3=status
+# Env:  AOM_REPO, AOM_HOOK
+# Run 'aom task plan-approve $1' or 'aom task plan-reject $1 --reason <text>' to act on it.
+echo "[aom hook] on-plan-proposed: $1 ($2)"
+`},
+		{"on-plan-approved.sh.example", `#!/bin/bash
+# on-plan-approved.sh — triggered when a proposed plan is approved (task → Ready)
+# Args: $1=task_id  $2=task_title  $3=status
+# Env:  AOM_REPO, AOM_HOOK
+echo "[aom hook] on-plan-approved: $1 ($2)"
+`},
+		{"on-plan-rejected.sh.example", `#!/bin/bash
+# on-plan-rejected.sh — triggered when a proposed plan is rejected (task → Blocked)
+# Args: $1=task_id  $2=task_title  $3=status
+# Env:  AOM_REPO, AOM_HOOK
+echo "[aom hook] on-plan-rejected: $1 ($2)"
+`},
+	}
+
+	for _, ex := range examples {
+		p := filepath.Join(hooksDir, ex.name)
+		if _, err := os.Stat(p); err != nil {
+			if err := os.WriteFile(p, []byte(ex.content), 0o644); err != nil {
+				return fmt.Errorf("write %s: %w", ex.name, err)
+			}
+		}
 	}
 	return nil
 }

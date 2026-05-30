@@ -356,3 +356,35 @@ func TestManagerKillPaneInvokesTmuxKillPane(t *testing.T) {
 		t.Fatalf("call = %v, want kill-pane", calls[0])
 	}
 }
+
+// TestKillPaneAndDescendantsIsIdempotentWhenPaneGone verifies that
+// KillPaneAndDescendants returns nil without issuing a kill-pane command when
+// the pane has already disappeared (PaneExists → false).
+func TestKillPaneAndDescendantsIsIdempotentWhenPaneGone(t *testing.T) {
+	var calls [][]string
+	manager := NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(name string, args ...string) ([]byte, error) {
+			calls = append(calls, append([]string{name}, args...))
+			// display-message (PaneExists check) returns error → pane is gone.
+			for _, a := range args {
+				if a == "display-message" {
+					return nil, errors.New("no such pane")
+				}
+			}
+			return nil, nil
+		},
+		nil,
+	)
+
+	if err := manager.KillPaneAndDescendants("%99"); err != nil {
+		t.Fatalf("KillPaneAndDescendants on gone pane: want nil, got %v", err)
+	}
+	for _, call := range calls {
+		for _, arg := range call {
+			if arg == "kill-pane" {
+				t.Errorf("kill-pane should not be called when pane is already gone; calls=%v", calls)
+			}
+		}
+	}
+}
