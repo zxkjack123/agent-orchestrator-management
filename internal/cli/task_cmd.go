@@ -208,7 +208,7 @@ func (r Runner) executeTaskShow(args []string) error {
 
 	fmt.Fprintln(r.stdout, "Task")
 	fmt.Fprintln(r.stdout, "")
-	fmt.Fprintf(r.stdout, "ID: %s\n", view.Task.ID)
+	fmt.Fprintf(r.stdout, "ID:    %s  (%s)\n", view.Task.ID, taskShortID(view.Task.ID))
 	fmt.Fprintf(r.stdout, "Title: %s\n", view.Task.Title)
 	fmt.Fprintf(r.stdout, "Mode: %s\n", view.Task.Mode)
 	fmt.Fprintf(r.stdout, "Status: %s\n", view.Task.Status)
@@ -1579,9 +1579,9 @@ func (r Runner) executeTaskList(args []string) error {
 		return enc.Encode(out)
 	}
 
-	fmt.Fprintf(r.stdout, "%-20s  %-16s  %-8s  %-14s  %-16s  %s\n",
-		"TASK", "STATUS", "PRIORITY", "ROLE", "AGENT", "TITLE")
-	fmt.Fprintf(r.stdout, "%s\n", strings.Repeat("-", 100))
+	fmt.Fprintf(r.stdout, "%-6s  %-20s  %-16s  %-8s  %-14s  %-16s  %s\n",
+		"#", "TASK", "STATUS", "PRIORITY", "ROLE", "AGENT", "TITLE")
+	fmt.Fprintf(r.stdout, "%s\n", strings.Repeat("-", 107))
 
 	for _, t := range tasks {
 		blockerIDs, _ := taskService.BlockedBy(t.ID)
@@ -1601,8 +1601,8 @@ func (r Runner) executeTaskList(args []string) error {
 		if role == "" {
 			role = "-"
 		}
-		fmt.Fprintf(r.stdout, "%-20s  %-16s  %-8s  %-14s  %-16s  %s%s\n",
-			t.ID, t.Status, task.PriorityLabel(t.Priority), role, agent, t.Title, blockedLabel)
+		fmt.Fprintf(r.stdout, "%-6s  %-20s  %-16s  %-8s  %-14s  %-16s  %s%s\n",
+			taskShortID(t.ID), t.ID, t.Status, task.PriorityLabel(t.Priority), role, agent, t.Title, blockedLabel)
 	}
 
 	return nil
@@ -2628,4 +2628,18 @@ func checkPlanApprovalGate(actor string, operatorOverride bool, agents []agent.R
 			"Use --operator to override if running as a human.",
 		actor, rec.Role, roleCfg.Class,
 	)
+}
+
+// taskShortID returns a human-readable short alias for a task ID.
+// Format: TASK-{nanoseconds}-{seq} → #seq (e.g. "TASK-1780142372-53" → "#53").
+// Falls back to the full ID when the format is unexpected.
+func taskShortID(id string) string {
+	parts := strings.Split(id, "-")
+	if len(parts) >= 2 {
+		seq := parts[len(parts)-1]
+		if seq != "" {
+			return "#" + seq
+		}
+	}
+	return id
 }

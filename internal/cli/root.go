@@ -142,6 +142,8 @@ func (r Runner) Execute(args []string) (retErr error) {
 		return r.executeRunPipeline(args[1:])
 	case "worktree":
 		return r.executeWorktree(args[1:])
+	case "memory":
+		return r.executeMemory(args[1:])
 	case "project":
 		return r.executeProject(args[1:])
 	default:

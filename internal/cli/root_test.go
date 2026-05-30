@@ -6645,3 +6645,140 @@ func TestTaskPlanApproveRejectsWorkerAgent(t *testing.T) {
 		t.Errorf("error should mention agent name, got: %v", err)
 	}
 }
+
+// TestTaskShortID verifies the short ID extraction helper.
+func TestTaskShortID(t *testing.T) {
+	cases := []struct {
+		id   string
+		want string
+	}{
+		{"TASK-1780142372896784679-1", "#1"},
+		{"TASK-1780142372896784679-53", "#53"},
+		{"TASK-1780142372896784679-999", "#999"},
+		{"TASK-abc-0", "#0"},
+		{"no-dashes", "#dashes"},
+		{"single", "single"},
+	}
+	for _, c := range cases {
+		got := taskShortID(c.id)
+		if got != c.want {
+			t.Errorf("taskShortID(%q) = %q, want %q", c.id, got, c.want)
+		}
+	}
+}
+
+// TestMemoryAppendShowClear verifies the full project memory lifecycle.
+func TestMemoryAppendShowClear(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+
+	if err := Execute([]string{"project", "init", "mem-test", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// append first note
+	t.Setenv("AOM_ACTOR", "")
+	stdout.Reset()
+	if err := Execute([]string{"memory", "append", "Use JWT not sessions"}, &stdout, &stderr); err != nil {
+		t.Fatalf("memory append: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Memory saved") {
+		t.Errorf("want 'Memory saved', got: %s", stdout.String())
+	}
+
+	// append second note
+	stdout.Reset()
+	if err := Execute([]string{"memory", "append", "Never touch legacy payment module"}, &stdout, &stderr); err != nil {
+		t.Fatalf("memory append 2: %v", err)
+	}
+
+	// show — both notes present
+	stdout.Reset()
+	if err := Execute([]string{"memory", "show"}, &stdout, &stderr); err != nil {
+		t.Fatalf("memory show: %v", err)
+	}
+	content := stdout.String()
+	if !strings.Contains(content, "Use JWT not sessions") {
+		t.Errorf("want first note in show output, got: %s", content)
+	}
+	if !strings.Contains(content, "Never touch legacy payment module") {
+		t.Errorf("want second note in show output, got: %s", content)
+	}
+
+	// clear without --confirm → error
+	stdout.Reset()
+	err := Execute([]string{"memory", "clear"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("want error when clearing without --confirm, got nil")
+	}
+
+	// clear with --confirm → success
+	stdout.Reset()
+	if err := Execute([]string{"memory", "clear", "--confirm"}, &stdout, &stderr); err != nil {
+		t.Fatalf("memory clear --confirm: %v", err)
+	}
+
+	// show after clear — notes gone
+	stdout.Reset()
+	_ = Execute([]string{"memory", "show"}, &stdout, &stderr)
+	if strings.Contains(stdout.String(), "Use JWT") {
+		t.Errorf("want notes gone after clear, but still found them: %s", stdout.String())
+	}
+}
+
+// TestMemoryShowEmptyRepo verifies helpful message when no memory exists.
+func TestMemoryShowEmptyRepo(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "empty-mem", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"memory", "show"}, &stdout, &stderr); err != nil {
+		t.Fatalf("memory show on empty: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "No project memory") {
+		t.Errorf("want 'No project memory' message, got: %s", stdout.String())
+	}
+}
+
+// TestTaskListShowsShortID verifies that aom task list includes the # column.
+func TestTaskListShowsShortID(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "shortid-test", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "My test task"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "list"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task list: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "#") {
+		t.Errorf("task list should contain '#' short ID column, got:\n%s", out)
+	}
+	// Header row must have "#" column
+	lines := strings.Split(out, "\n")
+	if len(lines) == 0 || !strings.HasPrefix(strings.TrimSpace(lines[0]), "#") {
+		t.Errorf("first line should start with '#' header, got: %q", lines[0])
+	}
+}

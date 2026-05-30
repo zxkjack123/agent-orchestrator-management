@@ -192,6 +192,12 @@ func (r Runner) materializeAgentContext(result *project.OpenResult, agentRecord 
 					_, _ = f.WriteString(channelNote)
 				}
 
+				// Project memory — operator decisions and conventions that survive across sessions.
+				memData, memErr := os.ReadFile(projectMemoryPath(result.Project.RepoPath))
+				if memErr == nil && len(memData) > 0 {
+					_, _ = fmt.Fprintf(f, "\n## Project Memory\n%s\n", memData)
+				}
+
 				_ = f.Close()
 			}
 		}
