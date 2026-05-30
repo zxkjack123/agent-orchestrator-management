@@ -41,6 +41,9 @@ func (r Runner) executeReview(args []string) error {
 	if args[0] == "reopen" {
 		return r.executeReviewReopen(args[1:])
 	}
+	if args[0] == "create-fix" {
+		return r.executeReviewCreateFix(args[1:])
+	}
 
 	params := reviewParams{
 		taskID:     strings.TrimSpace(args[0]),
@@ -691,10 +694,11 @@ func isReviewStatusResolved(status string) bool {
 
 // reviewOpenItem holds a parsed unresolved review finding with its source index.
 type reviewOpenItem struct {
-	Index  int
-	Title  string
-	Status string
-	Owner  string
+	Index    int
+	Title    string
+	Status   string
+	Owner    string
+	Severity string // "high" | "medium" | "low" | ""
 }
 
 // parseOpenReviewItems returns all unresolved items with their 1-based index.
@@ -741,6 +745,9 @@ func parseOpenReviewItems(notesPath string) []reviewOpenItem {
 		}
 		if strings.HasPrefix(trimmed, "- Owner:") {
 			cur.Owner = strings.TrimSpace(strings.TrimPrefix(trimmed, "- Owner:"))
+		}
+		if strings.HasPrefix(trimmed, "- Severity:") {
+			cur.Severity = strings.ToLower(strings.TrimSpace(strings.TrimPrefix(trimmed, "- Severity:")))
 		}
 	}
 	flush()
@@ -822,8 +829,12 @@ func (r Runner) executeReviewListOpen(args []string) error {
 		if owner == "" {
 			owner = "unassigned"
 		}
+		sev := item.Severity
+		if sev == "" {
+			sev = "—"
+		}
 		fmt.Fprintf(r.stdout, "  [%d] %s\n", item.Index, item.Title)
-		fmt.Fprintf(r.stdout, "      Status: %s  Owner: %s\n", item.Status, owner)
+		fmt.Fprintf(r.stdout, "      Status: %s  Owner: %s  Severity: %s\n", item.Status, owner, sev)
 	}
 	fmt.Fprintf(r.stdout, "\nTo resolve: aom review resolve %s <index>\n", taskID)
 	return nil
@@ -893,6 +904,121 @@ func (r Runner) executeReviewReopen(args []string) error {
 	remaining := artifact.CountUnresolvedReviewItems(notesPath)
 	fmt.Fprintf(r.stdout, "Review item %d reopened.\n", idx)
 	fmt.Fprintf(r.stdout, "Open items: %d\n", remaining)
+	return nil
+}
+
+// severityWeight returns a numeric weight for comparison; higher = more severe.
+func severityWeight(s string) int {
+	switch strings.ToLower(s) {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// executeReviewCreateFix auto-creates fix tasks for unresolved review findings
+// whose severity meets or exceeds a threshold.
+//
+// Usage: aom review create-fix <task-id> [--severity-threshold high] [--agent <name>]
+func (r Runner) executeReviewCreateFix(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: aom review create-fix <task-id> [--severity-threshold high|medium|low] [--agent <name>]")
+	}
+	taskID := strings.TrimSpace(args[0])
+	threshold := "high"
+	agentName := ""
+
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--severity-threshold":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--severity-threshold requires a value (high|medium|low)")
+			}
+			threshold = strings.ToLower(strings.TrimSpace(args[i]))
+		case "--agent":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--agent requires a value")
+			}
+			agentName = strings.TrimSpace(args[i])
+		default:
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+
+	minWeight := severityWeight(threshold)
+	if minWeight == 0 {
+		return fmt.Errorf("unknown severity threshold %q — use high, medium, or low", threshold)
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	notesPath, err := r.reviewNotesPathForTask(result, taskID)
+	if err != nil {
+		return err
+	}
+
+	items := parseOpenReviewItems(notesPath)
+	var eligible []reviewOpenItem
+	for _, item := range items {
+		if severityWeight(item.Severity) >= minWeight {
+			eligible = append(eligible, item)
+		}
+	}
+
+	if len(eligible) == 0 {
+		fmt.Fprintf(r.stdout, "No open review items with severity >= %q found.\n", threshold)
+		return nil
+	}
+
+	taskService, sqlDB, err := r.app.OpenTaskService(result.DBPath)
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+
+	priority, _ := task.NormalizePriority("")
+	fmt.Fprintf(r.stdout, "Creating %d fix task(s) from review of %s:\n\n", len(eligible), taskID)
+
+	for _, item := range eligible {
+		fixAgent := agentName
+		if fixAgent == "" {
+			fixAgent = item.Owner
+		}
+		desc := fmt.Sprintf("Fix for review finding in task %s: %s", taskID, item.Title)
+		created, err := taskService.Create(task.CreateParams{
+			ProjectID:      result.Project.ID,
+			Title:          "Fix: " + item.Title,
+			Description:    desc,
+			Mode:           "Bugfix",
+			Priority:       priority,
+			PreferredAgent: fixAgent,
+		})
+		if err != nil {
+			fmt.Fprintf(r.stdout, "  [ERROR] %q: %v\n", item.Title, err)
+			continue
+		}
+		fmt.Fprintf(r.stdout, "  [OK] %s — Fix: %s\n", created.Task.ID, item.Title)
+		if fixAgent != "" {
+			fmt.Fprintf(r.stdout, "       Agent: %s  Severity: %s\n", fixAgent, item.Severity)
+		} else {
+			fmt.Fprintf(r.stdout, "       Severity: %s\n", item.Severity)
+		}
+	}
+
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Tip: link fix tasks back with: aom task link <fix-id> --blocked-by %s\n", taskID)
 	return nil
 }
 

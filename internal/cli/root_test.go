@@ -6924,6 +6924,226 @@ func TestClaimNoPathsError(t *testing.T) {
 	}
 }
 
+// TestTaskTemplatesListsCustomYAML verifies that custom YAML templates in
+// .aom/templates/tasks/ appear in aom task templates output.
+func TestTaskTemplatesListsCustomYAML(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "custom-tpl", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// Write a custom YAML template.
+	tplDir := filepath.Join(repoRoot, ".aom", "templates", "tasks")
+	if err := os.MkdirAll(tplDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	tplContent := `name: hotfix
+description: Emergency production hotfix
+mode: Bugfix
+steps:
+  - step_type: investigate
+    title: Identify root cause
+  - step_type: implement
+    title: Apply hotfix
+`
+	if err := os.WriteFile(filepath.Join(tplDir, "hotfix.yaml"), []byte(tplContent), 0o644); err != nil {
+		t.Fatalf("write yaml: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "templates"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task templates: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "hotfix") {
+		t.Errorf("want custom template 'hotfix' in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "custom") {
+		t.Errorf("want '(custom)' label in output, got:\n%s", out)
+	}
+}
+
+// TestTaskCreateWithCustomYAMLTemplate verifies --template works with a custom YAML file.
+func TestTaskCreateWithCustomYAMLTemplate(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "custom-tpl2", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	tplDir := filepath.Join(repoRoot, ".aom", "templates", "tasks")
+	if err := os.MkdirAll(tplDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	tplContent := `name: hotfix
+description: Emergency hotfix
+mode: Bugfix
+steps:
+  - step_type: investigate
+    title: Find root cause
+  - step_type: implement
+    title: Fix it
+`
+	if err := os.WriteFile(filepath.Join(tplDir, "hotfix.yaml"), []byte(tplContent), 0o644); err != nil {
+		t.Fatalf("write yaml: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Critical prod bug", "--template", "hotfix"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create --template hotfix: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Task created") {
+		t.Errorf("want 'Task created', got: %s", out)
+	}
+	if !strings.Contains(out, "Initial steps: 2") {
+		t.Errorf("want 2 steps from custom template, got: %s", out)
+	}
+}
+
+// TestReviewCreateFixCreatesFixTasks verifies that create-fix generates fix tasks.
+func TestReviewCreateFixCreatesFixTasks(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "fix-test", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// Create a task so we have a valid task-id context.
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Original task"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create: %v", err)
+	}
+	taskID := ""
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(line, "Task: ") {
+			taskID = strings.TrimPrefix(line, "Task: ")
+			taskID = strings.TrimSpace(taskID)
+		}
+	}
+	if taskID == "" {
+		t.Fatal("could not extract task ID from task create output")
+	}
+
+	// Find the artifact root from task show output.
+	stdout.Reset()
+	if err := Execute([]string{"task", "show", taskID}, &stdout, &stderr); err != nil {
+		t.Fatalf("task show: %v", err)
+	}
+	artifactRoot := ""
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(line, "Artifact root:") {
+			artifactRoot = strings.TrimSpace(strings.TrimPrefix(line, "Artifact root:"))
+		}
+	}
+	if artifactRoot == "" {
+		t.Fatal("could not extract artifact root from task show output")
+	}
+
+	if err := os.MkdirAll(artifactRoot, 0o755); err != nil {
+		t.Fatalf("mkdir artifact root: %v", err)
+	}
+	notesContent := `# Review Notes
+
+### SQL injection vulnerability
+- Status: open
+- Owner: backend
+- Severity: high
+
+### Minor code style issue
+- Status: open
+- Owner: backend
+- Severity: low
+`
+	if err := os.WriteFile(filepath.Join(artifactRoot, "review-notes.md"), []byte(notesContent), 0o644); err != nil {
+		t.Fatalf("write review-notes.md: %v", err)
+	}
+
+	stdout.Reset()
+	if err := Execute([]string{"review", "create-fix", taskID, "--severity-threshold", "high"}, &stdout, &stderr); err != nil {
+		t.Fatalf("review create-fix: %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "SQL injection") {
+		t.Errorf("want high-severity item in output, got: %s", out)
+	}
+	// Low severity item should NOT be auto-created.
+	if strings.Contains(out, "Minor code style") {
+		t.Errorf("low-severity item should be excluded, got: %s", out)
+	}
+}
+
+// TestClaimAutoReleaseOnTaskAccept verifies claims are released when task is accepted.
+func TestClaimAutoReleaseOnTaskAccept(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	_ = os.Chdir(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "claim-accept", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+
+	// Create a task assigned to an agent.
+	stdout.Reset()
+	if err := Execute([]string{"task", "create", "Claimed task", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task create: %v", err)
+	}
+	taskID := ""
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		if strings.HasPrefix(line, "Task: ") {
+			taskID = strings.TrimSpace(strings.TrimPrefix(line, "Task: "))
+		}
+	}
+	if taskID == "" {
+		t.Fatal("could not extract task ID")
+	}
+
+	// Claim files for that agent.
+	stdout.Reset()
+	if err := Execute([]string{"claim", "internal/auth.go", "--agent", "backend-main"}, &stdout, &stderr); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	// Verify claim exists.
+	stdout.Reset()
+	if err := Execute([]string{"claim", "list"}, &stdout, &stderr); err != nil {
+		t.Fatalf("claim list: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "backend-main") {
+		t.Fatalf("claim should exist before accept, got: %s", stdout.String())
+	}
+
+	// Accept task (force to skip verify checks).
+	stdout.Reset()
+	if err := Execute([]string{"task", "accept", taskID, "--force", "--operator"}, &stdout, &stderr); err != nil {
+		t.Fatalf("task accept: %v", err)
+	}
+
+	// Claim should be released automatically.
+	stdout.Reset()
+	if err := Execute([]string{"claim", "list"}, &stdout, &stderr); err != nil {
+		t.Fatalf("claim list after accept: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "No active file claims") {
+		t.Errorf("want claims released after task accept, got: %s", stdout.String())
+	}
+}
+
 // TestReviewResolveReopenListOpen verifies the review item lifecycle helpers.
 func TestReviewResolveReopenListOpen(t *testing.T) {
 	repoRoot := t.TempDir()

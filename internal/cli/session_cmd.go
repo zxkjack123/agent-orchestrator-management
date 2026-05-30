@@ -111,6 +111,9 @@ func (r Runner) executeSessionSpawn(args []string) error {
 		}
 	}
 
+	// Warn if other agents have active file claims that may overlap (F9).
+	r.warnOnClaimOverlap(result, agentRecord.Name)
+
 	_, err = r.executeResolvedSessionSpawn(result, agentRecord, params)
 	return err
 }

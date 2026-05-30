@@ -111,7 +111,7 @@ func (r Runner) executeTaskCreate(args []string) error {
 
 	var tpl *taskTemplate
 	if params.templateName != "" {
-		resolved, err := resolveTaskTemplate(params.templateName)
+		resolved, err := resolveTaskTemplateWithRepo(params.templateName, result.Project.RepoPath)
 		if err != nil {
 			return err
 		}
@@ -847,6 +847,16 @@ func (r Runner) executeTaskAccept(args []string) error {
 	})
 
 	_ = r.refreshProjectBoard(result)
+
+	// Auto-release file claims for the accepted task's agent (F9).
+	if taskRecord != nil && strings.TrimSpace(taskRecord.PreferredAgent) != "" {
+		claimPath := claimFilePath(result.Project.RepoPath, taskRecord.PreferredAgent)
+		if _, statErr := os.Stat(claimPath); statErr == nil {
+			if rmErr := os.Remove(claimPath); rmErr == nil {
+				fmt.Fprintf(r.stdout, "File claims released: %s\n", taskRecord.PreferredAgent)
+			}
+		}
+	}
 
 	// Auto-stop any Idle sessions bound to this task so that orphaned background
 	// terminals (e.g. codex background terminal children) are cleaned up immediately

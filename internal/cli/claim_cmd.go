@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
 )
 
 // claimRecord is the on-disk representation of a file-lock claim.
@@ -210,6 +212,29 @@ func (r Runner) executeClaimList(_ []string) error {
 		}
 	}
 	return nil
+}
+
+// warnOnClaimOverlap prints a warning when other agents have active file claims.
+// This is a soft warning — it never blocks spawn.
+func (r Runner) warnOnClaimOverlap(result *project.OpenResult, spawningAgent string) {
+	claims, err := loadAllClaims(result.Project.RepoPath)
+	if err != nil || len(claims) == 0 {
+		return
+	}
+	for _, c := range claims {
+		if c.Agent == spawningAgent {
+			continue
+		}
+		taskSuffix := ""
+		if c.TaskID != "" {
+			taskSuffix = " (task " + c.TaskID + ")"
+		}
+		fmt.Fprintf(r.stderr, "warning: agent %q holds %d file claim(s)%s — verify no overlap before proceeding\n",
+			c.Agent, len(c.Paths), taskSuffix)
+		for _, p := range c.Paths {
+			fmt.Fprintf(r.stderr, "  claimed: %s\n", p)
+		}
+	}
 }
 
 // loadAllClaims reads every .json file in the claims directory.

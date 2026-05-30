@@ -2,7 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // taskTemplate defines a reusable task configuration preset.
@@ -80,8 +84,59 @@ var builtinTemplateOrder = []string{
 	"research-spike",
 }
 
-// executeTaskTemplates lists available built-in task templates.
+// customTemplateDir returns the path to the user-defined task template directory.
+func customTemplateDir(repoPath string) string {
+	return filepath.Join(repoPath, ".aom", "templates", "tasks")
+}
+
+// yamlTaskTemplate is the on-disk schema for custom YAML templates.
+type yamlTaskTemplate struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+	Mode        string `yaml:"mode"`
+	Steps       []struct {
+		StepType string `yaml:"step_type"`
+		Title    string `yaml:"title"`
+	} `yaml:"steps"`
+}
+
+// loadCustomTaskTemplates reads *.yaml files from .aom/templates/tasks/.
+func loadCustomTaskTemplates(repoPath string) []taskTemplate {
+	dir := customTemplateDir(repoPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []taskTemplate
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var y yamlTaskTemplate
+		if err := yaml.Unmarshal(data, &y); err != nil || y.Name == "" {
+			continue
+		}
+		tpl := taskTemplate{
+			Name:        y.Name,
+			Description: y.Description,
+			Mode:        y.Mode,
+		}
+		for _, s := range y.Steps {
+			tpl.Steps = append(tpl.Steps, taskTemplateStep{StepType: s.StepType, Title: s.Title})
+		}
+		out = append(out, tpl)
+	}
+	return out
+}
+
+// executeTaskTemplates lists available built-in and custom task templates.
 func (r Runner) executeTaskTemplates(_ []string) error {
+	result, _ := r.app.Projects.Open(".")
+
 	fmt.Fprintln(r.stdout, "Available task templates:")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "  %-20s  %-12s  %s\n", "NAME", "MODE", "DESCRIPTION")
@@ -91,16 +146,39 @@ func (r Runner) executeTaskTemplates(_ []string) error {
 		tpl := builtinTaskTemplates[name]
 		fmt.Fprintf(r.stdout, "  %-20s  %-12s  %s\n", tpl.Name, tpl.Mode, tpl.Description)
 	}
+
+	if result != nil {
+		custom := loadCustomTaskTemplates(result.Project.RepoPath)
+		for _, tpl := range custom {
+			fmt.Fprintf(r.stdout, "  %-20s  %-12s  %s  (custom)\n", tpl.Name, tpl.Mode, tpl.Description)
+		}
+	}
+
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Usage: aom task create \"<title>\" --template <name>")
+	if result != nil {
+		fmt.Fprintf(r.stdout, "Custom templates: %s/*.yaml\n", customTemplateDir(result.Project.RepoPath))
+	}
 	return nil
 }
 
-// resolveTaskTemplate looks up a built-in template by name.
+// resolveTaskTemplate looks up a template by name: built-ins first, then custom YAML files.
 func resolveTaskTemplate(name string) (*taskTemplate, error) {
-	t, ok := builtinTaskTemplates[strings.ToLower(strings.TrimSpace(name))]
-	if !ok {
-		return nil, fmt.Errorf("unknown template %q — run 'aom task templates' to list available templates", name)
+	return resolveTaskTemplateWithRepo(name, "")
+}
+
+func resolveTaskTemplateWithRepo(name, repoPath string) (*taskTemplate, error) {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if t, ok := builtinTaskTemplates[key]; ok {
+		return &t, nil
 	}
-	return &t, nil
+	if repoPath != "" {
+		for _, tpl := range loadCustomTaskTemplates(repoPath) {
+			if strings.ToLower(tpl.Name) == key {
+				tplCopy := tpl
+				return &tplCopy, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("unknown template %q — run 'aom task templates' to list available templates", name)
 }
