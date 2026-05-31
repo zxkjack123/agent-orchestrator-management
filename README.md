@@ -70,23 +70,27 @@ aom session spawn builder --real
 
 Spawn a team and let an orchestrator agent handle task creation, assignment, and coordination for you.
 
+Mix runtimes freely — Claude Code and Codex can work side-by-side on the same project.
+
 ```bash
 cd your-project
 aom project init "my-project"
 
-# Register agents
+# Register agents — mix runtimes as you prefer
 aom agent add orchestrator --role orchestrator --class orchestrator --runtime claude
-aom agent add builder      --role builder      --class builder      --runtime claude
+aom agent add backend      --role builder      --class builder      --runtime codex    # OpenAI Codex
+aom agent add frontend     --role builder      --class frontend     --runtime claude   # Claude Code
 aom agent add reviewer     --role reviewer     --class reviewer     --runtime claude
 
 # Provision permanent workspaces
 aom agent provision orchestrator
-aom agent provision builder
+aom agent provision backend
+aom agent provision frontend
 aom agent provision reviewer
 
 # Spawn the whole team in a tiled tmux window
 aom orchestrate --real
-# → Tell the orchestrator what you want to build — it manages the rest
+# → Tell the orchestrator what you want to build — it assigns tasks and coordinates across runtimes
 ```
 
 After spawning, monitor from another terminal:
