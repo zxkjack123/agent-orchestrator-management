@@ -55,26 +55,46 @@ aom version
 
 ## Quick Start
 
+### Single Agent — try it in 4 steps
+
 ```bash
-# 1. Initialize AOM in your project repository
+cd your-project
+aom project init "my-project"
+aom agent add builder --role builder --class builder --runtime claude
+aom agent provision builder   # creates a permanent workspace
+aom session spawn builder --real
+# → Claude Code opens with full AOM context; start talking to it
+```
+
+### AI Orchestrator — multi-agent team
+
+Spawn a team and let an orchestrator agent handle task creation, assignment, and coordination for you.
+
+```bash
 cd your-project
 aom project init "my-project"
 
-# 2. Register an AI agent
-aom agent add builder --role builder --class builder --runtime claude
+# Register agents
+aom agent add orchestrator --role orchestrator --class orchestrator --runtime claude
+aom agent add builder      --role builder      --class builder      --runtime claude
+aom agent add reviewer     --role reviewer     --class reviewer     --runtime claude
 
-# 3. Create a task
-aom task create "Add user authentication endpoint"
-
-# 4. Optional: create a permanent workspace for the agent (free-roam mode)
+# Provision permanent workspaces
+aom agent provision orchestrator
 aom agent provision builder
+aom agent provision reviewer
 
-# 5. Spawn an agent session for the task
-aom session spawn builder --task TASK-1 --real
+# Spawn the whole team in a tiled tmux window
+aom orchestrate --real
+# → Tell the orchestrator what you want to build — it manages the rest
+```
 
-# 6. Monitor progress
-aom status
-aom dashboard
+After spawning, monitor from another terminal:
+
+```bash
+aom status            # project-wide summary
+aom dashboard         # live ANSI dashboard (Ctrl+C to exit)
+aom channel read      # read the shared team channel
 ```
 
 ## Key Commands
