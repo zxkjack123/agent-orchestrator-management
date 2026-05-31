@@ -117,6 +117,16 @@ func (b *Builder) realRuntimeShellCommand(spec SessionSpec) (string, error) {
 	if spec.ProjectBin != "" {
 		projectDir := filepath.Dir(spec.ProjectBin)
 		prefix = append(prefix, fmt.Sprintf(`export PATH="%s":$PATH`, projectDir))
+		// If the binary is not named "aom" (e.g. "aom-bin" during dev), create a
+		// same-directory symlink named "aom" so agents always resolve the correct
+		// version via PATH instead of falling back to a stale system install.
+		if binBase := filepath.Base(spec.ProjectBin); binBase != "aom" {
+			aomLink := filepath.Join(projectDir, "aom")
+			prefix = append(prefix, fmt.Sprintf(
+				`[ -e "%s" ] || ln -sf "%s" "%s" 2>/dev/null || true`,
+				aomLink, spec.ProjectBin, aomLink,
+			))
+		}
 	}
 	if spec.AgentName != "" {
 		prefix = append(prefix, fmt.Sprintf(`export AOM_AGENT_NAME="%s"`, spec.AgentName))

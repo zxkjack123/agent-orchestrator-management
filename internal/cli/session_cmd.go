@@ -246,6 +246,25 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		}
 	}
 
+	// Budget guard: refuse when max_concurrent_sessions is set and already reached.
+	if cap := result.Policy.Policy.MaxConcurrentSessions; cap > 0 {
+		allSessions, listErr := sessionService.ListByProject(result.Project.ID)
+		if listErr == nil {
+			active := 0
+			for _, s := range allSessions {
+				if !isTerminalSessionStatus(s.Status) {
+					active++
+				}
+			}
+			if active >= cap {
+				return nil, fmt.Errorf(
+					"max_concurrent_sessions limit reached (%d/%d active)\nStop a session first or raise the limit in .aom/policy.yaml",
+					active, cap,
+				)
+			}
+		}
+	}
+
 	record, err := sessionService.Create(session.CreateParams{
 		ProjectID:       result.Project.ID,
 		AgentID:         agentRecord.ID,
@@ -2032,6 +2051,7 @@ func (r Runner) executeSessionRecover(args []string) error {
 // Usage: aom session watch [--auto-spawn] [--interval <dur>] [--timeout <dur>] [--real|--mock]
 func (r Runner) executeSessionWatch(args []string) error {
 	autoSpawn := false
+	gridMode := false
 	interval := 15 * time.Second
 	watchTimeout := 60 * time.Minute
 	launchMode := aomruntime.LaunchModePlaceholder
@@ -2040,6 +2060,8 @@ func (r Runner) executeSessionWatch(args []string) error {
 		switch args[i] {
 		case "--auto-spawn":
 			autoSpawn = true
+		case "--grid":
+			gridMode = true
 		case "--interval":
 			i++
 			if i >= len(args) {
@@ -2138,6 +2160,9 @@ func (r Runner) executeSessionWatch(args []string) error {
 						spawnArgs = append(spawnArgs, "--real")
 					} else {
 						spawnArgs = append(spawnArgs, "--mock")
+					}
+					if gridMode {
+						spawnArgs = append(spawnArgs, "--grid")
 					}
 					fmt.Fprintf(r.stdout, "  Auto-spawning %s...\n", agentName)
 					if spawnErr := r.executeSessionSpawn(spawnArgs); spawnErr != nil {

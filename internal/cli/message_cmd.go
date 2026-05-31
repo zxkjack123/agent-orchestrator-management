@@ -98,7 +98,10 @@ func (r Runner) notifyAgentInbox(repoPath, toAgent, fromAgent, message string) {
 	}
 
 	notification := fmt.Sprintf("[DM] from %s: %s", fromAgent, message)
-	for _, s := range all {
+	// Iterate newest-first so workspace agents (which accumulate multiple sessions)
+	// receive the notification on their current session, not an old stopped one.
+	for i := len(all) - 1; i >= 0; i-- {
+		s := all[i]
 		if s.AgentName != toAgent {
 			continue
 		}
@@ -242,6 +245,8 @@ func (r Runner) executeMessageWatch(args []string) error {
 				fmt.Fprintf(r.stdout, "[inbox] %s\n", trimmed)
 			}
 		}
+		// Exit as soon as a message arrives — the caller (agent) should act on it.
+		return nil
 	}
 
 	fmt.Fprintf(r.stdout, "inbox watch timed out after %s\n", watchTimeout)

@@ -133,23 +133,42 @@ func parseOutboxFile(path string) ([]outboxEntry, error) {
 	return entries, nil
 }
 
-// flushAllOutboxes sweeps every worktree and routes all pending messages into
-// the shared channel/mailbox. Returns the total number of messages flushed.
-func flushAllOutboxes(repoPath string) (int, error) {
-	worktreesDir := filepath.Join(repoPath, ".aom", "worktrees")
-	entries, err := os.ReadDir(worktreesDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("read worktrees dir: %w", err)
-	}
-	total := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
+// outboxRoots collects all directories that may contain an .agent/outbox.md:
+// task worktrees (.aom/worktrees/<task>/) and agent workspaces (.aom/agents/<name>/workspace/).
+func outboxRoots(repoPath string) []string {
+	var roots []string
+	for _, subdir := range []string{
+		filepath.Join(repoPath, ".aom", "worktrees"),
+		filepath.Join(repoPath, ".aom", "agents"),
+	} {
+		entries, err := os.ReadDir(subdir)
+		if err != nil {
 			continue
 		}
-		n, err := flushWorktreeOutbox(repoPath, filepath.Join(worktreesDir, entry.Name()))
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			candidate := filepath.Join(subdir, e.Name())
+			// Agent workspace dirs have a nested "workspace/" subdirectory.
+			ws := filepath.Join(candidate, "workspace")
+			if info, err := os.Stat(ws); err == nil && info.IsDir() {
+				roots = append(roots, ws)
+			} else {
+				// Task worktree — root is the directory itself.
+				roots = append(roots, candidate)
+			}
+		}
+	}
+	return roots
+}
+
+// flushAllOutboxes sweeps every worktree and agent workspace, routing all
+// pending messages into the shared channel/mailbox. Returns the total flushed.
+func flushAllOutboxes(repoPath string) (int, error) {
+	total := 0
+	for _, root := range outboxRoots(repoPath) {
+		n, err := flushWorktreeOutbox(repoPath, root)
 		if err != nil {
 			return total, err
 		}
@@ -159,19 +178,11 @@ func flushAllOutboxes(repoPath string) (int, error) {
 }
 
 // countPendingOutboxMessages returns the total staged outbox entries across all
-// worktrees without modifying any files.
+// worktrees and agent workspaces without modifying any files.
 func countPendingOutboxMessages(repoPath string) int {
-	worktreesDir := filepath.Join(repoPath, ".aom", "worktrees")
-	entries, err := os.ReadDir(worktreesDir)
-	if err != nil {
-		return 0
-	}
 	total := 0
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		msgs, err := parseOutboxFile(outboxFilePath(filepath.Join(worktreesDir, entry.Name())))
+	for _, root := range outboxRoots(repoPath) {
+		msgs, err := parseOutboxFile(outboxFilePath(root))
 		if err == nil {
 			total += len(msgs)
 		}

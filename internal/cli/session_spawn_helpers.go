@@ -198,6 +198,14 @@ func (r Runner) materializeAgentContext(result *project.OpenResult, agentRecord 
 					_, _ = fmt.Fprintf(f, "\n## Project Memory\n%s\n", memData)
 				}
 
+				// Project goal — injected for orchestrator-class agents so they know
+				// what they are driving towards without a separate read step.
+				if roleCfg, ok := result.RoleConfigs[agentRecord.Role]; ok && roleCfg.Class == "orchestrator" {
+					if goalRec, gErr := artifact.ReadGoalFile(result.Project.RepoPath); gErr == nil {
+						_, _ = fmt.Fprintf(f, "\n## Project Goal\nStatus: %s\n\n%s\n", goalRec.Status, goalRec.Text)
+					}
+				}
+
 				_ = f.Close()
 			}
 		}
@@ -576,6 +584,17 @@ func sendableSessionStatus(status string) bool {
 func isActiveSessionStatus(status string) bool {
 	switch strings.TrimSpace(status) {
 	case "Booting", "Idle", "Working", "WaitingApproval", "WaitingHandoff", "Blocked":
+		return true
+	default:
+		return false
+	}
+}
+
+// isTerminalSessionStatus returns true for sessions that are definitively done
+// and no longer consuming a tmux pane or agent process.
+func isTerminalSessionStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "Stopped", "Archived", "Failed":
 		return true
 	default:
 		return false

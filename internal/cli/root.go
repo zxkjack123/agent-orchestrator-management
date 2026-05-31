@@ -140,8 +140,12 @@ func (r Runner) Execute(args []string) (retErr error) {
 		return r.executeWatch(args[1:])
 	case "run-pipeline":
 		return r.executeRunPipeline(args[1:])
+	case "goal":
+		return r.executeGoal(args[1:])
 	case "orchestrate":
 		return r.executeOrchestrate(args[1:])
+	case "orchestrator":
+		return r.executeOrchestratorMode(args[1:])
 	case "worktree":
 		return r.executeWorktree(args[1:])
 	case "memory":
@@ -480,7 +484,7 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom task accept <task-id> [--auto] [--interval <dur>] [--timeout <dur>] : accept agent work — complete all pending steps and close the task")
 	fmt.Fprintln(r.stdout, "  --auto : poll every --interval (default 15s) until all verify checks pass, then accept automatically; timeout default 30m")
 	fmt.Fprintln(r.stdout, "aom task verify <task-id> [--watch] [--interval <dur>] [--timeout <dur>] : check completion readiness; --watch polls until all checks pass")
-	fmt.Fprintln(r.stdout, "aom task signal <type> --task <id> [--summary <text>] [--step <step-id>] : record a signal event (task.completed, handoff.prepared, checkpoint.created, step.completed)")
+	fmt.Fprintln(r.stdout, "aom task signal <type> --task <id> [--summary <text>] [--step <step-id>] : record a signal event (task.completed, handoff.prepared, checkpoint.created, step.completed, escalation.required)")
 	fmt.Fprintln(r.stdout, "aom task link <task-id> --blocked-by <blocker-id> : declare that task-id cannot start until blocker-id is done")
 	fmt.Fprintln(r.stdout, "aom task unlink <task-id> --blocked-by <blocker-id> : remove a dependency edge")
 	fmt.Fprintln(r.stdout, "aom review <task-id> [--mock|--real] : prepare or start review flow")
@@ -503,7 +507,7 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom session replace <session-id> --agent <agent> --reason <why> [--mock|--real] : spawn a replacement in the same context")
 	fmt.Fprintln(r.stdout, "aom session set-agent-id <session-id> <native-id> : register the agent CLI's own session ID for resume on next spawn")
 	fmt.Fprintln(r.stdout, "aom session wait <session-id> --event <type> [--timeout 30m] : block until event appears in task log (e.g. handoff.prepared, task.completed)")
-	fmt.Fprintln(r.stdout, "aom session watch [--auto-spawn] [--interval <dur>] [--timeout <dur>] [--real|--mock] : poll for Ready tasks with no session; --auto-spawn spawns them automatically")
+	fmt.Fprintln(r.stdout, "aom session watch [--auto-spawn] [--grid] [--interval <dur>] [--timeout <dur>] [--real|--mock] : poll for Ready tasks with no session; --auto-spawn spawns them automatically; --grid places new sessions in team window")
 	fmt.Fprintln(r.stdout, "aom session cleanup --stale [--dry-run] : remove orphan policy wrapper dirs and capture state files for inactive sessions")
 	fmt.Fprintln(r.stdout, "aom task reanalyze <task-id> : refresh task artifacts from current state and print recommended next action")
 	fmt.Fprintln(r.stdout, "aom capture <session-id>                        : read worker output through AOM")
@@ -550,6 +554,16 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom merge commit <task-id> [--into <branch>] : merge task branch; runs merge check first")
 	fmt.Fprintln(r.stdout, "aom merge continue <task-id> : complete a merge paused by conflicts (after git add of resolved files)")
 	fmt.Fprintln(r.stdout, "aom merge abort <task-id> : abort a conflicted merge and restore HEAD")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintln(r.stdout, "Goal & Orchestrator Mode")
+	fmt.Fprintln(r.stdout, "aom goal set \"<text>\"      — set the project goal for the orchestrator agent")
+	fmt.Fprintln(r.stdout, "aom goal show             — print current goal and status")
+	fmt.Fprintln(r.stdout, "aom goal complete         — mark the current goal as complete")
+	fmt.Fprintln(r.stdout, "aom orchestrator start [--goal \"<text>\"] [--real|--mock] [--no-grid]")
+	fmt.Fprintln(r.stdout, "  Spawn the orchestrator agent in the team grid. Workers it spawns appear in the same grid.")
+	fmt.Fprintln(r.stdout, "aom orchestrator view [--layout tiled|even-horizontal|even-vertical]")
+	fmt.Fprintln(r.stdout, "  Attach to the team grid — see orchestrator + workers at once (Ctrl+B+arrows to navigate)")
+	fmt.Fprintln(r.stdout, "aom orchestrator status   — goal + channel summary without attaching")
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Automation (Phase 5 — Guided Autonomy)")
 	fmt.Fprintln(r.stdout, "aom run-pipeline <task-id> [--agent <name>] [--timeout <dur>] [--real|--mock] [--skip-merge]")

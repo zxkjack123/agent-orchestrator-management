@@ -791,6 +791,35 @@ func (r Runner) executeOrchestrate(args []string) error {
 
 	fmt.Fprintf(r.stdout, "Orchestrating %d agent(s) into team window (layout: %s)\n\n", len(enabled), layout)
 
+	// Auto-provision any agent that does not yet have a workspace directory.
+	// Close DB connections explicitly (not defer) so they are released before
+	// the spawn loop opens its own DB connections, avoiding SQLite contention.
+	worktreeService, wtDB, wtErr := r.app.OpenWorktreeService(result.DBPath)
+	if wtErr == nil {
+		agentRepo, agentDB, arErr := r.app.OpenAgentRepository(result.DBPath)
+		if arErr == nil {
+			for i := range result.Agents {
+				a := &result.Agents[i]
+				if !a.Enabled || strings.TrimSpace(a.WorkspacePath) != "" {
+					continue
+				}
+				wp, provErr := worktreeService.ProvisionAgentWorkspace(result.Project.RepoPath, a.Name)
+				if provErr != nil {
+					fmt.Fprintf(r.stdout, "  %-24s provision warning: %v\n", a.Name, provErr)
+					continue
+				}
+				if setErr := agentRepo.SetWorkspacePath(result.Project.ID, a.Name, wp); setErr != nil {
+					fmt.Fprintf(r.stdout, "  %-24s workspace set warning: %v\n", a.Name, setErr)
+					continue
+				}
+				a.WorkspacePath = wp
+				fmt.Fprintf(r.stdout, "  %-24s provisioned workspace: %s\n", a.Name, wp)
+			}
+			agentDB.Close()
+		}
+		wtDB.Close()
+	}
+
 	spawned := 0
 	skipped := 0
 	var firstAgentPane string

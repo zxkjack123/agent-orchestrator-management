@@ -143,6 +143,10 @@ type PolicyConfig struct {
 	// Safe to enable when AOM itself provides the external control boundary.
 	// Set via policy.yaml:  codex_bypass_sandbox: true
 	CodexBypassSandbox bool `yaml:"codex_bypass_sandbox"`
+	// MaxConcurrentSessions caps the number of non-terminal sessions that may
+	// run simultaneously. Prevents runaway spawning when an orchestrator agent
+	// loops. Zero means no limit. Set via policy.yaml: max_concurrent_sessions: 5
+	MaxConcurrentSessions int `yaml:"max_concurrent_sessions"`
 }
 
 // SessionDefaultsConfig defines session-scoped defaults.

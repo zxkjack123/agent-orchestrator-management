@@ -35,8 +35,12 @@ func (p *claudeProvider) LaunchShellSpec(spec LaunchSpec, lookPath func(string) 
 	if disallowedFlag != "" {
 		execCmd += " " + disallowedFlag
 	}
+	preamble := []string{claudeEnvResetPreamble}
+	if spec.WorktreePath != "" {
+		preamble = append(preamble, fmt.Sprintf(`cd "%s"`, spec.WorktreePath))
+	}
 	return ShellSpec{
-		Preamble: []string{claudeEnvResetPreamble},
+		Preamble: preamble,
 		ExecCmd:  execCmd,
 	}, nil
 }

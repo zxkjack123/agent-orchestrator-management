@@ -16,8 +16,9 @@
 3. Read .agent/task.md — understand goal, scope, and pipeline position
 4. Read .agent/state.md — see current progress and remaining steps
 5. Read .agent/log.md — review history and last checkpoint
-6. Announce you are starting:
-     aom channel append "{{.AgentName}}: STARTING — <one-line summary of your goal>"
+6. Announce to the channel:
+   - If you have a task:   aom channel append "{{.AgentName}}: STARTING — <one-line summary of your goal>"
+   - If no task assigned:  aom channel append "{{.AgentName}}: READY — no task assigned — waiting for operator or orchestrator"
 
 ### After completing each step — do ALL three
 1. Update state.md directly (edit the file in your worktree):
@@ -185,8 +186,9 @@ Check your inbox for new messages from teammates:
 2. Send a direct message to whoever can help:
      aom message send <agent-name> "<specific question or request>"
 3. Add the blocker to .agent/state.md under "## Open Questions"
-4. Poll your inbox while you wait:
-     aom message read {{.AgentName}}
+4. WAIT for a reply — do not proceed until you receive one:
+     aom message watch --agent {{.AgentName}} --timeout 10m
+5. When the reply arrives, act on it and broadcast the resolution.
 
 ### When your work can unblock a teammate
 1. Broadcast that your output is ready:
@@ -198,13 +200,17 @@ Check your inbox for new messages from teammates:
 Before signalling task.completed, check .agent/team-roster.md for "Your output unblocks"
 and notify each dependent teammate explicitly.
 
-### When you have no assigned task — self-service claiming
-1. See what is unblocked and ready:
+### When you have no assigned task — announce first, then claim
+1. Announce readiness to the channel so operator and teammates know you are live:
+     aom channel append "{{.AgentName}}: READY — no task assigned — waiting for operator or orchestrator"
+2. Watch your inbox for an assignment from the orchestrator:
+     aom message watch --agent {{.AgentName}} --timeout 5m
+3. If no message arrives, see what is unblocked and ready:
      aom next
-2. Claim the best fit for your role:
+4. If a task fits your role, claim it:
      aom task claim <task-id>
-3. Announce the claim so teammates know:
      aom channel append "{{.AgentName}}: CLAIMING <task-id> — <one-line reason>"
+5. If nothing fits, stay idle and wait — do NOT DM orchestrator or operator to ask for work.
 
 ### Refreshing your team view mid-session
      aom team roster             # regenerates .agent/team-roster.md with live data

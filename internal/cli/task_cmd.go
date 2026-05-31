@@ -2210,21 +2210,22 @@ func (r Runner) executeTaskCancel(args []string) error {
 //
 //	aom task signal <event-type> --task <task-id> [--summary <text>] [--step <step-id>]
 //
-// Valid event types: task.completed, handoff.prepared, checkpoint.created, step.completed
+// Valid event types: task.completed, handoff.prepared, checkpoint.created, step.completed, escalation.required
 func (r Runner) executeTaskSignal(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("event type is required — valid types: task.completed, handoff.prepared, checkpoint.created, step.completed")
+		return fmt.Errorf("event type is required — valid types: task.completed, handoff.prepared, checkpoint.created, step.completed, escalation.required")
 	}
 
 	validEventTypes := map[string]bool{
-		"task.completed":     true,
-		"handoff.prepared":   true,
-		"checkpoint.created": true,
-		"step.completed":     true,
+		"task.completed":      true,
+		"handoff.prepared":    true,
+		"checkpoint.created":  true,
+		"step.completed":      true,
+		"escalation.required": true,
 	}
 	eventType := strings.TrimSpace(args[0])
 	if !validEventTypes[eventType] {
-		return fmt.Errorf("unknown event type %q; valid types: task.completed, handoff.prepared, checkpoint.created, step.completed", eventType)
+		return fmt.Errorf("unknown event type %q; valid types: task.completed, handoff.prepared, checkpoint.created, step.completed, escalation.required", eventType)
 	}
 
 	var taskID, summary, stepID string

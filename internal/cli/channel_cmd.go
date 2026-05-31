@@ -14,7 +14,9 @@ func (r Runner) executeChannelAppend(args []string) error {
 		return fmt.Errorf("message is required")
 	}
 
-	agentName := "operator"
+	// Default to AOM_AGENT_NAME (injected at spawn) so agents don't need --agent.
+	// Fall back to "operator" when called outside an agent session.
+	agentName := senderName()
 	var msgParts []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -101,9 +103,17 @@ func (r Runner) notifyLiveSessions(repoPath, fromAgent, message string) {
 	}
 
 	notification := fmt.Sprintf("[Team] from %s: %s", fromAgent, message)
-	for _, s := range all {
+	// Track agents already notified to avoid sending duplicates when an agent
+	// has multiple sessions (workspace agents accumulate sessions over time).
+	// Iterate newest-first so the active session is preferred.
+	notified := make(map[string]bool)
+	for i := len(all) - 1; i >= 0; i-- {
+		s := all[i]
 		if s.AgentName == fromAgent {
 			continue // don't echo back to sender
+		}
+		if notified[s.AgentName] {
+			continue // already delivered to this agent's newest session
 		}
 		if !sendableSessionStatus(s.Status) || strings.TrimSpace(s.TmuxPane) == "" {
 			continue
@@ -113,6 +123,7 @@ func (r Runner) notifyLiveSessions(repoPath, fromAgent, message string) {
 			continue
 		}
 		_ = r.app.Tmux.SendKeys(s.TmuxPane, notification)
+		notified[s.AgentName] = true
 	}
 }
 

@@ -860,13 +860,22 @@ func (r Runner) autoStopCompletedSessions(result *project.OpenResult, sessions [
 	return sessions
 }
 
+// statusJSONActionItem is one concrete action item serialised into `aom status --json`.
+type statusJSONActionItem struct {
+	Priority int    `json:"priority"` // 1=urgent, 2=normal, 3=info
+	Label    string `json:"label"`    // APPROVAL | ACCEPT | SPAWN | BLOCKED
+	Detail   string `json:"detail"`
+	Command  string `json:"command,omitempty"`
+}
+
 // statusJSONOutput is the JSON structure for `aom status --json`.
 type statusJSONOutput struct {
-	Project  statusJSONProject   `json:"project"`
-	Agents   []statusJSONAgent   `json:"agents"`
-	Sessions []statusJSONSession `json:"sessions"`
-	Tasks    []statusJSONTask    `json:"tasks"`
-	Counts   statusJSONCounts    `json:"counts"`
+	Project     statusJSONProject      `json:"project"`
+	Agents      []statusJSONAgent      `json:"agents"`
+	Sessions    []statusJSONSession    `json:"sessions"`
+	Tasks       []statusJSONTask       `json:"tasks"`
+	Counts      statusJSONCounts       `json:"counts"`
+	ActionItems []statusJSONActionItem `json:"action_items"`
 }
 
 type statusJSONProject struct {
@@ -976,6 +985,19 @@ func (r Runner) printStatusJSON(result *project.OpenResult, sessions []session.R
 			Status: tv.Task.Status,
 			Mode:   tv.Task.Mode,
 			Steps:  steps,
+		})
+	}
+
+	// Action items — reuse buildActionItems so the orchestrator agent can
+	// parse the same decision data that the human operator sees.
+	rawItems := r.buildActionItems(result, sessions, taskViews)
+	out.ActionItems = make([]statusJSONActionItem, 0, len(rawItems))
+	for _, item := range rawItems {
+		out.ActionItems = append(out.ActionItems, statusJSONActionItem{
+			Priority: item.priority,
+			Label:    item.label,
+			Detail:   item.detail,
+			Command:  item.command,
 		})
 	}
 

@@ -151,6 +151,7 @@ Defined in full in `docs/state-machine.md`. Summary:
 | Phase 2 completion — F2–F8 fixes, `aom task signal`, E2E 2-agent test (builder→reviewer), master plan doc | Complete |
 | Phase 4 Operator UX — `aom switch`, `aom dashboard`, `aom task verify --watch`, `aom status --action-items` | Complete |
 | Phase 5 Guided Autonomy — `aom task accept --auto`, `aom session watch --auto-spawn`, `aom run-pipeline` + timeout/escalation | Complete |
+| Messaging & communication hardening — claude workspace CWD, auto-provision deadlock, channel sender, notification ordering, message watch exit-on-receipt | Complete |
 
 **Immediate next work** (see `docs/dev/current-status.md` for full detail):
 

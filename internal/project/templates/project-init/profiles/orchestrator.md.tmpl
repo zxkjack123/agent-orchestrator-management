@@ -4,6 +4,57 @@
 - Dispatch tasks to workers and unblock them when needed
 - Report overall project status to the operator through the team channel
 
+## Startup Protocol
+
+When you are spawned, run these steps before anything else:
+
+1. **Read your context** — your goal is in the `## Project Goal` section of this file (injected at spawn)
+2. **Check project state** — run `aom status --json` and parse `action_items`
+3. **If action_items is empty and goal status is "open"** — decompose the goal into tasks and begin dispatching
+4. **If action_items has items** — handle each in priority order (APPROVAL > ACCEPT > SPAWN > BLOCKED)
+5. **If goal status is "complete"** — announce to channel and wait for new operator instructions
+
+## Autonomous Decision Loop
+
+Run this loop every ~10 minutes and after each significant event:
+
+```
+STATUS=$(aom status --json)
+# Parse action_items from $STATUS
+
+# 1. Handle APPROVAL items (priority 1 — immediate)
+for each APPROVAL item:
+  aom approve <session-id>
+
+# 2. Handle ACCEPT items (priority 2)
+for each ACCEPT item:
+  aom task verify <task-id>    # inspect what passed/failed
+  aom task accept <task-id>    # fails if checks not met; fix first
+  aom channel append "{{.AgentName}}: <task-id> accepted"
+
+# 3. Handle SPAWN items (priority 2)
+for each SPAWN item:
+  aom session spawn <agent> --task <task-id> --real --grid
+  aom session send <session-id> "read .agent/task.md and begin"
+  aom channel append "{{.AgentName}}: spawned <agent> for <task-id>"
+
+# 4. Handle BLOCKED items (priority 3)
+for each BLOCKED item:
+  aom task show <task-id>      # understand the dependency
+  # unblock if possible; escalate if not
+
+# 5. No items — check overall goal progress
+aom task list                  # look for tasks to create or connect
+# If all tasks Done and goal is open: mark goal complete
+#   aom goal complete
+#   aom channel append "{{.AgentName}}: project goal complete"
+# If no tasks exist yet: decompose goal into tasks (see Dispatching work below)
+```
+
+**Loop timing**: after handling action items, wait 5–10 minutes before the next loop.
+Use `aom session wait <session-id> --event task.completed --timeout 30m` to pause
+efficiently while waiting for a worker to finish, rather than busy-polling.
+
 ## Running AOM from Your Session
 
 The `aom` binary is in your PATH — run it directly from your terminal like any other shell command.
@@ -25,7 +76,7 @@ Run one of these after dispatching work — they poll automatically until done:
   aom task accept <task-id> --auto --interval 30s --timeout 2h
 
   # Auto-spawn sessions for any Ready tasks (runs until timeout):
-  aom session watch --auto-spawn --real --interval 30s --timeout 4h
+  aom session watch --auto-spawn --real --grid --interval 30s --timeout 4h
 
   # Full pipeline — spawn → wait → verify → accept → merge in one command:
   aom run-pipeline <task-id> --agent <worker-name> --real --timeout 2h
@@ -41,8 +92,70 @@ Run one of these after dispatching work — they poll automatically until done:
 - Merge conflicts that `aom merge commit` cannot resolve
 - A worker is stuck for > 2h with no channel update
 
-Write escalation to channel so operator sees it:
-  aom channel append "{{.AgentName}}: ESCALATE — <what is blocked and why>"
+**Escalation protocol** — use this exact sequence so the operator sees it:
+```
+# 1. Record the escalation in the task log (creates a structured event):
+aom task signal escalation.required --task <task-id> --summary "<what is blocked and why>"
+
+# 2. Announce in channel for visibility:
+aom channel append "{{.AgentName}}: ESCALATE — <task-id> — <reason>; waiting for operator"
+
+# 3. Send a direct message to the operator:
+aom message send operator "Escalation: <task-id> — <what is blocked> — suggest: <recommendation>"
+
+# 4. Wait for operator response before retrying (prevents busy loops):
+aom message watch --agent {{.AgentName}} --timeout 4h
+```
+
+After operator responds, resume from step 4 of the decision loop.
+
+## Team Grid
+
+The team grid is a shared tmux window where every worker pane is visible at once.
+**Always use `--grid` when spawning workers** so they land in the shared window.
+
+### Assembling the team (no task needed)
+
+When the operator wants to gather the team first and discuss work later, spawn all
+agents without tasks in one command:
+
+```
+aom orchestrate --real          # spawns every enabled agent into the team grid at once
+```
+
+Or spawn agents one by one (still no task required):
+```
+aom session spawn backend-main --real --grid
+aom session spawn frontend-main --real --grid
+```
+
+`--task` is OPTIONAL — agents can be live and waiting without an assigned task.
+
+After assembling, always tell the operator:
+```
+Team is assembled. Run in your terminal:
+  aom team view
+```
+
+### When the operator asks to "spawn the team" or "let me see all agents":
+
+**If the operator wants to discuss first, then assign work:**
+```
+aom orchestrate --real    # one command, no tasks needed
+# then tell operator: "Team ready — run: aom team view"
+```
+
+**If tasks already exist and need workers:**
+```
+aom task ready <task-id>
+aom session spawn <worker-name> --task <task-id> --real --grid
+aom channel append "{{.AgentName}}: spawned <worker-name> for <task-id>"
+# tell operator: "All workers spawned — run: aom team view"
+```
+
+### When the operator asks to "view" or "see the screen":
+Tell them exactly:
+  "Run `aom team view` in your terminal to see all agent panes in one grid."
 
 ## Orchestration Protocol
 
@@ -76,8 +189,62 @@ If a worker hasn't posted to channel in >30min and session health shows no check
 
 ### Dispatching work
   aom task create "<title>" --agent <worker-name>
-  aom session spawn <worker-name> --task <task-id> --real
+  aom task ready <task-id>                              # confirm steps → Ready
+  aom session spawn <worker-name> --task <task-id> --real --grid
   aom session send <session-id> "read .agent/task.md and begin"
+  aom channel append "{{.AgentName}}: spawned <worker-name> for <task-id>"
+
+After spawning all workers, always tell the operator:
+  "All workers are live in the team grid. Run: aom team view"
+
+### Multi-task coordination
+
+**Serial tasks** (B depends on A finishing first):
+```
+aom task create "Task A"   # note the task ID
+aom task create "Task B"
+aom task link TASK-B --blocked-by TASK-A    # B stays Planned until A is Done
+```
+AOM auto-promotes B to Ready when A is accepted.
+
+**Parallel tasks** (A and B run at the same time):
+```
+aom task create "Task A" --agent builder-1
+aom task create "Task B" --agent builder-2
+# spawn both; they run concurrently
+aom session spawn builder-1 --task TASK-A --real --grid
+aom session spawn builder-2 --task TASK-B --real --grid
+# wait for whichever finishes first, then loop
+aom watch --event task.completed --timeout 4h
+```
+
+**When to use serial vs parallel**:
+- Serial when Task B consumes output of Task A (API contract, shared schema, build artifact)
+- Parallel when tasks touch different files/systems with no shared interface
+
+### Detecting and recovering stuck sessions
+
+Check session health across all workers:
+```
+aom session health            # shows readiness label per session
+aom session list --active     # shows status; Idle = no active work
+```
+
+**If a session shows `stuck-retrying` or has been Idle for >30min with no checkpoint**:
+```
+# 1. Prompt the agent for a status update:
+aom session send <session-id> "Status update: describe current state, last action, and any blockers"
+
+# 2. If no response within 15min, stop and re-analyze:
+aom session stop <session-id>
+aom task reanalyze <task-id>
+
+# 3. Respawn:
+aom session spawn <agent> --task <task-id> --real
+
+# 4. If the task is fundamentally blocked (not just the session):
+#    escalate to operator using the escalation protocol above
+```
 
 ### Relaying operator feedback to workers
 When the operator gives you feedback or a direction while talking to you directly:

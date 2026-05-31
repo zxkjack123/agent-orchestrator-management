@@ -58,18 +58,21 @@ aom version
 ```bash
 # 1. Initialize AOM in your project repository
 cd your-project
-aom project init
+aom project init "my-project"
 
 # 2. Register an AI agent
-aom agent add builder --role builder --runtime claude
+aom agent add builder --role builder --class builder --runtime claude
 
 # 3. Create a task
 aom task create "Add user authentication endpoint"
 
-# 4. Spawn an agent session for the task
-aom session spawn --agent builder --task TASK-1
+# 4. Optional: create a permanent workspace for the agent (free-roam mode)
+aom agent provision builder
 
-# 5. Monitor progress
+# 5. Spawn an agent session for the task
+aom session spawn builder --task TASK-1 --real
+
+# 6. Monitor progress
 aom status
 aom dashboard
 ```
@@ -124,7 +127,7 @@ aom run-pipeline <task-id>            # Full automated pipeline: spawn → verif
 ### Team Grid
 
 ```bash
-aom orchestrate [--layout tiled] [--real|--mock]  # Spawn all agents into one shared tmux window (grid view)
+aom orchestrate [--layout tiled] [--real|--mock]  # --task is optional — spawn team without assigning a task first
 aom team view                                      # Attach to the team window without respawning
 ```
 
@@ -137,6 +140,9 @@ aom dashboard                         # Live ANSI terminal dashboard (Ctrl+C to 
 aom events tail                       # Stream live log events
 aom broadcast "<message>"             # Push message to all live agent sessions + channel log
 aom message send <agent> "<message>"  # Send a direct message (DM) — recipient notified instantly
+aom message watch <agent> --timeout 5m  # Wait for a reply (exits when message arrives)
+aom message reply <msg-id> "<reply>"    # Reply to a specific message by ID
+aom channel append "<message>"          # Post to shared team channel log
 aom channel read                      # Read the shared team channel log
 aom metrics                           # Velocity report from task/step events
 ```
