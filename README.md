@@ -57,9 +57,20 @@ brew install lattapon-aek/tap/aom
 brew upgrade aom
 ```
 
-### Windows
+### Windows (via WSL2)
 
-Download the latest `.zip` from [GitHub Releases](https://github.com/lattapon-aek/agent-orchestrator-management/releases), extract, and add `aom.exe` to your `PATH`.
+AOM requires tmux, which is not available on native Windows. Run AOM inside WSL2:
+
+```powershell
+# From PowerShell — builds and installs aom inside your WSL2 environment
+.\scripts\build-wsl.ps1
+```
+
+Or open a WSL2 terminal and use the curl installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lattapon-aek/agent-orchestrator-management/main/scripts/get.sh | sh
+```
 
 ### Build from source (Go 1.24+ required)
 
