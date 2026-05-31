@@ -27,12 +27,22 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set GoReleaser args
+        id: args
+        run: |
+          ARGS="release --clean"
+          [ -n "$HOMEBREW_TAP_TOKEN" ] || ARGS="$ARGS --skip=brews"
+          echo "value=$ARGS" >> "$GITHUB_OUTPUT"
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: latest
-          args: release --clean
+          args: ${{ steps.args.outputs.value }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOVERSION: ${{ steps.setup-go.outputs.go-version }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

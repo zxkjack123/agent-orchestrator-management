@@ -31,23 +31,45 @@ Each agent has a permanent workspace. Operator walks freely between agent termin
 
 - **tmux** — session management
 - **git** — worktree isolation
-- **Go 1.24+** — to build from source
 - At least one supported AI agent runtime: [Claude Code](https://claude.ai/code), [Codex CLI](https://github.com/openai/codex), or Kiro CLI
 
 > **macOS tip**: [iTerm2](https://iterm2.com) with native tmux integration (`tmux -CC`) gives each agent its own pane in a single native window — the most ergonomic way to watch the team grid. See [docs/iterm2-tmux-setup.md](docs/iterm2-tmux-setup.md).
 
 ## Installation
 
-### Build from source
+### macOS / Linux — one-line installer (no Go required)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lattapon-aek/agent-orchestrator-management/main/scripts/get.sh | sh
+```
+
+**Update:** re-run the same command, or run `./scripts/get.sh` inside the repo.
+
+### macOS — Homebrew
+
+```bash
+brew install lattapon-aek/tap/aom
+```
+
+**Update:**
+
+```bash
+brew upgrade aom
+```
+
+### Windows
+
+Download the latest `.zip` from [GitHub Releases](https://github.com/lattapon-aek/agent-orchestrator-management/releases), extract, and add `aom.exe` to your `PATH`.
+
+### Build from source (Go 1.24+ required)
 
 ```bash
 git clone https://github.com/lattapon-aek/agent-orchestrator-management.git
 cd agent-orchestrator-management
-go build -o aom cmd/aom/main.go
-sudo mv aom /usr/local/bin/
+./scripts/install.sh
 ```
 
-### Verify installation
+### Verify
 
 ```bash
 aom version
