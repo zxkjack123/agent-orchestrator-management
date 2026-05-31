@@ -198,6 +198,22 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		return nil, err
 	}
 
+	// Guard: no workspace + no task + real launch → would execute from project root,
+	// polluting main branch with agent identity files (CLAUDE.md, AGENTS.md, .codex/).
+	// Placed after Build() so unsupported-runtime errors take precedence.
+	// Only enforced for --real; placeholder/mock modes don't run a real binary.
+	if strings.TrimSpace(agentRecord.WorkspacePath) == "" && taskRecord == nil && !params.allowCollision && params.launchMode == aomruntime.LaunchModeReal {
+		return nil, fmt.Errorf(
+			"agent %q has no workspace and no task assigned\n"+
+				"spawning without these would run from the project root and pollute it\n"+
+				"with agent identity files (CLAUDE.md, AGENTS.md, .codex/).\n\n"+
+				"Fix: aom agent provision %s\n"+
+				"     (or assign a task: aom session spawn %s --task <id>)\n"+
+				"     (or pass --allow-collision to bypass)",
+			agentRecord.Name, agentRecord.Name, agentRecord.Name,
+		)
+	}
+
 	workspace, err := r.app.Tmux.EnsureWorkspace(result.SessionPrefix, result.Project.RepoPath)
 	if err != nil {
 		return nil, fmt.Errorf("ensure tmux workspace: %w", err)
