@@ -598,7 +598,7 @@ func TestExecuteSessionSpawnWithRealRuntime(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 
-	if err := Execute([]string{"session", "spawn", "backend-main", "--real"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"session", "spawn", "backend-main", "--real", "--allow-collision"}, &stdout, &stderr); err != nil {
 		t.Fatalf("session spawn failed: %v", err)
 	}
 
@@ -1007,6 +1007,76 @@ func TestExecuteSessionSpawnWithRealRuntimeRejectsUnsupportedAgent(t *testing.T)
 	}
 	if !strings.Contains(stdout.String(), "Sessions: 0") && !strings.Contains(stdout.String(), "  Sessions: 0") {
 		t.Fatalf("stdout = %q, want zero sessions after rejected real launch", stdout.String())
+	}
+}
+
+func TestExecuteSessionSpawnRealBlocksNoWorkspaceNoTask(t *testing.T) {
+	repoRoot := t.TempDir()
+	oldWD, _ := os.Getwd()
+	defer func() { _ = os.Chdir(oldWD) }()
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	firstHasSession := true
+	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
+		func(string) (string, error) { return "/usr/bin/tmux", nil },
+		func(_ string, args ...string) ([]byte, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			switch args[0] {
+			case "has-session":
+				if firstHasSession {
+					firstHasSession = false
+					return nil, errors.New("session not found")
+				}
+				return nil, nil
+			case "new-session":
+				return nil, nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
+			case "display-message":
+				return []byte(args[len(args)-2] + "\n"), nil
+			default:
+				return nil, nil
+			}
+		},
+		func(string, ...string) error { return nil },
+	))
+	defer restoreAppFactory()
+	restoreLaunchBuilder := stubLaunchBuilderFactory(t, aomruntime.NewBuilderWithLookPath(
+		func(string) (string, error) { return "/opt/homebrew/bin/codex", nil },
+	))
+	defer restoreLaunchBuilder()
+	restoreRegistry := stubRegistryFactory(t)
+	defer restoreRegistry()
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute([]string{"project", "init", "my-app", "--repo", repoRoot}, &stdout, &stderr); err != nil {
+		t.Fatalf("project init: %v", err)
+	}
+	stdout.Reset()
+
+	// --real with no workspace and no task must be blocked.
+	err := Execute([]string{"session", "spawn", "backend-main", "--real"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected error for --real spawn with no workspace and no task, got nil")
+	}
+	if !strings.Contains(err.Error(), "has no workspace and no task assigned") {
+		t.Fatalf("error = %q, want 'has no workspace and no task assigned'", err)
+	}
+	if !strings.Contains(err.Error(), "aom agent provision") {
+		t.Fatalf("error = %q, want provision hint", err)
+	}
+
+	// --allow-collision bypasses the guard.
+	stdout.Reset()
+	if err := Execute([]string{"session", "spawn", "backend-main", "--real", "--allow-collision"}, &stdout, &stderr); err != nil {
+		t.Fatalf("spawn with --allow-collision should succeed: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Session spawned") {
+		t.Fatalf("stdout = %q, want Session spawned", stdout.String())
 	}
 }
 
