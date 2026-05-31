@@ -14,12 +14,15 @@ import (
 // TestMessageWatchExitsOnNewMessage verifies that executeMessageWatch returns
 // as soon as a new message is appended to the mailbox — not at timeout.
 func TestMessageWatchExitsOnNewMessage(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
 	dir := t.TempDir()
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
-	oldWD, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
 
 	// Minimal AOM project skeleton so FindProjectRoot succeeds.
 	aomDir := filepath.Join(dir, ".aom")
@@ -67,7 +70,7 @@ context:
 
 	start := time.Now()
 	// Timeout 10s — if the bug is still present, this call blocks for 10s.
-	err := r.executeMessageWatch([]string{"--agent", "agent-a", "--timeout", "10s"})
+	err = r.executeMessageWatch([]string{"--agent", "agent-a", "--timeout", "10s"})
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -87,12 +90,15 @@ context:
 // TestMessageWatchTimesOutWhenNoMessage verifies that executeMessageWatch
 // prints the timeout message and returns nil when no new message arrives.
 func TestMessageWatchTimesOutWhenNoMessage(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
 	dir := t.TempDir()
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
-	oldWD, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
 
 	aomDir := filepath.Join(dir, ".aom")
 	_ = os.MkdirAll(aomDir, 0o755)
@@ -113,7 +119,7 @@ context:
 
 	// 1s timeout — no message sent.
 	start := time.Now()
-	err := r.executeMessageWatch([]string{"--agent", "agent-x", "--timeout", "1s"})
+	err = r.executeMessageWatch([]string{"--agent", "agent-x", "--timeout", "1s"})
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -130,12 +136,15 @@ context:
 // TestMessageWatchSkipsExistingContent verifies that messages already in the
 // mailbox when watch starts are NOT re-printed (only new arrivals are shown).
 func TestMessageWatchSkipsExistingContent(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
 	dir := t.TempDir()
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
-	oldWD, _ := os.Getwd()
-	t.Cleanup(func() { _ = os.Chdir(oldWD) })
 
 	aomDir := filepath.Join(dir, ".aom")
 	_ = os.MkdirAll(aomDir, 0o755)
