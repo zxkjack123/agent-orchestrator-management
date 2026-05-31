@@ -502,6 +502,7 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "aom session list [--active] : list known sessions (--active shows only running sessions)")
 	fmt.Fprintln(r.stdout, "aom session show <session-id> : inspect one session and its bindings")
 	fmt.Fprintln(r.stdout, "aom session stop <session-id> : stop a live session and keep continuity state")
+	fmt.Fprintln(r.stdout, "aom session stop --all        : stop every active session in the project")
 	fmt.Fprintln(r.stdout, "aom session archive <session-id> : archive an inactive session record")
 	fmt.Fprintln(r.stdout, "aom session resume <session-id> --task <task-id> : rebind an Idle or WaitingHandoff session to a new task (reuses native context)")
 	fmt.Fprintln(r.stdout, "aom session replace <session-id> --agent <agent> --reason <why> [--mock|--real] : spawn a replacement in the same context")

@@ -191,6 +191,9 @@ If a worker hasn't posted to channel in >30min and session health shows no check
   aom task create "<title>" --agent <worker-name>
   aom task ready <task-id>                              # confirm steps → Ready
   aom session spawn <worker-name> --task <task-id> --real --grid
+  # If you are already inside the team grid and want to add a worker to the SAME window:
+  aom session spawn <worker-name> --task <task-id> --real --in-team
+  # --in-team adds the worker as a new pane in the current team grid (errors if no team window found)
   aom session send <session-id> "read .agent/task.md and begin"
   aom channel append "{{.AgentName}}: spawned <worker-name> for <task-id>"
 

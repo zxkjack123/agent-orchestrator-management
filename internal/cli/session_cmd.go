@@ -60,6 +60,8 @@ func (r Runner) executeSessionSpawn(args []string) error {
 			params.allowCollision = true
 		case "--grid":
 			params.gridMode = true
+		case "--in-team":
+			params.inTeam = true
 		case "--layout":
 			i++
 			if i >= len(args) {
@@ -361,6 +363,17 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		// Label the pane so the operator knows which agent is in each grid cell.
 		_ = r.app.Tmux.SetPaneTitle(paneBinding.PaneID, agentRecord.Name)
 		_ = r.app.Tmux.SelectLayout(teamWindowID, layout)
+	} else if params.inTeam {
+		teamWindowTarget, wErr := r.findTeamWindowTarget(workspace.Target)
+		if wErr != nil {
+			return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "--in-team failed", wErr)
+		}
+		paneBinding, err = r.app.Tmux.CreatePaneInWindow(teamWindowTarget, executionPath, launchCommand)
+		if err != nil {
+			return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "pane creation in team window failed", err)
+		}
+		_ = r.app.Tmux.SetPaneTitle(paneBinding.PaneID, agentRecord.Name)
+		_ = r.app.Tmux.SelectLayout(teamWindowTarget, "tiled")
 	} else {
 		paneBinding, err = r.app.Tmux.CreatePane(workspace.Target, executionPath, launchCommand)
 		if err != nil {
@@ -396,10 +409,10 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 
 	record.Status = "Idle"
 
-	// In grid mode the pane lives inside the shared "team" window — don't rename
-	// it or EnsureTeamWindow will fail to find the window on the next spawn.
+	// In grid mode and in-team mode the pane lives inside the shared "team" window —
+	// don't rename it or EnsureTeamWindow will fail to find the window on the next spawn.
 	// In normal mode, label the window with the agent name for easy identification.
-	if !params.gridMode {
+	if !params.gridMode && !params.inTeam {
 		_ = r.app.Tmux.RenameWindow(paneBinding.WindowID, agentRecord.Name)
 	}
 
@@ -662,6 +675,7 @@ type sessionSpawnParams struct {
 	allowCollision  bool
 	gridMode        bool   // place pane inside team window instead of own window
 	gridLayout      string // tmux layout to apply after pane creation (default: tiled)
+	inTeam          bool   // add pane to the existing team grid window (errors if no team window found)
 }
 
 type sessionReplaceParams struct {
@@ -1074,8 +1088,11 @@ func archivableReplacementSession(status string) bool {
 }
 
 func (r Runner) executeSessionStop(args []string) error {
+	if len(args) == 1 && args[0] == "--all" {
+		return r.executeSessionStopAll()
+	}
 	if len(args) == 0 {
-		return fmt.Errorf("session identifier is required")
+		return fmt.Errorf("session identifier is required (or use --all to stop every active session)")
 	}
 	if len(args) > 1 {
 		return fmt.Errorf("session stop does not accept extra positional arguments in the current milestone")
@@ -1092,6 +1109,42 @@ func (r Runner) executeSessionStop(args []string) error {
 	}
 	_, _, err = r.stopSessionRecord(result, *record, true)
 	return err
+}
+
+func (r Runner) executeSessionStopAll() error {
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	sessions, err := r.loadProjectSessions(result)
+	if err != nil {
+		return err
+	}
+
+	var active []session.Record
+	for _, s := range sessions {
+		if !isTerminalSessionStatus(s.Status) {
+			active = append(active, s)
+		}
+	}
+
+	if len(active) == 0 {
+		fmt.Fprintln(r.stdout, "No active sessions to stop.")
+		return nil
+	}
+
+	stopped := 0
+	for _, s := range active {
+		if _, _, err := r.stopSessionRecord(result, s, false); err != nil {
+			fmt.Fprintf(r.stdout, "  [warn] %s (%s): %v\n", s.AgentName, s.ID, err)
+			continue
+		}
+		fmt.Fprintf(r.stdout, "  stopped: %s (%s)\n", s.AgentName, s.ID)
+		stopped++
+	}
+	fmt.Fprintf(r.stdout, "Stopped %d/%d session(s).\n", stopped, len(active))
+	return nil
 }
 
 func (r Runner) executeSessionArchive(args []string) error {

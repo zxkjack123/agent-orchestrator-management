@@ -640,6 +640,22 @@ func (r Runner) detectUniqueVendorSessionID(
 	return ""
 }
 
+// findTeamWindowTarget finds the window named "team" in the given tmux session
+// and returns a target in "session:@windowID" format. Returns an error if no
+// team window exists — the operator must run aom orchestrate first.
+func (r Runner) findTeamWindowTarget(sessionTarget string) (string, error) {
+	windows, err := r.app.Tmux.ListWindowsInSession(sessionTarget)
+	if err != nil {
+		return "", fmt.Errorf("list windows: %w", err)
+	}
+	for _, w := range windows {
+		if w.Name == "team" {
+			return sessionTarget + ":" + w.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no team window found in this session — run aom orchestrate first to spawn the grid")
+}
+
 // writeCurrentTaskFile writes .agent/current-task.md into the agent workspace
 // so the agent always knows which task it is currently working on.
 func writeCurrentTaskFile(workspacePath, taskID, taskTitle string) {
