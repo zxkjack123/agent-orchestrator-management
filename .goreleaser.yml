@@ -57,6 +57,7 @@ brews:
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    folder: Formula
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
