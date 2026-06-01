@@ -85,9 +85,38 @@ func clearMailbox(repoPath, agentName string) error {
 		return fmt.Errorf("write archive: %w", err)
 	}
 
-	// Reset active mailbox to empty header.
+	// Reset active mailbox to empty header and advance cursor so the next
+	// message watch starts from the fresh baseline, not from the stale end.
 	header := fmt.Sprintf("# Mailbox: %s\n\n## Messages\n\n", agentName)
-	return os.WriteFile(path, []byte(header), 0o644)
+	if err := os.WriteFile(path, []byte(header), 0o644); err != nil {
+		return err
+	}
+	writeMailboxCursor(repoPath, agentName, len(header))
+	return nil
+}
+
+// cursorFilePath returns the path to the per-agent read-cursor file.
+func cursorFilePath(repoPath, agentName string) string {
+	return filepath.Join(repoPath, mailboxDir, agentName+".cursor")
+}
+
+// readMailboxCursor returns the last consumed byte offset for agentName, or -1
+// if no cursor has been written yet (first run).
+func readMailboxCursor(repoPath, agentName string) int {
+	data, err := os.ReadFile(cursorFilePath(repoPath, agentName))
+	if err != nil {
+		return -1
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// writeMailboxCursor persists offset as the next watch start position.
+func writeMailboxCursor(repoPath, agentName string, offset int) {
+	_ = os.WriteFile(cursorFilePath(repoPath, agentName), []byte(strconv.Itoa(offset)), 0o644)
 }
 
 // unreadMessageCount returns the number of message entries in the mailbox.

@@ -191,3 +191,61 @@ context:
 		t.Errorf("watch did not print new message. output: %q", output)
 	}
 }
+
+// TestMessageWatchCursorRaceCondition verifies that a reply written to the
+// mailbox BEFORE watch starts (but AFTER message clear) is not missed.
+// This is the orchestrator race: clear → send to team → team replies before
+// watch begins → watch must still exit immediately with the reply.
+func TestMessageWatchCursorRaceCondition(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	aomDir := filepath.Join(dir, ".aom")
+	_ = os.MkdirAll(filepath.Join(aomDir, "mailbox"), 0o755)
+	projectYAML := `name: cursor-race-test
+repo: .
+default_branch: main
+runtime:
+  terminal: tmux
+  session_prefix: cr
+context:
+  state_dir: .aom/state
+`
+	_ = os.WriteFile(filepath.Join(aomDir, "project.yaml"), []byte(projectYAML), 0o644)
+
+	// Simulate "message clear": write empty header and cursor file.
+	header := "# Mailbox: orchestrator\n\n## Messages\n\n"
+	mailboxPath := filepath.Join(aomDir, "mailbox", "orchestrator.md")
+	_ = os.WriteFile(mailboxPath, []byte(header), 0o644)
+	writeMailboxCursor(dir, "orchestrator", len(header))
+
+	// Team replies BEFORE watch starts (the race condition).
+	reply := "### 2026-01-01T00:00:01Z | MSG-REPLY | from: backend-main\ntask done\n\n"
+	f, _ := os.OpenFile(mailboxPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.WriteString(reply)
+	f.Close()
+
+	r := Runner{app: &app.App{}}
+	var out bytes.Buffer
+	r.stdout = &out
+
+	start := time.Now()
+	// With cursor fix, watch finds the reply immediately (< 3s).
+	// Without the fix it would block until the 5s timeout.
+	_ = r.executeMessageWatch([]string{"--agent", "orchestrator", "--timeout", "5s"})
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Errorf("watch took %v — should have exited immediately on pre-written reply", elapsed)
+	}
+	if !strings.Contains(out.String(), "task done") {
+		t.Errorf("watch missed reply: %q", out.String())
+	}
+}

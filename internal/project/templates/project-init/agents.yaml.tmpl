@@ -24,6 +24,12 @@ roles:
     default_session_mode: interactive
 
 agents:
+  orchestrator-main:
+    runtime: claude
+    role: orchestrator
+    enabled: true
+    model: ""   # leave empty = provider default | claude: sonnet | opus | haiku | claude-sonnet-4-6 | claude-opus-4-7
+
   backend-main:
     runtime: codex
     role: backend

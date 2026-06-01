@@ -26,8 +26,8 @@ func TestServiceOpenSyncsConfigToDB(t *testing.T) {
 	if result.Project.Name != "my-app" {
 		t.Fatalf("project name = %q, want %q", result.Project.Name, "my-app")
 	}
-	if len(result.Agents) != 3 {
-		t.Fatalf("agent count = %d, want 3", len(result.Agents))
+	if len(result.Agents) != 4 {
+		t.Fatalf("agent count = %d, want 4", len(result.Agents))
 	}
 	if result.DBPath != filepath.Join(repoRoot, ".aom", "sessions.db") {
 		t.Fatalf("db path = %q, want %q", result.DBPath, filepath.Join(repoRoot, ".aom", "sessions.db"))
@@ -42,7 +42,7 @@ func TestServiceOpenSyncsConfigToDB(t *testing.T) {
 		t.Fatalf("state dir = %q, want %q", result.StateDir, "tasks")
 	}
 
-	for _, agentName := range []string{"backend-main", "frontend-main", "reviewer-main"} {
+	for _, agentName := range []string{"orchestrator-main", "backend-main", "frontend-main", "reviewer-main"} {
 		path := filepath.Join(repoRoot, ".aom", "agents", agentName, "profile.md")
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -161,17 +161,21 @@ func TestServicePreviewInitAgentsReturnsTemplateAgents(t *testing.T) {
 		t.Fatalf("PreviewInitAgents failed: %v", err)
 	}
 
-	if len(options) != 3 {
-		t.Fatalf("option count = %d, want 3", len(options))
+	if len(options) != 4 {
+		t.Fatalf("option count = %d, want 4", len(options))
 	}
+	// Sorted alphabetically by name.
 	if options[0].Name != "backend-main" {
 		t.Fatalf("first option = %q, want backend-main", options[0].Name)
 	}
 	if options[1].Name != "frontend-main" {
 		t.Fatalf("second option = %q, want frontend-main", options[1].Name)
 	}
-	if options[2].Name != "reviewer-main" {
-		t.Fatalf("third option = %q, want reviewer-main", options[2].Name)
+	if options[2].Name != "orchestrator-main" {
+		t.Fatalf("third option = %q, want orchestrator-main", options[2].Name)
+	}
+	if options[3].Name != "reviewer-main" {
+		t.Fatalf("fourth option = %q, want reviewer-main", options[3].Name)
 	}
 }
 

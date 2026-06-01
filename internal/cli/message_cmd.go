@@ -157,6 +157,8 @@ func (r Runner) executeMessageRead(args []string) error {
 	}
 
 	fmt.Fprint(r.stdout, content)
+	// Advance cursor so the next message watch starts after what was just read.
+	writeMailboxCursor(repoPath, agentName, len(content))
 	return nil
 }
 
@@ -223,9 +225,23 @@ func (r Runner) executeMessageWatch(args []string) error {
 		fmt.Fprintf(r.stdout, "No mailbox for %s yet — waiting...\n", agentName)
 	}
 
-	// Byte-offset polling: track current file size and print new ### entries.
+	// Byte-offset polling: start from the cursor set by the last message read or
+	// clear. This prevents missing replies that arrived between the send and the
+	// watch call (the common race condition in orchestrator workflows).
+	// When no cursor exists yet, fall back to the current file size so pre-existing
+	// messages are not re-printed.
 	startData, _ := os.ReadFile(mailboxPath)
-	lastOffset := len(startData)
+	cursor := readMailboxCursor(repoPath, agentName)
+	if cursor < 0 {
+		// First run — no cursor file. Skip existing content and save offset so
+		// subsequent watch calls start fresh.
+		cursor = len(startData)
+		writeMailboxCursor(repoPath, agentName, cursor)
+	} else if cursor > len(startData) {
+		// Cursor is past the current file end (e.g. file was truncated externally).
+		cursor = len(startData)
+	}
+	lastOffset := cursor
 
 	deadline := time.Now().Add(watchTimeout)
 	for time.Now().Before(deadline) {
@@ -238,6 +254,7 @@ func (r Runner) executeMessageWatch(args []string) error {
 
 		newPart := string(data[lastOffset:])
 		lastOffset = len(data)
+		writeMailboxCursor(repoPath, agentName, lastOffset)
 
 		// Print each new entry (lines starting with ### are entry boundaries).
 		for _, line := range strings.Split(newPart, "\n") {
