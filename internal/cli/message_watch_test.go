@@ -249,3 +249,67 @@ context:
 		t.Errorf("watch missed reply: %q", out.String())
 	}
 }
+
+// TestMessageWatchCursorAdvancedOnSend verifies that executeMessageSend
+// advances the sender's cursor, so a watch started AFTER send (with no prior
+// clear or read) still catches replies that arrived before the watch call.
+// This is the real orchestrator workflow: send → team replies → watch.
+func TestMessageWatchCursorAdvancedOnSend(t *testing.T) {
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+	dir := t.TempDir()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	aomDir := filepath.Join(dir, ".aom")
+	_ = os.MkdirAll(filepath.Join(aomDir, "mailbox"), 0o755)
+	projectYAML := `name: send-cursor-test
+repo: .
+default_branch: main
+runtime:
+  terminal: tmux
+  session_prefix: sc
+context:
+  state_dir: .aom/state
+`
+	_ = os.WriteFile(filepath.Join(aomDir, "project.yaml"), []byte(projectYAML), 0o644)
+
+	// Pre-existing message in orchestrator's mailbox (old, should be skipped).
+	header := "# Mailbox: orchestrator-main\n\n## Messages\n\n"
+	oldMsg := "### 2026-01-01T00:00:00Z | MSG-OLD | from: someone\nold msg\n\n"
+	mailboxPath := filepath.Join(aomDir, "mailbox", "orchestrator-main.md")
+	_ = os.WriteFile(mailboxPath, []byte(header+oldMsg), 0o644)
+
+	// Orchestrator sends a message to a team member — this advances the cursor.
+	r := Runner{app: &app.App{}}
+	var sendOut bytes.Buffer
+	r.stdout = &sendOut
+	_ = r.executeMessageSend([]string{"backend-main", "please do task X", "--from", "orchestrator-main"})
+
+	// Team replies BEFORE orchestrator calls watch (the race condition).
+	reply := "### 2026-01-01T00:01:00Z | MSG-REPLY | from: backend-main\ntask X done\n\n"
+	f, _ := os.OpenFile(mailboxPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.WriteString(reply)
+	f.Close()
+
+	var watchOut bytes.Buffer
+	r.stdout = &watchOut
+
+	start := time.Now()
+	_ = r.executeMessageWatch([]string{"--agent", "orchestrator-main", "--timeout", "5s"})
+	elapsed := time.Since(start)
+
+	if elapsed > 3*time.Second {
+		t.Errorf("watch took %v — should have exited immediately; cursor not advanced by send?", elapsed)
+	}
+	if strings.Contains(watchOut.String(), "old msg") {
+		t.Errorf("watch printed pre-existing message: %q", watchOut.String())
+	}
+	if !strings.Contains(watchOut.String(), "task X done") {
+		t.Errorf("watch missed team reply: %q", watchOut.String())
+	}
+}

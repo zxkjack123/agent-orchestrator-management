@@ -119,6 +119,14 @@ func writeMailboxCursor(repoPath, agentName string, offset int) {
 	_ = os.WriteFile(cursorFilePath(repoPath, agentName), []byte(strconv.Itoa(offset)), 0o644)
 }
 
+// advanceSenderCursor snapshots the sender's current mailbox size so that a
+// subsequent message watch starts after any messages that existed at send time.
+// This prevents the race where team replies arrive before the watch call begins.
+func advanceSenderCursor(repoPath, sender string) {
+	data, _ := os.ReadFile(mailboxFilePath(repoPath, sender))
+	writeMailboxCursor(repoPath, sender, len(data))
+}
+
 // unreadMessageCount returns the number of message entries in the mailbox.
 func unreadMessageCount(repoPath, agentName string) int {
 	data, err := os.ReadFile(mailboxFilePath(repoPath, agentName))

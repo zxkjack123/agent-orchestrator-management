@@ -50,6 +50,9 @@ func (r Runner) executeMessageSend(args []string) error {
 			if err := appendOutboxMailbox(wtRoot, agentName, fromSender, message, time.Now()); err != nil {
 				return err
 			}
+			// Advance sender's own cursor so a subsequent watch starts after
+			// messages that already existed when this send occurred.
+			advanceSenderCursor(repoPath, fromSender)
 			fmt.Fprintf(r.stdout, "Message staged to outbox for %s (operator must run: aom outbox flush)\n", agentName)
 			return nil
 		}
@@ -58,6 +61,10 @@ func (r Runner) executeMessageSend(args []string) error {
 	if err := appendMailboxMessage(repoPath, agentName, message, fromSender, time.Now()); err != nil {
 		return err
 	}
+
+	// Advance sender's own cursor so a subsequent watch starts after
+	// messages that already existed when this send occurred.
+	advanceSenderCursor(repoPath, fromSender)
 
 	fmt.Fprintf(r.stdout, "Message sent to %s\n", agentName)
 
