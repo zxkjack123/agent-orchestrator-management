@@ -156,6 +156,8 @@ func (r Runner) Execute(args []string) (retErr error) {
 		return r.executeTokenUsage(args[1:])
 	case "project":
 		return r.executeProject(args[1:])
+	case "serve":
+		return r.executeServe(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", strings.Join(args, " "))
 	}

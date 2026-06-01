@@ -10,3 +10,8 @@ aom-linux
 aom-fresh
 aom-*
 docs/dev/
+
+# Frontend
+web/node_modules/
+web/dist/*
+!web/dist/index.html

@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@import '@xterm/xterm/css/xterm.css';
+
+/* xterm.js container needs explicit height to fill its parent */
+.xterm {
+  height: 100%;
+}
+.xterm-viewport {
+  overflow-y: hidden !important;
+}
