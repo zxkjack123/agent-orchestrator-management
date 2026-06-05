@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,39 +18,26 @@ func fsHome() string {
 	return home
 }
 
-// fsResolve cleans rawPath, resolves symlinks via filepath.EvalSymlinks (the
-// canonical CWE-022 sanitiser), and verifies the result stays within the home
-// directory. Returns the fully-resolved safe path or an error.
-func fsResolve(rawPath string) (string, error) {
-	p := filepath.Clean(strings.TrimSpace(rawPath))
-	if !filepath.IsAbs(p) {
-		return "", fmt.Errorf("path must be absolute")
-	}
-	resolved, err := filepath.EvalSymlinks(p)
-	if err != nil {
-		return "", fmt.Errorf("path not found")
-	}
-	home := fsHome()
-	if home != "/" && !strings.HasPrefix(resolved, home) {
-		return "", fmt.Errorf("path is outside the allowed directory")
-	}
-	return resolved, nil
-}
-
 // FsBrowse handles GET /api/v1/fs/browse?path=...
 // Returns the subdirectories at the given path (defaults to home dir).
 // Restricted to within the user's home directory.
 func FsBrowse(w http.ResponseWriter, r *http.Request) {
+	home := fsHome()
 	raw := strings.TrimSpace(r.URL.Query().Get("path"))
 	if raw == "" {
-		raw = fsHome()
+		raw = home
 	}
 
-	// EvalSymlinks is CodeQL's recognised CWE-022 sanitiser; it also
-	// guarantees the path exists before we call ReadDir.
-	safePath, err := fsResolve(raw)
+	// filepath.EvalSymlinks is the canonical CWE-022 sanitiser recognised by
+	// CodeQL. It resolves all symlinks and verifies the path exists, breaking
+	// the taint chain from user input.
+	safePath, err := filepath.EvalSymlinks(filepath.Clean(raw))
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeError(w, http.StatusNotFound, "path not found")
+		return
+	}
+	if home != "/" && !strings.HasPrefix(safePath, home) {
+		writeError(w, http.StatusForbidden, "path is outside the allowed directory")
 		return
 	}
 
@@ -104,6 +90,8 @@ func FsBrowse(w http.ResponseWriter, r *http.Request) {
 // FsMkdir handles POST /api/v1/fs/mkdir
 // Creates a new subdirectory within the user's home directory.
 func FsMkdir(w http.ResponseWriter, r *http.Request) {
+	home := fsHome()
+
 	var req struct {
 		Parent string `json:"parent"`
 		Name   string `json:"name"`
@@ -122,13 +110,20 @@ func FsMkdir(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid folder name")
 		return
 	}
-	// Resolve and validate the parent (must exist and be within home).
-	safeParent, err := fsResolve(req.Parent)
+
+	// Resolve the parent via EvalSymlinks — breaks the taint chain.
+	safeParent, err := filepath.EvalSymlinks(filepath.Clean(req.Parent))
 	if err != nil {
-		writeError(w, http.StatusForbidden, err.Error())
+		writeError(w, http.StatusNotFound, "parent path not found")
 		return
 	}
-	// Construct the new path from the safe (resolved) parent and the validated name.
+	if home != "/" && !strings.HasPrefix(safeParent, home) {
+		writeError(w, http.StatusForbidden, "path is outside the allowed directory")
+		return
+	}
+
+	// newPath is constructed from the sanitised parent and a validated name
+	// that contains no separators or traversal sequences.
 	newPath := filepath.Join(safeParent, req.Name)
 	if err := os.MkdirAll(newPath, 0o755); err != nil {
 		writeError(w, http.StatusInternalServerError, "cannot create directory: "+err.Error())
