@@ -385,9 +385,9 @@ export function SessionsView() {
               <th className="pb-2 font-medium">Agent</th>
               <th className="pb-2 font-medium">Status</th>
               <th className="pb-2 font-medium">Task</th>
-              <th className="pb-2 font-medium">Pane</th>
+              <th className="pb-2 font-medium">Workspace</th>
+              <th className="pb-2 font-medium">Session</th>
               <th className="pb-2 font-medium">Created</th>
-              <th className="pb-2 font-medium">Flags</th>
               <th className="pb-2 font-medium">Actions</th>
             </tr>
           </thead>
@@ -395,29 +395,53 @@ export function SessionsView() {
             {displayed.map((s) => (
               <tr key={s.id} className="border-b border-surface-border/50 hover:bg-surface-raised">
                 <td className="py-2 pr-4">
-                  <span className="text-gray-300">{s.agent_name}</span>
-                  <span className="ml-1.5 text-gray-700 font-mono text-xs" title={s.id}>#{s.id.slice(-6)}</span>
+                  <div className="flex flex-col">
+                    <span className="text-gray-300">{s.agent_name}</span>
+                    <span className="text-gray-600 text-[10px]">
+                      {s.runtime && <span className="font-mono">{s.runtime}</span>}
+                      {s.role_name && <span className="ml-1 text-gray-700">· {s.role_name}</span>}
+                    </span>
+                  </div>
                 </td>
                 <td className="py-2 pr-4"><StatusBadge status={s.status} /></td>
-                <td className="py-2 pr-4 max-w-[140px]">
+                <td className="py-2 pr-4 max-w-[160px]">
                   {s.task_id ? (
                     <div className="flex flex-col">
-                      <span className="text-gray-500 font-mono">{s.task_id}</span>
+                      <span className="text-gray-500 font-mono text-[10px]">#{s.task_id.slice(-8)}</span>
                       {taskTitleMap[s.task_id] && (
-                        <span className="text-gray-600 truncate">{taskTitleMap[s.task_id]}</span>
+                        <span className="text-gray-600 truncate text-[10px]">{taskTitleMap[s.task_id]}</span>
                       )}
                     </div>
                   ) : <span className="text-gray-700">—</span>}
                 </td>
-                <td className="py-2 pr-4 text-gray-600 font-mono">{s.tmux_pane ?? '—'}</td>
-                <td className="py-2 pr-4 text-gray-600 whitespace-nowrap">{s.created_at.slice(0, 16)}</td>
-                <td className="py-2 pr-4">
-                  {s.persistent && (
-                    <span className="inline-flex items-center px-1.5 py-0.5 text-xs rounded border bg-accent/10 text-accent border-accent/30">
-                      persistent
+                <td className="py-2 pr-4 max-w-[160px]">
+                  {s.worktree_path ? (
+                    <span
+                      className="text-gray-600 font-mono text-[10px] truncate block"
+                      title={s.worktree_path}
+                    >
+                      {s.worktree_path.split('/').slice(-3).join('/')}
                     </span>
-                  )}
+                  ) : <span className="text-gray-700 text-[10px]">—</span>}
                 </td>
+                <td className="py-2 pr-4">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-gray-700 font-mono text-[10px]" title={s.tmux_pane ?? ''}>
+                      pane: {s.tmux_pane ?? '—'}
+                    </span>
+                    {s.vendor_session_id ? (
+                      <span
+                        className="text-accent/60 font-mono text-[10px] truncate"
+                        title={`Claude session: ${s.vendor_session_id}`}
+                      >
+                        ↺ {s.vendor_session_id.slice(0, 8)}…
+                      </span>
+                    ) : (
+                      <span className="text-gray-700 text-[10px]">no native session</span>
+                    )}
+                  </div>
+                </td>
+                <td className="py-2 pr-4 text-gray-600 whitespace-nowrap text-[10px]">{s.created_at.slice(0, 16)}</td>
                 <td className="py-2">
                   <div className="flex items-center gap-2 flex-wrap">
                     {APPROVABLE.includes(s.status) && (
@@ -449,8 +473,9 @@ export function SessionsView() {
                     {RESUMABLE.includes(s.status) && (
                       <button
                         onClick={() => resume(s.id)}
-                        disabled={resumeMutation.isPending}
-                        className="text-xs text-accent-green hover:underline disabled:opacity-50"
+                        disabled={resumeMutation.isPending || !s.resumable}
+                        title={!s.resumable ? 'Cannot resume: no live pane and no native session ID saved. Use spawn instead.' : 'Resume session'}
+                        className="text-xs text-accent-green hover:underline disabled:opacity-30 disabled:cursor-not-allowed"
                       >
                         Resume
                       </button>

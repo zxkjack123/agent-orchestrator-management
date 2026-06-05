@@ -64,15 +64,7 @@ func (h *SessionsHandler) List(w http.ResponseWriter, r *http.Request) {
 		if activeOnly && !isActiveStatus(s.Status) {
 			continue
 		}
-		out = append(out, dto.Session{
-			ID:         s.ID,
-			AgentName:  s.AgentName,
-			Status:     s.Status,
-			TaskID:     s.TaskID,
-			TmuxPane:   s.TmuxPane,
-			CreatedAt:  s.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			Persistent: s.Persistent,
-		})
+		out = append(out, sessionToDTO(s))
 	}
 	writeJSON(w, out)
 }
@@ -181,15 +173,7 @@ func (h *SessionsHandler) Get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	writeJSON(w, dto.Session{
-		ID:         record.ID,
-		AgentName:  record.AgentName,
-		Status:     record.Status,
-		TaskID:     record.TaskID,
-		TmuxPane:   record.TmuxPane,
-		CreatedAt:  record.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		Persistent: record.Persistent,
-	})
+	writeJSON(w, sessionToDTO(*record))
 }
 
 // Archive handles POST /api/v1/projects/{id}/sessions/{sid}/archive.
@@ -220,15 +204,28 @@ func (h *SessionsHandler) Archive(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, dto.Session{
-		ID:         updated.ID,
-		AgentName:  updated.AgentName,
-		Status:     updated.Status,
-		TaskID:     updated.TaskID,
-		TmuxPane:   updated.TmuxPane,
-		CreatedAt:  updated.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		Persistent: updated.Persistent,
-	})
+	writeJSON(w, sessionToDTO(*updated))
+}
+
+// sessionToDTO converts a session record to its wire representation,
+// including the derived Resumable flag.
+func sessionToDTO(s session.Record) dto.Session {
+	resumable := strings.TrimSpace(s.VendorSessionID) != ""
+	return dto.Session{
+		ID:              s.ID,
+		AgentName:       s.AgentName,
+		RoleName:        s.RoleName,
+		Runtime:         s.Runtime,
+		Status:          s.Status,
+		TaskID:          s.TaskID,
+		WorktreePath:    s.WorktreePath,
+		TmuxPane:        s.TmuxPane,
+		TmuxSessionName: s.TmuxSessionName,
+		VendorSessionID: s.VendorSessionID,
+		Resumable:       resumable,
+		CreatedAt:       s.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		Persistent:      s.Persistent,
+	}
 }
 
 // Send handles POST /api/v1/projects/{id}/sessions/{sid}/send.
