@@ -901,21 +901,45 @@ func (r Runner) executeTeamBrief(args []string) error {
 		// Push to all active worktrees so agents can read it mid-session.
 		_ = pushSharedFile(result.Project.RepoPath, result.AOMPath, "team-brief.md")
 
-		// Send a direct mailbox message to every enabled agent so that agents
-		// running "aom message watch" are woken up immediately. Channel-only
-		// notifications are passive — agents won't see them unless they poll.
-		mailboxMsg := "Team brief has been updated by the operator. Please read: cat .aom/team-brief.md — this contains important project context for your current session."
+		// Deliver to every enabled agent two ways:
+		// 1. Mailbox write — wakes up agents running "aom message watch"
+		// 2. Direct pane send — wakes up agents already idle at the Claude prompt
+		const mailboxMsg = "Team brief updated. Read before continuing: cat .aom/team-brief.md"
+
+		// Build a pane→agent index so we can deliver directly to live sessions.
+		activePanes := make(map[string]string) // agentName → paneID
+		if sessionService, sessDB, err2 := r.app.OpenSessionService(result.DBPath); err2 == nil {
+			if sessions, err3 := sessionService.ListByProject(result.Project.ID); err3 == nil {
+				for _, s := range sessions {
+					if (s.Status == "Idle" || s.Status == "Working") && s.TmuxPane != "" {
+						activePanes[s.AgentName] = s.TmuxPane
+					}
+				}
+			}
+			sessDB.Close()
+		}
+
 		notified := 0
 		for _, a := range result.Agents {
 			if !a.Enabled {
 				continue
 			}
-			if err := appendMailboxMessage(result.Project.RepoPath, a.Name, mailboxMsg, "operator", now); err == nil {
-				notified++
+
+			// Write mailbox (wakes aom message watch if running).
+			_ = appendMailboxMessage(result.Project.RepoPath, a.Name, mailboxMsg, "operator", now)
+
+			// Also deliver directly to the pane when the agent is alive.
+			// This wakes Claude when it is idle at the prompt without message watch.
+			if paneID, ok := activePanes[a.Name]; ok {
+				if cmd := r.app.Tmux.PaneCurrentCommand(paneID); !isShellProcess(cmd) {
+					paneMsg := "Team brief updated. Run: aom message read " + a.Name + " && cat .aom/team-brief.md"
+					_ = r.app.Tmux.SendKeys(paneID, paneMsg)
+				}
 			}
+			notified++
 		}
 
-		fmt.Fprintf(r.stdout, "\nPushed to team channel, active worktrees, and %d agent mailbox(es).\n", notified)
+		fmt.Fprintf(r.stdout, "\nPushed to team channel, active worktrees, and %d agent(s).\n", notified)
 	}
 	return nil
 }
