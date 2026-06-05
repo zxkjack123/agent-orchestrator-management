@@ -11,6 +11,7 @@ export function TeamBriefView() {
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [pushing, setPushing] = useState(false)
+  const [lastPushed, setLastPushed] = useState<Date | null>(null)
   const [feedback, setFeedback] = useState<{ msg: string; ok: boolean } | null>(null)
 
   useEffect(() => {
@@ -25,7 +26,7 @@ export function TeamBriefView() {
 
   function flash(msg: string, ok = true) {
     setFeedback({ msg, ok })
-    setTimeout(() => setFeedback(null), 3000)
+    setTimeout(() => setFeedback(null), 5000)
   }
 
   async function handleGenerate() {
@@ -66,6 +67,7 @@ export function TeamBriefView() {
     setPushing(true)
     try {
       await api.post(`/api/v1/projects/${selectedId}/team-brief/push`, {})
+      setLastPushed(new Date())
       flash('Pushed to team channel and agent worktrees')
     } catch (err) {
       flash(err instanceof Error ? err.message : 'Push failed', false)
@@ -197,11 +199,15 @@ export function TeamBriefView() {
 
       {/* Footer hint */}
       {content && !editing && (
-        <div className="px-4 py-2 border-t border-surface-border bg-surface-raised shrink-0">
+        <div className="px-4 py-2 border-t border-surface-border bg-surface-raised shrink-0 flex items-center justify-between">
           <p className="text-[11px] text-gray-600">
-            Generate updates the brief from live project data.
-            Push broadcasts to the team channel and copies to all active agent worktrees.
+            Generate updates from live project data · Push broadcasts to team channel + agent worktrees
           </p>
+          {lastPushed && (
+            <span className="text-[11px] text-accent-green/70 shrink-0 ml-4">
+              ✓ pushed {lastPushed.toLocaleTimeString()}
+            </span>
+          )}
         </div>
       )}
     </div>
