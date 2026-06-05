@@ -223,7 +223,15 @@ curl -fsSL https://raw.githubusercontent.com/lattapon-aek/agent-orchestrator-man
 ### macOS — Homebrew
 
 ```bash
-brew install lattapon-aek/tap/aom
+brew install lattapon-aek/tap/aom-agents
+```
+
+> The formula is named `aom-agents` to avoid conflict with the [AV1 video codec](https://formulae.brew.sh/formula/aom) in homebrew/core. The installed binary is still named `aom`.
+
+To upgrade:
+
+```bash
+brew upgrade aom-agents
 ```
 
 ### Windows (WSL2)
