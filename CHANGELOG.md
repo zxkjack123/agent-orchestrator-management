@@ -4,12 +4,44 @@ All notable changes to AOM (Agent Orchestrator Management) are documented here.
 
 ## [Unreleased]
 
-### Added
-- Web UI (`aom serve`) — React-based dashboard for managing projects, sessions, tasks, agents, roles, and classes via browser
+---
+
+## [1.0.7] — 2026-06-05
 
 ### Fixed
-- Test suite: fixed hanging tests (`--real` spawn mode) by applying `stubRegistryFactory` to skip native session detection loops
-- Demo scripts: replaced hardcoded user paths with `AOM_BIN` / `AOM_PROJECT_DIR` environment variables
+- `aom serve stop` / `aom serve restart` now work even when the pid file is missing — falls back to `lsof` to find the process on port 7777
+
+### Changed
+- Homebrew formula renamed from `aom` to `aom-agents` to avoid conflict with the AV1 video codec (`homebrew/core`). The installed binary is still named `aom`.
+  ```bash
+  brew install lattapon-aek/tap/aom-agents   # install
+  brew upgrade aom-agents                    # upgrade
+  ```
+
+---
+
+## [1.0.6] — 2026-06-05
+
+### Added
+- Web UI (`aom serve`) — React-based dashboard for managing projects, sessions, tasks, agents, roles, and classes via browser
+- Role & Class system — three-zone agent profiles, 7 built-in classes (`orchestrator`, `builder`, `frontend`, `reviewer`, `researcher`, `generic`, `default`), full CRUD via CLI and API
+- Class descriptions — every built-in class has a short description shown in `aom class list`, web UI, and Add Agent modal
+- `researcher` class — for research, analysis, and investigation tasks (does not write production code)
+- `generic` class — universal worker for any task type: coding, writing, analysis, slide decks, documents
+- `aom team brief --push` — generate brief and broadcast to team channel + agent worktrees in one command
+- Agent templates: all agents now read `.aom/team-brief.md` at session start for shared project context
+- Agent templates: step 5 in "Completing work" — agents run `aom message watch` after finishing a task so they stay reactive
+
+### Fixed
+- Test suite: fixed hanging tests (`--real` spawn mode) by applying `stubRegistryFactory`
+- Add Agent modal role dropdown: was hardcoded; now loads from API so custom roles appear
+- Class template View modal: was not scrollable; fixed flex layout
+- Demo scripts: replaced hardcoded user paths with `AOM_BIN` / `AOM_PROJECT_DIR` env vars
+- Path traversal (CWE-022): `fs.go` filesystem browser and `registry.go` now use `filepath.EvalSymlinks` + home-directory boundary guard
+
+### Changed
+- `docs/cli-spec.md` expanded from 42 to 122 command sections — every registered command is now documented
+- `CHANGELOG.md` created
 
 ---
 
