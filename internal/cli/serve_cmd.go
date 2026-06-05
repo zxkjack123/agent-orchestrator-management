@@ -114,14 +114,33 @@ func (r Runner) executeServeStart(args []string) error {
 	return http.ListenAndServe(addr, srv.Handler())
 }
 
+// servePortPID returns the PID of any process listening on the given port,
+// using lsof as a fallback when the PID file is missing or stale.
+func servePortPID(port string) int {
+	out, err := exec.Command("lsof", "-ti", ":"+port).Output()
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0
+	}
+	return pid
+}
+
 func (r Runner) executeServeStop() error {
 	pidFile, err := servePIDFile()
 	if err != nil {
 		return err
 	}
-	meta, err := readServeMeta(pidFile)
-	if err != nil {
-		return fmt.Errorf("no server running (pid file not found)")
+	meta, _ := readServeMeta(pidFile)
+
+	// Fallback: if no PID file (or stale), find the process via lsof.
+	if meta.PID == 0 {
+		meta.PID = servePortPID("7777")
+	}
+	if meta.PID == 0 {
+		return fmt.Errorf("no server running (pid file not found and port 7777 is free)")
 	}
 
 	proc, err := os.FindProcess(meta.PID)
