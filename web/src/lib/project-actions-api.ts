@@ -24,4 +24,10 @@ export const projectActionsApi = {
       `/api/v1/projects/${projectId}/resume-all`,
       {},
     ),
+
+  stopAll: (projectId: string) =>
+    api.post<{ status: string; output: string }>(
+      `/api/v1/projects/${projectId}/stop-all`,
+      {},
+    ),
 }

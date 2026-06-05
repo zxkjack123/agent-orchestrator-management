@@ -54,6 +54,7 @@ export function DashboardView() {
   const { selectedId } = useProjectContext()
   const [pausePending, setPausePending] = useState(false)
   const [resumePending, setResumePending] = useState(false)
+  const [stopPending, setStopPending] = useState(false)
   const [actionFeedback, setActionFeedback] = useState<string | null>(null)
 
   const statusQuery = useQuery({
@@ -125,6 +126,20 @@ export function DashboardView() {
     }
   }
 
+  async function handleStopAll() {
+    if (!selectedId) return
+    if (!window.confirm('Stop all sessions? This kills every agent process immediately and cannot be undone. Use Pause All to softly signal agents instead.')) return
+    setStopPending(true)
+    try {
+      await projectActionsApi.stopAll(selectedId)
+      showFeedback('All sessions stopped.')
+    } catch (err) {
+      showFeedback(err instanceof Error ? err.message : 'Failed to stop sessions')
+    } finally {
+      setStopPending(false)
+    }
+  }
+
   async function handleApprove(sessionId: string) {
     try {
       await approve(sessionId)
@@ -190,6 +205,14 @@ export function DashboardView() {
             className="px-3 py-1.5 text-xs border border-surface-border text-gray-400 rounded hover:text-accent-green hover:border-accent-green/40 disabled:opacity-50 transition-colors"
           >
             {resumePending ? '…' : 'Resume All'}
+          </button>
+          <button
+            onClick={handleStopAll}
+            disabled={stopPending}
+            className="px-3 py-1.5 text-xs border border-red-900/50 text-red-400/70 rounded hover:text-red-400 hover:border-red-400/40 disabled:opacity-50 transition-colors"
+            title="Kill all agent processes immediately (harder than Pause)"
+          >
+            {stopPending ? '…' : 'Stop All'}
           </button>
         </div>
       </div>
