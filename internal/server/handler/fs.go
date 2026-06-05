@@ -9,22 +9,44 @@ import (
 	"strings"
 )
 
+// fsAllowedRoot returns the boundary that all fs operations must stay within.
+// Restricting to the user's home directory prevents traversal of sensitive
+// system paths (e.g. /etc, /proc) by anyone who can reach the local server.
+func fsAllowedRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/"
+	}
+	return home
+}
+
+// fsGuard cleans path and verifies it is absolute and within the allowed root.
+// Returns the cleaned path and true on success; writes an error and false on failure.
+func fsGuard(w http.ResponseWriter, rawPath string) (string, bool) {
+	p := filepath.Clean(strings.TrimSpace(rawPath))
+	if !filepath.IsAbs(p) {
+		writeError(w, http.StatusBadRequest, "path must be absolute")
+		return "", false
+	}
+	root := fsAllowedRoot()
+	if root != "/" && !strings.HasPrefix(p, root) {
+		writeError(w, http.StatusForbidden, "path is outside the allowed directory")
+		return "", false
+	}
+	return p, true
+}
+
 // FsBrowse handles GET /api/v1/fs/browse?path=...
 // Returns the directories at the given path (defaults to home dir).
+// Restricted to within the user's home directory.
 func FsBrowse(w http.ResponseWriter, r *http.Request) {
 	reqPath := strings.TrimSpace(r.URL.Query().Get("path"))
 	if reqPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			home = "/"
-		}
-		reqPath = home
+		reqPath = fsAllowedRoot()
 	}
 
-	// Clean and make absolute.
-	reqPath = filepath.Clean(reqPath)
-	if !filepath.IsAbs(reqPath) {
-		writeError(w, http.StatusBadRequest, "path must be absolute")
+	reqPath, ok := fsGuard(w, reqPath)
+	if !ok {
 		return
 	}
 
@@ -76,7 +98,7 @@ func FsBrowse(w http.ResponseWriter, r *http.Request) {
 }
 
 // FsMkdir handles POST /api/v1/fs/mkdir
-// Creates a new subdirectory and returns its path.
+// Creates a new subdirectory within the user's home directory.
 func FsMkdir(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Parent string `json:"parent"`
@@ -86,22 +108,21 @@ func FsMkdir(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	req.Parent = strings.TrimSpace(req.Parent)
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Parent == "" || req.Name == "" {
 		writeError(w, http.StatusBadRequest, "parent and name are required")
-		return
-	}
-	if !filepath.IsAbs(req.Parent) {
-		writeError(w, http.StatusBadRequest, "parent must be absolute")
 		return
 	}
 	if strings.ContainsAny(req.Name, "/\\") || req.Name == "." || req.Name == ".." {
 		writeError(w, http.StatusBadRequest, "invalid folder name")
 		return
 	}
-	newPath := filepath.Join(req.Parent, req.Name)
-	if err := os.MkdirAll(newPath, 0755); err != nil {
+	parent, ok := fsGuard(w, req.Parent)
+	if !ok {
+		return
+	}
+	newPath := filepath.Join(parent, req.Name)
+	if err := os.MkdirAll(newPath, 0o755); err != nil {
 		writeError(w, http.StatusInternalServerError, "cannot create directory: "+err.Error())
 		return
 	}

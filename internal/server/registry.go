@@ -96,6 +96,7 @@ func (r *Registry) Add(path string) (dto.Project, error) {
 	if err != nil {
 		return dto.Project{}, fmt.Errorf("resolve path: %w", err)
 	}
+	abs = filepath.Clean(abs)
 	if _, err := os.Stat(abs); err != nil {
 		return dto.Project{}, fmt.Errorf("path does not exist: %w", err)
 	}
