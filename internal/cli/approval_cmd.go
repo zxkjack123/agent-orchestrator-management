@@ -215,8 +215,8 @@ func (r Runner) executePauseAll(args []string) error {
 		fmt.Fprintf(r.stdout, "  %s  → WaitingApproval  (resume: aom approve %s)\n", id, id)
 	}
 	if len(paused) == 0 {
-		fmt.Fprintln(r.stdout, "No Working sessions found to pause.")
-		fmt.Fprintln(r.stdout, "Note: only sessions in Working state can be paused. Mock/idle sessions are unaffected.")
+		fmt.Fprintln(r.stdout, "No pauseable sessions found.")
+		fmt.Fprintln(r.stdout, "Note: only sessions with a live agent process are paused. Dead or stopped sessions are skipped.")
 	}
 	return nil
 }
@@ -262,6 +262,10 @@ func (r Runner) executeResumeAll(args []string) error {
 			}, false)
 		}
 
+		// Notify the agent it has been resumed so it knows to continue working.
+		resumeMsg := "RESUME: operator has resumed all agents — continue your work"
+		_ = r.app.Tmux.SendKeys(s.TmuxPane, resumeMsg)
+
 		resumed = append(resumed, s.ID)
 	}
 
@@ -270,7 +274,7 @@ func (r Runner) executeResumeAll(args []string) error {
 		fmt.Fprintf(r.stdout, "  %s  → Idle\n", id)
 	}
 	if len(resumed) == 0 {
-		fmt.Fprintln(r.stdout, "No WaitingApproval sessions found to resume.")
+		fmt.Fprintln(r.stdout, "No paused (WaitingApproval) sessions found to resume.")
 	}
 	return nil
 }
