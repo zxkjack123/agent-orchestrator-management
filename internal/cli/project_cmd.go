@@ -862,6 +862,13 @@ func (r Runner) autoStopCompletedSessions(result *project.OpenResult, sessions [
 		if s.Persistent {
 			continue // persistent sessions are never auto-stopped
 		}
+		// Workspace agents (permanent per-agent worktrees) persist across tasks.
+		// Auto-stopping them on task.completed breaks the step-5 "watch inbox"
+		// loop and leaves the team waiting for a response that never comes.
+		// They should stay alive and receive the next task via mailbox/channel.
+		if strings.TrimSpace(s.WorktreePath) != "" {
+			continue
+		}
 		if alive, _ := r.app.Tmux.PaneExists(s.TmuxPane); !alive {
 			continue
 		}
