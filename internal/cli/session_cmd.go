@@ -1485,17 +1485,19 @@ func (r Runner) executeSessionAutoResume(result *project.OpenResult, record *ses
 
 	// Path 3: task-bound but no native session ID.
 	if strings.TrimSpace(record.TaskID) != "" {
-		fmt.Fprintln(r.stdout, "No live pane and no native session ID — full spawn required.")
-		fmt.Fprintln(r.stdout, "")
-		fmt.Fprintf(r.stdout, "To resume with task context:  aom session spawn %s --task %s --real\n", record.AgentName, record.TaskID)
-		return nil
+		return fmt.Errorf(
+			"cannot resume session %s: pane is gone and no native session ID was saved\n"+
+				"Restart with task context: aom session spawn %s --task %s --real",
+			record.ID, record.AgentName, record.TaskID,
+		)
 	}
 
 	// Path 4: no recovery path.
-	fmt.Fprintln(r.stdout, "No recovery path available (no live pane, no native session, no task).")
-	fmt.Fprintln(r.stdout, "")
-	fmt.Fprintf(r.stdout, "To clean up: aom session archive %s\n", record.ID)
-	return nil
+	return fmt.Errorf(
+		"cannot resume session %s: no live pane, no native session ID, no task\n"+
+			"Clean up: aom session archive %s",
+		record.ID, record.ID,
+	)
 }
 
 // resumeSessionNative creates a new tmux pane that resumes the agent's native
