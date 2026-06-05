@@ -311,7 +311,10 @@ func (h *SessionsHandler) Resume(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "session", "resume", record.AgentName)
+	// Pass the session ID directly — not AgentName — so the CLI resumes exactly
+	// the session the caller selected. Using AgentName causes loadSessionByIdentifier
+	// to pick the newest session for that agent, ignoring which one was requested.
+	cmd := exec.CommandContext(ctx, exe, "session", "resume", record.ID)
 	cmd.Dir = proj.Path
 	out, cmdErr := cmd.CombinedOutput()
 	if cmdErr != nil {
