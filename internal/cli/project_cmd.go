@@ -698,6 +698,26 @@ type actionItem struct {
 func (r Runner) buildActionItems(result *project.OpenResult, sessions []session.Record, taskViews []taskView) []actionItem {
 	var items []actionItem
 
+	// ── Priority 0: agent process has exited (pane is at a bare shell) ───────
+	// This is the highest priority because messages sent to a dead agent would
+	// be executed as shell commands and silently corrupt the session.
+	for _, s := range sessions {
+		if s.Status == "Stopped" || s.Status == "Archived" || s.Status == "Failed" {
+			continue
+		}
+		if strings.TrimSpace(s.TmuxPane) == "" {
+			continue
+		}
+		if cmd := r.app.Tmux.PaneCurrentCommand(s.TmuxPane); isShellProcess(cmd) {
+			items = append(items, actionItem{
+				priority: 0,
+				label:    "DEAD",
+				detail:   fmt.Sprintf("session %s (%s) — agent process exited, pane is at shell (%s)", s.ID, s.AgentName, cmd),
+				command:  fmt.Sprintf("aom session replace %s --agent %s --real", s.ID, s.AgentName),
+			})
+		}
+	}
+
 	// ── Priority 1: sessions waiting for approval ─────────────────────────
 	for _, s := range sessions {
 		if s.Status == "WaitingApproval" {
