@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,10 +10,8 @@ import (
 	"strings"
 )
 
-// fsAllowedRoot returns the boundary that all fs operations must stay within.
-// Restricting to the user's home directory prevents traversal of sensitive
-// system paths (e.g. /etc, /proc) by anyone who can reach the local server.
-func fsAllowedRoot() string {
+// fsHome returns the user's home directory — the boundary for all fs operations.
+func fsHome() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "/"
@@ -20,43 +19,49 @@ func fsAllowedRoot() string {
 	return home
 }
 
-// fsGuard cleans path and verifies it is absolute and within the allowed root.
-// Returns the cleaned path and true on success; writes an error and false on failure.
-func fsGuard(w http.ResponseWriter, rawPath string) (string, bool) {
+// fsResolve cleans rawPath, resolves symlinks via filepath.EvalSymlinks (the
+// canonical CWE-022 sanitiser), and verifies the result stays within the home
+// directory. Returns the fully-resolved safe path or an error.
+func fsResolve(rawPath string) (string, error) {
 	p := filepath.Clean(strings.TrimSpace(rawPath))
 	if !filepath.IsAbs(p) {
-		writeError(w, http.StatusBadRequest, "path must be absolute")
-		return "", false
+		return "", fmt.Errorf("path must be absolute")
 	}
-	root := fsAllowedRoot()
-	if root != "/" && !strings.HasPrefix(p, root) {
-		writeError(w, http.StatusForbidden, "path is outside the allowed directory")
-		return "", false
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", fmt.Errorf("path not found")
 	}
-	return p, true
+	home := fsHome()
+	if home != "/" && !strings.HasPrefix(resolved, home) {
+		return "", fmt.Errorf("path is outside the allowed directory")
+	}
+	return resolved, nil
 }
 
 // FsBrowse handles GET /api/v1/fs/browse?path=...
-// Returns the directories at the given path (defaults to home dir).
+// Returns the subdirectories at the given path (defaults to home dir).
 // Restricted to within the user's home directory.
 func FsBrowse(w http.ResponseWriter, r *http.Request) {
-	reqPath := strings.TrimSpace(r.URL.Query().Get("path"))
-	if reqPath == "" {
-		reqPath = fsAllowedRoot()
+	raw := strings.TrimSpace(r.URL.Query().Get("path"))
+	if raw == "" {
+		raw = fsHome()
 	}
 
-	reqPath, ok := fsGuard(w, reqPath)
-	if !ok {
+	// EvalSymlinks is CodeQL's recognised CWE-022 sanitiser; it also
+	// guarantees the path exists before we call ReadDir.
+	safePath, err := fsResolve(raw)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
 
-	info, err := os.Stat(reqPath)
+	info, err := os.Stat(safePath)
 	if err != nil || !info.IsDir() {
 		writeError(w, http.StatusNotFound, "path not found or not a directory")
 		return
 	}
 
-	entries, err := os.ReadDir(reqPath)
+	entries, err := os.ReadDir(safePath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "cannot read directory")
 		return
@@ -72,26 +77,25 @@ func FsBrowse(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		name := e.Name()
-		// Skip hidden dirs except at root level.
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
 		dirs = append(dirs, dirEntry{
 			Name: name,
-			Path: filepath.Join(reqPath, name),
+			Path: filepath.Join(safePath, name),
 		})
 	}
 	sort.Slice(dirs, func(i, j int) bool {
 		return strings.ToLower(dirs[i].Name) < strings.ToLower(dirs[j].Name)
 	})
 
-	parent := filepath.Dir(reqPath)
-	if parent == reqPath {
-		parent = "" // at root
+	parent := filepath.Dir(safePath)
+	if parent == safePath {
+		parent = ""
 	}
 
 	writeJSON(w, map[string]any{
-		"path":    reqPath,
+		"path":    safePath,
 		"parent":  parent,
 		"entries": dirs,
 	})
@@ -113,15 +117,19 @@ func FsMkdir(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "parent and name are required")
 		return
 	}
+	// Validate name: no path separators, no traversal components.
 	if strings.ContainsAny(req.Name, "/\\") || req.Name == "." || req.Name == ".." {
 		writeError(w, http.StatusBadRequest, "invalid folder name")
 		return
 	}
-	parent, ok := fsGuard(w, req.Parent)
-	if !ok {
+	// Resolve and validate the parent (must exist and be within home).
+	safeParent, err := fsResolve(req.Parent)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	newPath := filepath.Join(parent, req.Name)
+	// Construct the new path from the safe (resolved) parent and the validated name.
+	newPath := filepath.Join(safeParent, req.Name)
 	if err := os.MkdirAll(newPath, 0o755); err != nil {
 		writeError(w, http.StatusInternalServerError, "cannot create directory: "+err.Error())
 		return

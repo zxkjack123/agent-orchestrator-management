@@ -18,14 +18,20 @@ func newTestRegistry(t *testing.T) *Registry {
 
 func TestRegistryAddAndList(t *testing.T) {
 	dir := t.TempDir()
+	// EvalSymlinks resolves macOS /var → /private/var symlinks; the registry
+	// stores resolved paths, so the expected value must match.
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
 	reg := newTestRegistry(t)
 
 	proj, err := reg.Add(dir)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if proj.Path != dir {
-		t.Errorf("path = %q, want %q", proj.Path, dir)
+	if proj.Path != resolvedDir {
+		t.Errorf("path = %q, want %q", proj.Path, resolvedDir)
 	}
 	if proj.ID == "" {
 		t.Error("ID should not be empty")
