@@ -894,11 +894,28 @@ func (r Runner) executeTeamBrief(args []string) error {
 	fmt.Fprintf(r.stdout, "Pending requests: %d\n", len(pendingReqs))
 
 	if push {
-		msg := "Team brief updated — read the project context: cat .aom/team-brief.md"
-		_ = appendChannelMessage(result.Project.RepoPath, "operator", msg, time.Now())
+		now := time.Now()
+		channelMsg := "Team brief updated — read the project context: cat .aom/team-brief.md"
+		_ = appendChannelMessage(result.Project.RepoPath, "operator", channelMsg, now)
+
 		// Push to all active worktrees so agents can read it mid-session.
 		_ = pushSharedFile(result.Project.RepoPath, result.AOMPath, "team-brief.md")
-		fmt.Fprintf(r.stdout, "\nPushed to team channel and active worktrees.\n")
+
+		// Send a direct mailbox message to every enabled agent so that agents
+		// running "aom message watch" are woken up immediately. Channel-only
+		// notifications are passive — agents won't see them unless they poll.
+		mailboxMsg := "Team brief has been updated by the operator. Please read: cat .aom/team-brief.md — this contains important project context for your current session."
+		notified := 0
+		for _, a := range result.Agents {
+			if !a.Enabled {
+				continue
+			}
+			if err := appendMailboxMessage(result.Project.RepoPath, a.Name, mailboxMsg, "operator", now); err == nil {
+				notified++
+			}
+		}
+
+		fmt.Fprintf(r.stdout, "\nPushed to team channel, active worktrees, and %d agent mailbox(es).\n", notified)
 	}
 	return nil
 }
