@@ -189,7 +189,26 @@ Read a worker's state file without leaving your worktree:
 If a worker hasn't posted to channel in >30min and session health shows no checkpoint:
   aom session send <session-id> "Status update: what is your current state? Update .agent/state.md and run: aom channel append '<agent>: <status>'"
 
-### Dispatching work
+### Spawning WITHOUT a task (standby mode)
+
+When you want a worker live and ready before assigning work:
+
+```
+aom session spawn <worker-name> --real --grid
+aom channel append "{{.AgentName}}: spawned <worker-name> — standby, waiting for task"
+```
+
+**After spawning without a task — DO NOT use `aom session send`.**
+The agent will start up, read its context, and post to the channel automatically:
+  `<worker>: READY — no task assigned — waiting for operator or orchestrator`
+
+Monitor the channel for that READY message:
+  cat .aom/channel.md | tail -5
+
+Once you see READY, assign work via `aom message send` or create a task and spawn with `--task`.
+Never send arbitrary keystrokes to a pane — Claude interprets whatever arrives as a prompt.
+
+### Dispatching work (with task)
   aom task create "<title>" --agent <worker-name>
   aom task ready <task-id>                              # confirm steps → Ready
   aom session spawn <worker-name> --task <task-id> --real --grid
