@@ -51,7 +51,7 @@ checksum:
   name_template: "checksums.txt"
 
 brews:
-  - name: aom
+  - name: aom-agents
     repository:
       owner: lattapon-aek
       name: homebrew-tap
@@ -60,7 +60,7 @@ brews:
     commit_author:
       name: goreleaserbot
       email: bot@goreleaser.com
-    commit_msg_template: "chore: update aom to {{ .Tag }}"
+    commit_msg_template: "chore: update aom-agents to {{ .Tag }}"
     homepage: "https://github.com/lattapon-aek/agent-orchestrator-management"
     description: "Project-level control plane for managing multiple CLI-based AI agents as a coordinated team"
     license: MIT
