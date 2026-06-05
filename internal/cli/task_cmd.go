@@ -901,6 +901,20 @@ func (r Runner) autoStopIdleSessionsForTask(result *project.OpenResult, taskID s
 		if s.Persistent {
 			continue
 		}
+		// Workspace agents persist across tasks — do not stop them on accept.
+		// They should stay alive, complete step 5 (watch inbox), and receive
+		// the next task. Check the agent record (not WorktreePath, which is
+		// always set to the execution path and is never a reliable indicator).
+		agentFound := false
+		for _, ag := range result.Agents {
+			if ag.Name == s.AgentName && strings.TrimSpace(ag.WorkspacePath) != "" {
+				agentFound = true
+				break
+			}
+		}
+		if agentFound {
+			continue
+		}
 		if s.Status != "Idle" && s.Status != "WaitingHandoff" {
 			continue
 		}
