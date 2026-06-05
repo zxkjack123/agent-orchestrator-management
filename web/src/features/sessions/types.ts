@@ -5,4 +5,5 @@ export type Session = {
   task_id?: string
   tmux_pane?: string
   created_at: string
+  persistent?: boolean
 }

@@ -28,6 +28,7 @@ type CreateParams struct {
 	TmuxSessionName string
 	TmuxWindow      string
 	TmuxPane        string
+	Persistent      bool // when true the session is never auto-stopped on task completion
 }
 
 // Service owns session lifecycle persistence and state transitions.
@@ -53,6 +54,16 @@ func NewServiceWithIDGenerator(db *sql.DB, idGen IDGenerator) *Service {
 		idGen: idGen,
 		now:   time.Now,
 	}
+}
+
+// IsActiveStatus reports whether a session status string represents a live
+// (non-terminal) session. Shared by CLI and server handler to avoid duplication.
+func IsActiveStatus(status string) bool {
+	switch status {
+	case "Working", "Idle", "WaitingApproval", "WaitingHandoff", "Booting":
+		return true
+	}
+	return false
 }
 
 // Create inserts a new durable session record.
@@ -93,6 +104,7 @@ func (s *Service) Create(params CreateParams) (*Record, error) {
 		TmuxSessionName: strings.TrimSpace(params.TmuxSessionName),
 		TmuxWindow:      strings.TrimSpace(params.TmuxWindow),
 		TmuxPane:        strings.TrimSpace(params.TmuxPane),
+		Persistent:      params.Persistent,
 	}
 
 	if err := s.repo.Upsert(record); err != nil {

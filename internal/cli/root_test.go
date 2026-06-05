@@ -402,7 +402,7 @@ func TestExecuteSessionSpawnAndList(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -456,7 +456,7 @@ func TestExecuteSessionSpawnAndList(t *testing.T) {
 	if !strings.Contains(out, "agent=backend-main") {
 		t.Fatalf("stdout = %q, want agent listing", out)
 	}
-	if !strings.Contains(out, "tmux=aom-my-app @1 %5") {
+	if !strings.Contains(out, "tmux=aom-my-app-backend-main @1 %5") {
 		t.Fatalf("stdout = %q, want tmux binding", out)
 	}
 }
@@ -476,7 +476,7 @@ func TestExecuteSessionSpawnWithMockRuntime(t *testing.T) {
 	}
 
 	firstHasSession := true
-	var splitCommands []string
+	var sessionCommands []string
 	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
 		func(string) (string, error) { return "/usr/bin/tmux", nil },
 		func(name string, args ...string) ([]byte, error) {
@@ -492,9 +492,9 @@ func TestExecuteSessionSpawnWithMockRuntime(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				sessionCommands = append(sessionCommands, args[len(args)-1])
+				return []byte("@1 %5\n"), nil
 			case "split-window":
-				splitCommands = append(splitCommands, args[len(args)-1])
 				return []byte("@1 %5\n"), nil
 			case "set-option":
 				return nil, nil
@@ -524,11 +524,11 @@ func TestExecuteSessionSpawnWithMockRuntime(t *testing.T) {
 	if !strings.Contains(out, "Launch mode: mock") {
 		t.Fatalf("stdout = %q, want mock launch mode", out)
 	}
-	if len(splitCommands) != 1 {
-		t.Fatalf("len(splitCommands) = %d, want 1", len(splitCommands))
+	if len(sessionCommands) == 0 {
+		t.Fatalf("no new-session commands captured, want at least 1")
 	}
-	if !strings.Contains(splitCommands[0], "AOM mock runtime boot") {
-		t.Fatalf("split command = %q, want mock runtime transcript", splitCommands[0])
+	if !strings.Contains(strings.Join(sessionCommands, " "), "AOM mock runtime boot") {
+		t.Fatalf("session commands = %q, want mock runtime transcript", sessionCommands)
 	}
 }
 
@@ -547,7 +547,7 @@ func TestExecuteSessionSpawnWithRealRuntime(t *testing.T) {
 	}
 
 	firstHasSession := true
-	var splitCommands []string
+	var sessionCommands []string
 	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
 		func(string) (string, error) { return "/usr/bin/tmux", nil },
 		func(name string, args ...string) ([]byte, error) {
@@ -563,9 +563,9 @@ func TestExecuteSessionSpawnWithRealRuntime(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				sessionCommands = append(sessionCommands, args[len(args)-1])
+				return []byte("@1 %5\n"), nil
 			case "split-window":
-				splitCommands = append(splitCommands, args[len(args)-1])
 				return []byte("@1 %5\n"), nil
 			case "set-option":
 				return nil, nil
@@ -606,16 +606,23 @@ func TestExecuteSessionSpawnWithRealRuntime(t *testing.T) {
 	if !strings.Contains(out, "Launch mode: real") {
 		t.Fatalf("stdout = %q, want real launch mode", out)
 	}
-	if len(splitCommands) != 1 {
-		t.Fatalf("len(splitCommands) = %d, want 1", len(splitCommands))
+	if len(sessionCommands) == 0 {
+		t.Fatalf("no new-session commands captured, want at least 1")
 	}
 	// Codex uses nice -n 19 and danger-full-access sandbox by default.
 	// On WSL2 the provider auto-applies --dangerously-bypass-approvals-and-sandbox
 	// instead, so accept either flag when running inside WSL2.
 	wantCodexSandbox := "exec nice -n 19 codex --sandbox danger-full-access -a never"
 	wantCodexBypass := "exec nice -n 19 codex --dangerously-bypass-approvals-and-sandbox"
-	if !strings.Contains(splitCommands[0], wantCodexSandbox) && !strings.Contains(splitCommands[0], wantCodexBypass) {
-		t.Fatalf("split command = %q, want codex exec launch with nice -n 19 and sandbox/bypass flag", splitCommands[0])
+	found := false
+	for _, cmd := range sessionCommands {
+		if strings.Contains(cmd, wantCodexSandbox) || strings.Contains(cmd, wantCodexBypass) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("new-session commands = %v, want one containing codex exec launch with nice -n 19 and sandbox/bypass flag", sessionCommands)
 	}
 }
 
@@ -634,7 +641,7 @@ func TestExecuteSessionSpawnWithRealClaudeRuntime(t *testing.T) {
 	}
 
 	firstHasSession := true
-	var splitCommands []string
+	var sessionCommands []string
 	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
 		func(string) (string, error) { return "/usr/bin/tmux", nil },
 		func(name string, args ...string) ([]byte, error) {
@@ -650,9 +657,9 @@ func TestExecuteSessionSpawnWithRealClaudeRuntime(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				sessionCommands = append(sessionCommands, args[len(args)-1])
+				return []byte("@1 %5\n"), nil
 			case "split-window":
-				splitCommands = append(splitCommands, args[len(args)-1])
 				return []byte("@1 %5\n"), nil
 			case "set-option":
 				return nil, nil
@@ -693,16 +700,22 @@ func TestExecuteSessionSpawnWithRealClaudeRuntime(t *testing.T) {
 	if !strings.Contains(out, "Launch mode: real") {
 		t.Fatalf("stdout = %q, want real launch mode", out)
 	}
-	if len(splitCommands) != 1 {
-		t.Fatalf("len(splitCommands) = %d, want 1", len(splitCommands))
+	if len(sessionCommands) == 0 {
+		t.Fatalf("no new-session commands captured, want at least 1")
 	}
 	// The command must launch claude with the permissions flag.
 	// NiceExecPrefix prepends "exec nice -n 10 " before the binary name.
 	// When policy.yaml configures deny_commands the --disallowed-tools flag
 	// will also be present; we check the essential parts rather than exact equality.
-	if !strings.Contains(splitCommands[0], "exec nice -n 10 claude") ||
-		!strings.Contains(splitCommands[0], "--dangerously-skip-permissions") {
-		t.Fatalf("split command = %q, want claude exec launch with nice prefix", splitCommands[0])
+	found := false
+	for _, cmd := range sessionCommands {
+		if strings.Contains(cmd, "exec nice -n 10 claude") && strings.Contains(cmd, "--dangerously-skip-permissions") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("new-session commands = %v, want one containing claude exec launch with nice prefix", sessionCommands)
 	}
 }
 
@@ -754,7 +767,7 @@ func TestExecuteSessionSpawnWithTaskRealMaterializesCodexIdentityFile(t *testing
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -773,6 +786,9 @@ func TestExecuteSessionSpawnWithTaskRealMaterializesCodexIdentityFile(t *testing
 		func(string) (string, error) { return "/opt/homebrew/bin/codex", nil },
 	))
 	defer restoreLaunchBuilder()
+
+	restoreRegistry := stubRegistryFactory(t)
+	defer restoreRegistry()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -793,7 +809,7 @@ func TestExecuteSessionSpawnWithTaskRealMaterializesCodexIdentityFile(t *testing
 
 	stdout.Reset()
 	stderr.Reset()
-	if err := Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--real"}, &stdout, &stderr); err != nil {
+	if err := Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--real", "--allow-collision"}, &stdout, &stderr); err != nil {
 		t.Fatalf("session spawn failed: %v", err)
 	}
 	sessionID := extractSessionID(stdout.String())
@@ -868,7 +884,7 @@ func TestExecuteSessionSpawnWithTaskRealMaterializesClaudeIdentityFile(t *testin
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -887,6 +903,9 @@ func TestExecuteSessionSpawnWithTaskRealMaterializesClaudeIdentityFile(t *testin
 		func(string) (string, error) { return "/opt/homebrew/bin/claude", nil },
 	))
 	defer restoreLaunchBuilder()
+
+	restoreRegistry := stubRegistryFactory(t)
+	defer restoreRegistry()
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1010,13 +1029,36 @@ func TestExecuteSessionSpawnWithRealRuntimeRejectsUnsupportedAgent(t *testing.T)
 	}
 }
 
-func TestExecuteSessionSpawnRealBlocksNoWorkspaceNoTask(t *testing.T) {
+// TestExecuteSessionSpawnRealAutoProvisionWorkspace verifies that a --real spawn
+// without an explicit workspace or task auto-provisions a dedicated workspace so
+// the agent always runs in an isolated git worktree rather than the project root.
+// This is the successor to the old "blocks no workspace no task" guard: instead of
+// erroring, the spawn now auto-provisions and succeeds.
+func TestExecuteSessionSpawnRealAutoProvisionWorkspace(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for workspace auto-provision test")
+	}
+
 	repoRoot := t.TempDir()
 	oldWD, _ := os.Getwd()
 	defer func() { _ = os.Chdir(oldWD) }()
 	if err := os.Chdir(repoRoot); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repoRoot}, args...)...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(output))
+		}
+	}
+	runGit("init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	runGit("add", "README.md")
+	runGit("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "init")
 
 	firstHasSession := true
 	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
@@ -1033,7 +1075,7 @@ func TestExecuteSessionSpawnRealBlocksNoWorkspaceNoTask(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "display-message":
@@ -1057,26 +1099,18 @@ func TestExecuteSessionSpawnRealBlocksNoWorkspaceNoTask(t *testing.T) {
 		t.Fatalf("project init: %v", err)
 	}
 	stdout.Reset()
+	stderr.Reset()
 
-	// --real with no workspace and no task must be blocked.
-	err := Execute([]string{"session", "spawn", "backend-main", "--real"}, &stdout, &stderr)
-	if err == nil {
-		t.Fatal("expected error for --real spawn with no workspace and no task, got nil")
-	}
-	if !strings.Contains(err.Error(), "has no workspace and no task assigned") {
-		t.Fatalf("error = %q, want 'has no workspace and no task assigned'", err)
-	}
-	if !strings.Contains(err.Error(), "aom agent provision") {
-		t.Fatalf("error = %q, want provision hint", err)
-	}
-
-	// --allow-collision bypasses the guard.
-	stdout.Reset()
-	if err := Execute([]string{"session", "spawn", "backend-main", "--real", "--allow-collision"}, &stdout, &stderr); err != nil {
-		t.Fatalf("spawn with --allow-collision should succeed: %v", err)
+	// --real without an explicit workspace or task: auto-provision should create a
+	// dedicated workspace so the agent does not pollute the project root.
+	if err := Execute([]string{"session", "spawn", "backend-main", "--real"}, &stdout, &stderr); err != nil {
+		t.Fatalf("session spawn --real should succeed via auto-provision: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Session spawned") {
-		t.Fatalf("stdout = %q, want Session spawned", stdout.String())
+		t.Fatalf("stdout = %q, want 'Session spawned'", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "auto-provisioned workspace") {
+		t.Fatalf("stderr = %q, want auto-provision note", stderr.String())
 	}
 }
 
@@ -1145,7 +1179,7 @@ func TestExecuteSessionSpawnWithTaskRefreshesArtifacts(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -1277,7 +1311,7 @@ func TestExecuteSessionSpawnBlocksSecondDedicatedWriterForSameTask(t *testing.T)
 	}
 
 	firstHasSession := true
-	splitCount := 0
+	sessionCount := 0
 	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
 		func(string) (string, error) { return "/usr/bin/tmux", nil },
 		func(name string, args ...string) ([]byte, error) {
@@ -1293,9 +1327,9 @@ func TestExecuteSessionSpawnBlocksSecondDedicatedWriterForSameTask(t *testing.T)
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				sessionCount++
+				return []byte("@1 %5\n"), nil
 			case "split-window":
-				splitCount++
 				return []byte("@1 %5\n"), nil
 			case "set-option":
 				return nil, nil
@@ -1326,12 +1360,17 @@ func TestExecuteSessionSpawnBlocksSecondDedicatedWriterForSameTask(t *testing.T)
 		t.Fatalf("could not extract task id from %q", stdout.String())
 	}
 
+	sessionCountBefore := sessionCount
 	stdout.Reset()
 	stderr.Reset()
 	if err := Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--mock"}, &stdout, &stderr); err != nil {
 		t.Fatalf("first session spawn failed: %v", err)
 	}
+	if sessionCount <= sessionCountBefore {
+		t.Fatalf("sessionCount = %d, want at least 1 new-session call for first spawn", sessionCount)
+	}
 
+	sessionCountAfterFirst := sessionCount
 	stdout.Reset()
 	stderr.Reset()
 	err = Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--mock"}, &stdout, &stderr)
@@ -1341,8 +1380,8 @@ func TestExecuteSessionSpawnBlocksSecondDedicatedWriterForSameTask(t *testing.T)
 	if !strings.Contains(err.Error(), "already has active writer session") {
 		t.Fatalf("error = %q, want active writer session message", err)
 	}
-	if splitCount != 1 {
-		t.Fatalf("splitCount = %d, want 1 successful pane launch", splitCount)
+	if sessionCount != sessionCountAfterFirst {
+		t.Fatalf("sessionCount = %d after failed second spawn, want no new-session calls (second spawn should be rejected before pane creation)", sessionCount)
 	}
 }
 
@@ -1361,7 +1400,7 @@ func TestExecuteSessionSpawnAllowsReadOnlyRoleAlongsideDedicatedWriter(t *testin
 	}
 
 	firstHasSession := true
-	splitCount := 0
+	sessionCount := 0
 	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
 		func(string) (string, error) { return "/usr/bin/tmux", nil },
 		func(name string, args ...string) ([]byte, error) {
@@ -1377,17 +1416,22 @@ func TestExecuteSessionSpawnAllowsReadOnlyRoleAlongsideDedicatedWriter(t *testin
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
-			case "split-window":
-				splitCount++
-				if splitCount == 1 {
+				sessionCount++
+				// EnsureWorkspace calls new-session first (sessionCount==1 for each spawn).
+				// CreateDedicatedSession is the subsequent new-session call.
+				// Return distinct pane IDs for the two agent spawns so display-message
+				// can distinguish which pane is being queried.
+				if sessionCount <= 2 {
 					return []byte("@1 %5\n"), nil
 				}
 				return []byte("@1 %6\n"), nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
 			case "set-option":
 				return nil, nil
 			case "display-message":
-				if splitCount >= 2 {
+				// Once the second dedicated session has been created, return its pane ID.
+				if sessionCount > 3 {
 					return []byte("%6\n"), nil
 				}
 				return []byte("%5\n"), nil
@@ -1416,12 +1460,17 @@ func TestExecuteSessionSpawnAllowsReadOnlyRoleAlongsideDedicatedWriter(t *testin
 		t.Fatalf("could not extract task id from %q", stdout.String())
 	}
 
+	sessionCountBefore := sessionCount
 	stdout.Reset()
 	stderr.Reset()
 	if err := Execute([]string{"session", "spawn", "backend-main", "--task", taskID, "--mock"}, &stdout, &stderr); err != nil {
 		t.Fatalf("writer session spawn failed: %v", err)
 	}
+	if sessionCount <= sessionCountBefore {
+		t.Fatalf("sessionCount = %d, want new-session calls for first spawn", sessionCount)
+	}
 
+	sessionCountAfterFirst := sessionCount
 	stdout.Reset()
 	stderr.Reset()
 	if err := Execute([]string{"session", "spawn", "reviewer-main", "--task", taskID, "--mock", "--allow-collision"}, &stdout, &stderr); err != nil {
@@ -1430,8 +1479,8 @@ func TestExecuteSessionSpawnAllowsReadOnlyRoleAlongsideDedicatedWriter(t *testin
 	if out := stdout.String(); !strings.Contains(out, "Agent: reviewer-main") {
 		t.Fatalf("stdout = %q, want reviewer session output", out)
 	}
-	if splitCount != 2 {
-		t.Fatalf("splitCount = %d, want both sessions launched", splitCount)
+	if sessionCount <= sessionCountAfterFirst {
+		t.Fatalf("sessionCount = %d, want new-session calls for reviewer spawn", sessionCount)
 	}
 }
 
@@ -1483,7 +1532,7 @@ func TestExecuteSessionSpawnAllowsReplacementAfterDetachedWriter(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -1570,7 +1619,7 @@ func TestExecuteCheckpointCreatesCanonicalLogEvent(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -1673,7 +1722,7 @@ func TestExecuteHandoffWritesHandoffArtifactAndMarksSessionWaiting(t *testing.T)
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -1787,6 +1836,7 @@ func TestExecuteSessionSpawnWithTaskLogsFailureWhenPaneCreationFails(t *testing.
 	}
 
 	firstHasSession := true
+	newSessionCount := 0
 	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
 		func(string) (string, error) { return "/usr/bin/tmux", nil },
 		func(name string, args ...string) ([]byte, error) {
@@ -1801,7 +1851,14 @@ func TestExecuteSessionSpawnWithTaskLogsFailureWhenPaneCreationFails(t *testing.
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				newSessionCount++
+				// EnsureWorkspace calls new-session first and succeeds; the second
+				// call is CreateDedicatedSession which should fail to simulate a pane
+				// creation failure.
+				if newSessionCount == 1 {
+					return []byte("@1 %5\n"), nil
+				}
+				return nil, errors.New("split failed")
 			case "split-window":
 				return nil, errors.New("split failed")
 			default:
@@ -1891,7 +1948,7 @@ func TestExecuteHandoffToRoleOnlyPreservesStatusTransfersOwnership(t *testing.T)
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -2008,7 +2065,7 @@ func TestExecuteSessionSpawnWithTaskLogsFailureWhenPaneAnnotationFails(t *testin
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -2100,7 +2157,7 @@ func TestExecuteSessionShowAttachAndCapture(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -2212,7 +2269,7 @@ func TestExecuteAttachLogsOperatorInterventionForTaskBoundSession(t *testing.T) 
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -2311,7 +2368,7 @@ func TestExecuteSessionSendDeliversPromptAndAppendsTaskEvent(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -2659,7 +2716,7 @@ func TestExecuteSessionSpawnUsesProvisionedWorktreeWhenRepoIsGitRepo(t *testing.
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -3000,7 +3057,7 @@ func TestExecuteStatusReconcilesDetachedSessionAndDowngradesWorktreeToReady(t *t
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -3094,7 +3151,7 @@ func TestExecuteSessionShowByAgentNameReconcilesDetachedSession(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -3180,7 +3237,7 @@ func TestExecuteSessionStopMarksStoppedAndDowngradesWorktree(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -3325,7 +3382,7 @@ func TestExecuteSessionStopMarksStoppedWhenKillPaneFails(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -3436,7 +3493,7 @@ func TestExecuteSessionArchiveMarksStoppedSessionArchived(t *testing.T) {
 			case "has-session":
 				return nil, errors.New("session not found")
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			default:
@@ -3527,8 +3584,10 @@ func TestExecuteSessionReplaceWithRealRuntimeUsesCodexLaunchCommand(t *testing.T
 	runGit("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "init")
 
 	firstHasSession := true
-	splitCount := 0
-	var splitCommands []string
+	// sessionCount tracks only CreateDedicatedSession calls (those that pass -P).
+	// EnsureWorkspace also calls new-session but without -P, so we skip it.
+	sessionCount := 0
+	var sessionCommands []string
 	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
 		func(string) (string, error) { return "/usr/bin/tmux", nil },
 		func(name string, args ...string) ([]byte, error) {
@@ -3543,14 +3602,26 @@ func TestExecuteSessionReplaceWithRealRuntimeUsesCodexLaunchCommand(t *testing.T
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
-			case "split-window":
-				splitCount++
-				splitCommands = append(splitCommands, args[len(args)-1])
-				if splitCount == 1 {
-					return []byte("@1 %5\n"), nil
+				// CreateDedicatedSession passes -P to capture pane binding; EnsureWorkspace
+				// does not. Use this to track only dedicated-session launches.
+				hasPFlag := false
+				for _, a := range args[1:] {
+					if a == "-P" {
+						hasPFlag = true
+						break
+					}
 				}
-				return []byte("@1 %6\n"), nil
+				if hasPFlag {
+					sessionCount++
+					sessionCommands = append(sessionCommands, args[len(args)-1])
+					if sessionCount == 1 {
+						return []byte("@1 %5\n"), nil
+					}
+					return []byte("@1 %6\n"), nil
+				}
+				return []byte("@1 %5\n"), nil
+			case "split-window":
+				return []byte("@1 %5\n"), nil
 			case "set-option":
 				return nil, nil
 			case "display-message":
@@ -3615,16 +3686,16 @@ func TestExecuteSessionReplaceWithRealRuntimeUsesCodexLaunchCommand(t *testing.T
 	if !strings.Contains(replaceOut, "Session replaced") {
 		t.Fatalf("stdout = %q, want replace confirmation", replaceOut)
 	}
-	if splitCount != 2 {
-		t.Fatalf("splitCount = %d, want 2 pane launches", splitCount)
+	if sessionCount != 2 {
+		t.Fatalf("sessionCount = %d, want 2 dedicated-session launches (spawn + replace)", sessionCount)
 	}
 	// Codex uses nice -n 19 and danger-full-access sandbox by default.
 	// On WSL2 the provider auto-applies --dangerously-bypass-approvals-and-sandbox.
-	lastCmd := splitCommands[len(splitCommands)-1]
+	lastCmd := sessionCommands[len(sessionCommands)-1]
 	wantReplSandbox := "exec nice -n 19 codex --sandbox danger-full-access -a never"
 	wantReplBypass := "exec nice -n 19 codex --dangerously-bypass-approvals-and-sandbox"
 	if !strings.Contains(lastCmd, wantReplSandbox) && !strings.Contains(lastCmd, wantReplBypass) {
-		t.Fatalf("replacement split command = %q, want codex exec launch with nice -n 19 and sandbox/bypass flag", lastCmd)
+		t.Fatalf("replacement new-session command = %q, want codex exec launch with nice -n 19 and sandbox/bypass flag", lastCmd)
 	}
 }
 
@@ -3677,7 +3748,7 @@ func TestExecuteSessionReplaceSupersedesOldSessionInSameTaskWorktree(t *testing.
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				splitCount++
 				if splitCount == 1 {
@@ -3853,7 +3924,7 @@ func TestExecuteSessionReplaceArchivesDetachedSession(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				splitCount++
 				if splitCount == 1 {
@@ -4015,7 +4086,7 @@ func TestExecuteSessionReplaceLeavesWorkingSessionRunning(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				splitCount++
 				if splitCount == 1 {
@@ -4476,7 +4547,7 @@ func TestExecuteReviewReusesExistingReviewerSession(t *testing.T) {
 	}
 
 	firstHasSession := true
-	splitCount := 0
+	sessionCount := 0
 	restoreAppFactory := stubAppFactory(t, tmux.NewManagerWithDeps(
 		func(string) (string, error) { return "/usr/bin/tmux", nil },
 		func(name string, args ...string) ([]byte, error) {
@@ -4491,9 +4562,9 @@ func TestExecuteReviewReusesExistingReviewerSession(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				sessionCount++
+				return []byte("@1 %5\n"), nil
 			case "split-window":
-				splitCount++
 				return []byte("@1 %5\n"), nil
 			case "set-option":
 				return nil, nil
@@ -4520,6 +4591,7 @@ func TestExecuteReviewReusesExistingReviewerSession(t *testing.T) {
 	}
 	taskID := extractEntityID(stdout.String(), "Task: ")
 
+	countBefore := sessionCount
 	stdout.Reset()
 	stderr.Reset()
 	if err := Execute([]string{"review", taskID, "--mock", "--allow-empty-branch"}, &stdout, &stderr); err != nil {
@@ -4533,10 +4605,11 @@ func TestExecuteReviewReusesExistingReviewerSession(t *testing.T) {
 	if sessionID == "" {
 		t.Fatalf("could not extract spawned session id from %q", firstOut)
 	}
-	if splitCount != 1 {
-		t.Fatalf("splitCount = %d, want 1 after first review", splitCount)
+	if sessionCount <= countBefore {
+		t.Fatalf("sessionCount did not increase after first review (was %d, now %d)", countBefore, sessionCount)
 	}
 
+	countAfterFirst := sessionCount
 	stdout.Reset()
 	stderr.Reset()
 	if err := Execute([]string{"review", taskID, "--mock", "--allow-empty-branch"}, &stdout, &stderr); err != nil {
@@ -4546,8 +4619,8 @@ func TestExecuteReviewReusesExistingReviewerSession(t *testing.T) {
 	if !strings.Contains(secondOut, "Session reused: "+sessionID) {
 		t.Fatalf("stdout = %q, want reused reviewer session", secondOut)
 	}
-	if splitCount != 1 {
-		t.Fatalf("splitCount = %d, want no additional pane creation", splitCount)
+	if sessionCount != countAfterFirst {
+		t.Fatalf("sessionCount = %d, want no additional pane creation after second review (was %d)", sessionCount, countAfterFirst)
 	}
 
 	stdout.Reset()
@@ -4598,7 +4671,7 @@ func TestExecuteReviewFindingsMoveTaskAndReviewStepToNeedsAttention(t *testing.T
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -4713,7 +4786,7 @@ func TestExecuteReviewFindingsResetPreferredOwnerToSharedFindingOwner(t *testing
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -5082,7 +5155,7 @@ func TestCaptureAllWithActiveSessions(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 " + paneID + "\n"), nil
 			case "set-option":
@@ -5160,7 +5233,7 @@ func TestCaptureAllSummaryMode(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 " + paneID + "\n"), nil
 			case "set-option":
@@ -6096,7 +6169,7 @@ func TestExecuteSessionSendUsesAOMActorEnvVar(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option", "send-keys":
@@ -6176,7 +6249,7 @@ func TestExecuteSessionRebindRejectsNonDetached(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":
@@ -6242,7 +6315,7 @@ func TestAutoStopSessionWhenTaskDone(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":

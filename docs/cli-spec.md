@@ -24,17 +24,29 @@ This document defines the Milestone 0 command contract, not the final long-term 
 
 The CLI is grouped by intent:
 
-- `aom project ...` (`init`, `resources`)
+- `aom project ...` (`init`, `resources`, `layout`, `share`)
 - `aom open`
 - `aom status`
 - `aom plan`
-- `aom agent ...` (`add`, `list`, `set-model`, `provision`)
+- `aom agent ...` (`add`, `list`, `set-model`, `provision`, `profile`)
 - `aom runtime ...` (`list`, `inspect`)
 - `aom doctor`
-- `aom task ...` (`create`, `show`, `update`, `close`)
+- `aom task ...` (`create`, `show`, `update`, `close`, `list`, `accept`, `verify`, `signal`, `ready`, `cancel`, `link`, `unlink`, `record-result`, `request`, `list-requests`, `approve-request`, `reject-request`, `propose-plan`, `plan-approve`, `plan-reject`, `reanalyze`)
 - `aom step ...` (`list`, `update`)
-- `aom session ...` (`spawn`, `list`, `show`, `send`, `resume`, `rebind`, `recover`, `replace`, `stop`, `archive`, `set-agent-id`, `wait`)
-- `aom worktree repair`
+- `aom session ...` (`spawn`, `list`, `show`, `send`, `resume`, `rebind`, `recover`, `replace`, `stop`, `archive`, `set-agent-id`, `wait`, `watch`, `health`)
+- `aom worktree ...` (`repair`, `read-file`, `prune`)
+- `aom merge ...` (`check`, `prepare`, `commit`, `continue`, `abort`)
+- `aom message ...` (`send`, `read`, `clear`, `watch`, `reply`)
+- `aom channel ...` (`append`, `read`)
+- `aom outbox ...` (`flush`, `list`)
+- `aom team ...` (`view`, `status`, `brief`, `roster`)
+- `aom orchestrate`
+- `aom orchestrator ...` (`start`, `view`, `status`)
+- `aom switch`
+- `aom dashboard`
+- `aom next`
+- `aom run-pipeline`
+- `aom pause-all` / `aom resume-all`
 - `aom attach`
 - `aom capture`
 - `aom checkpoint`
@@ -44,12 +56,18 @@ The CLI is grouped by intent:
 - `aom deny`
 - `aom reanalyze`
 - `aom broadcast`
-- `aom channel ...` (`append`, `read`)
-- `aom message ...` (`send`, `read`, `clear`, `watch`, `reply`)
 - `aom watch`
 - `aom events ...`
-
-Not every command must be fully implemented in the first coding slice, but the intent and naming should be locked now.
+- `aom metrics`
+- `aom policy ...` (`list`)
+- `aom goal ...` (`set`, `show`, `complete`)
+- `aom memory ...` (`append`, `show`, `clear`)
+- `aom claim` / `aom claim release` / `aom claim list`
+- `aom token-usage`
+- `aom role ...` (`list`, `show`, `create`, `update`, `delete`, `preview`)
+- `aom class ...` (`list`, `show`, `create`, `edit`, `override`, `delete`, `preview`)
+- `aom system-template show`
+- `aom serve`
 
 ## Agent Workspace Commands
 
@@ -1393,6 +1411,1685 @@ Should show:
 - repair action taken
 - new worktree status
 
+## Role and Class Commands
+
+### Purpose
+
+Roles and classes define what an agent does and how it behaves within AOM.
+
+- A **role** is a logical label assigned to an agent in `agents.yaml` (e.g., `backend`, `reviewer`, `task-manager`). Roles reference a class and carry workflow settings (worktree mode, checkpoint expectation, default session mode).
+- A **class** is a profile template (`.md.tmpl` file) that defines an agent's responsibilities, work standards, and domain-specific guidance — Zone B of the three-zone profile system.
+- The **system template** (`base.md.tmpl`) defines the AOM Workflow Protocol — Team Communication, Collaboration Routines, State Machine — which is automatically injected into every agent profile. It is embedded in the binary and is never editable.
+
+**Three-zone profile architecture:**
+
+| Zone | Source | Editable |
+|------|--------|----------|
+| A — AOM Workflow Protocol | `base.md.tmpl` (embedded in binary) | No — read-only, system-managed |
+| B — Role Class Template | `.aom/templates/profiles/<class>.md.tmpl` | Yes — shared by all agents of that class |
+| C — Agent Custom Instructions | `## Custom Instructions` in `profile.md` | Yes — per-agent override |
+
+### aom role list
+
+Lists all roles defined in `agents.yaml`.
+
+```bash
+aom role list
+```
+
+Output: table of role name, class, worktree mode, checkpoint expectation, agents using the role.
+
+### aom role show
+
+Displays the full configuration for a named role.
+
+```bash
+aom role show <name>
+```
+
+#### Inputs
+
+- positional: `name` — role name
+
+#### Output
+
+Role config fields (class, worktree_mode, checkpoint_expectation, default_session_mode) plus the list of agents using it.
+
+### aom role create
+
+Creates a new role in `agents.yaml`.
+
+```bash
+aom role create <name> --class <class> [--worktree-mode isolated|workspace] \
+    [--checkpoint-expectation required|optional|none] \
+    [--default-session-mode real|mock]
+```
+
+#### Inputs
+
+- positional: `name` — role name (must be unique)
+- `--class` — class name to use as the profile template (required)
+- `--worktree-mode` — `isolated` (per-task worktree) or `workspace` (permanent agent workspace); default `isolated`
+- `--checkpoint-expectation` — `required`, `optional`, or `none`; default `optional`
+- `--default-session-mode` — `real` or `mock`; default `real`
+
+#### Behavior
+
+- Validates that the specified class exists (built-in or custom)
+- Appends the new role to `agents.yaml` under `roles:`
+- No agents are assigned to the role automatically
+
+### aom role update
+
+Updates configuration for an existing role.
+
+```bash
+aom role update <name> [--class <class>] [--worktree-mode <mode>] \
+    [--checkpoint-expectation <value>] [--default-session-mode <mode>]
+```
+
+Only the flags provided are updated; others remain unchanged.
+
+### aom role delete
+
+Removes a role from `agents.yaml`.
+
+```bash
+aom role delete <name>
+```
+
+Fails with a conflict error if any agent in `agents.yaml` is currently assigned to this role.
+
+### aom role preview
+
+Shows the fully composed agent profile that would result from this role, including Zone A (system template) and Zone B (class template).
+
+```bash
+aom role preview <name>
+```
+
+### aom class list
+
+Lists all available classes.
+
+```bash
+aom class list
+```
+
+Output: table of class name and source (`builtin`, `custom`, or `builtin-overridden`).
+
+- `builtin` — embedded in binary; protected; cannot be edited directly
+- `custom` — defined in `.aom/templates/profiles/<name>.md.tmpl`
+- `builtin-overridden` — built-in class with a project-level override file present
+
+### aom class show
+
+Displays the raw template content for a class.
+
+```bash
+aom class show <name>
+```
+
+For built-in classes, shows the embedded template. For overridden classes, shows the project-level override.
+
+### aom class create
+
+Creates a new custom class with a starter template.
+
+```bash
+aom class create <name>
+```
+
+Writes a starter `.md.tmpl` file to `.aom/templates/profiles/<name>.md.tmpl`. Does not overwrite an existing file.
+
+### aom class edit
+
+Opens the class template in `$VISUAL` or `$EDITOR` (fallback: `vi`).
+
+```bash
+aom class edit <name>
+```
+
+Only works for custom classes and built-in-overridden classes. Use `aom class override` first to make a built-in class editable.
+
+### aom class override
+
+Creates a project-level editable copy of a built-in class.
+
+```bash
+aom class override <name>
+```
+
+Copies the embedded built-in template to `.aom/templates/profiles/<name>.md.tmpl`, making it editable without modifying the binary default. The class source becomes `builtin-overridden`.
+
+### aom class delete
+
+Deletes a custom class or reverts a built-in override.
+
+```bash
+aom class delete <name>
+```
+
+- For a `custom` class: removes `.aom/templates/profiles/<name>.md.tmpl`
+- For a `builtin-overridden` class: removes the project override, reverting to the embedded default
+- For a `builtin` class with no override: returns an error ("nothing to delete")
+
+Fails if any role in `agents.yaml` is currently using this class.
+
+### aom class preview
+
+Shows the full composed profile that would be generated using this class, combining Zone A (system template) + Zone B (this class template).
+
+```bash
+aom class preview <name>
+```
+
+### aom system-template show
+
+Displays the read-only AOM Workflow Protocol (Zone A) embedded in the binary.
+
+```bash
+aom system-template show
+```
+
+This template is injected automatically into every agent profile and cannot be overridden. It defines how agents interact with the AOM state machine, communicate via the channel, and signal lifecycle events.
+
+---
+
+## Agent Management Commands
+
+### aom agent add
+
+#### Purpose
+
+Register a new agent in the project.
+
+#### Example
+
+```bash
+aom agent add backend-api --role developer --runtime claude --class builder
+```
+
+#### Inputs
+
+- positional: `name` — agent name (alphanumeric + hyphen)
+- `--role <name>` (required) — role defined in `agents.yaml`
+- `--runtime <name>` (required) — one of: `claude`, `codex`, `gemini`, `kiro`
+- `--class <class>` (optional) — profile class; defaults to role's class
+
+#### Behavior
+
+- Validates runtime against known providers
+- Warns if agent name implies a different runtime than specified
+- Warns if another agent already uses the same role and runtime
+- Appends agent to `agents.yaml`
+- Generates `profile.md` from class template
+
+---
+
+### aom agent set-model
+
+#### Purpose
+
+Update the LLM model for an agent without overwriting the rest of `agents.yaml`.
+
+#### Example
+
+```bash
+aom agent set-model backend-main claude-opus-4
+```
+
+#### Inputs
+
+- positional: `name` — agent name
+- positional: `model` — model identifier
+
+#### Behavior
+
+- Validates model against the provider's known model list (warning only — allows future models)
+- Updates only the `model:` field in `agents.yaml`
+- Takes effect on the next session spawn
+
+---
+
+### aom agent profile show
+
+#### Purpose
+
+Print the full composed profile for an agent (Zone A + Zone B + Zone C).
+
+#### Example
+
+```bash
+aom agent profile show backend-main
+```
+
+#### Inputs
+
+- positional: `name` — agent name
+
+---
+
+### aom agent profile update
+
+#### Purpose
+
+Append content to the Responsibilities or Constraints sections of an agent's profile.
+
+#### Example
+
+```bash
+aom agent profile update backend-main --responsibilities "REST endpoint security"
+aom agent profile update backend-main --constraints "No direct DB writes from HTTP layer"
+```
+
+#### Inputs
+
+- positional: `name` — agent name
+- `--responsibilities <text>` — append to Responsibilities section
+- `--constraints <text>` — append to Constraints section
+
+---
+
+### aom agent profile set-instructions
+
+#### Purpose
+
+Set Zone C custom instructions for an agent (per-agent override in `profile.md`).
+
+#### Example
+
+```bash
+aom agent profile set-instructions backend-main "Always add unit tests for critical paths."
+aom agent profile set-instructions backend-main --file custom.md
+aom agent profile set-instructions backend-main --clear
+```
+
+#### Inputs
+
+- positional: `name` — agent name
+- positional: `<text>` — instruction text (inline, mutually exclusive with `--file`)
+- `--file <path>` — load instructions from a Markdown file
+- `--clear` — remove all custom instructions
+
+#### Behavior
+
+- Writes to the `## Custom Instructions` section in `profile.md`
+- Injected at session spawn as Zone C
+
+---
+
+## Task Extended Commands
+
+### aom task list
+
+#### Purpose
+
+List tasks in the project, with optional filtering and JSON output.
+
+#### Example
+
+```bash
+aom task list
+aom task list --active
+aom task list --active --json
+```
+
+#### Inputs
+
+- `--active` — show only tasks in Ready, InProgress, Blocked, or NeedsAttention states
+- `--json` / `-j` — output as JSON array
+
+#### Output
+
+Table with columns: `ID`, `Title`, `Status`, `Mode`, `Priority`, `Agent`.
+
+---
+
+### aom task accept
+
+#### Purpose
+
+Accept a task after the assigned agent signals completion, advancing it to Done.
+
+#### Example
+
+```bash
+aom task accept TASK-001
+aom task accept TASK-001 --force
+aom task accept TASK-001 --auto --timeout 120m
+```
+
+#### Inputs
+
+- positional: `task-id`
+- `--force` — skip verify checks and accept anyway
+- `--auto` — poll until all checks pass, then auto-accept
+- `--interval <duration>` — poll interval for `--auto` (default: 15s)
+- `--timeout <duration>` — max wait for `--auto` (default: 30m)
+
+#### Behavior
+
+- Runs `task verify` checks before accepting; blocks if checks fail (bypass with `--force`)
+- `--auto` polls every 15 s until all checks pass, then accepts
+- Sets task status to Done; logs `task.accepted` event
+- Auto-stops the bound session if it is Idle
+
+---
+
+### aom task verify
+
+#### Purpose
+
+Run completion checks on a task to confirm it is ready to accept.
+
+#### Example
+
+```bash
+aom task verify TASK-001
+aom task verify TASK-001 --watch
+aom task verify TASK-001 --watch --interval 30s --timeout 60m
+```
+
+#### Inputs
+
+- positional: `task-id`
+- `--watch` — poll until all checks pass; prints iteration status on each poll
+- `--interval <duration>` — poll frequency (default: 10s); requires `--watch`
+- `--timeout <duration>` — max watch time (default: 30m); requires `--watch`
+
+#### Checks performed
+
+1. `task.completed` or `task.closed` event present in `.agent/log.md`
+2. Tagged commit `[TASK-xxx]` on agent branch (workspace agents)
+3. `handoff.md` filled with real content (not template placeholder)
+4. All required steps completed (when steps are defined)
+
+---
+
+### aom task signal
+
+#### Purpose
+
+Manually write a lifecycle event to the task artifact log. Used when the agent must signal a state transition explicitly rather than letting AOM detect it.
+
+#### Example
+
+```bash
+aom task signal TASK-001 task.completed
+aom task signal TASK-001 step.completed
+aom task signal TASK-001 checkpoint.created
+aom task signal TASK-001 handoff.prepared
+```
+
+#### Inputs
+
+- positional: `task-id`
+- positional: `event` — one of: `task.completed`, `task.closed`, `handoff.prepared`, `checkpoint.created`, `step.completed`
+
+#### Behavior
+
+- Appends the event to `.agent/log.md` in the task artifact root
+- For workspace agents: also mirrors to workspace `.agent/log.md`
+- `task.completed` auto-promotes the workspace handoff to the task artifact
+
+---
+
+### aom task ready
+
+#### Purpose
+
+Advance a task from Draft or Planned to Ready, signalling it can be started.
+
+#### Example
+
+```bash
+aom task ready TASK-001
+```
+
+#### Inputs
+
+- positional: `task-id`
+
+#### Behavior
+
+- Validates task is in Draft or Planned state
+- Sets status to Ready
+- Auto-promotes dependent tasks to Ready if all their blockers are now Done
+
+---
+
+### aom task cancel
+
+#### Purpose
+
+Cancel a task and remove it from the active work queue.
+
+#### Example
+
+```bash
+aom task cancel TASK-001
+aom task cancel TASK-001 --reason "scope removed"
+```
+
+#### Inputs
+
+- positional: `task-id`
+- `--reason <text>` — optional cancellation reason (logged to artifact)
+
+#### Behavior
+
+- Sets task status to Archived with a cancelled annotation
+- Stops any bound live session
+
+---
+
+### aom task link
+
+#### Purpose
+
+Declare a dependency: one task blocks on a prerequisite task.
+
+#### Example
+
+```bash
+aom task link TASK-003 --depends-on TASK-001
+```
+
+#### Inputs
+
+- positional: `task-id` — the task that will be blocked
+- `--depends-on <task-id>` (required) — the prerequisite task
+
+#### Behavior
+
+- Validates no circular dependency (BFS cycle detection)
+- Records the edge in DB; the dependent task is demoted to Blocked if the prerequisite is not Done
+
+---
+
+### aom task unlink
+
+#### Purpose
+
+Remove a dependency between two tasks.
+
+#### Example
+
+```bash
+aom task unlink TASK-003 --depends-on TASK-001
+```
+
+#### Inputs
+
+- Same as `aom task link`
+
+#### Behavior
+
+- Removes the dependency edge
+- If the prerequisite was the last blocker, promotes the dependent task to Ready
+
+---
+
+### aom task record-result
+
+#### Purpose
+
+Write the agent's final result summary to the task artifact.
+
+#### Example
+
+```bash
+aom task record-result TASK-001 "Implemented GET /users endpoint with pagination."
+```
+
+#### Inputs
+
+- positional: `task-id`
+- positional: `<result-text>`
+
+#### Behavior
+
+- Appends result under `## Result` in `task.md`
+- Logs `task.result-recorded` event
+
+---
+
+### aom task request
+
+#### Purpose
+
+Submit a request to the operator for clarification, an unblock, or approval.
+
+#### Example
+
+```bash
+aom task request TASK-001 "Need clarification on auth spec before proceeding."
+aom task request TASK-001 "DB schema finalized — please unblock." --type unblock
+```
+
+#### Inputs
+
+- positional: `task-id`
+- positional: `<message>`
+- `--type <type>` — `clarification`, `unblock`, `approval`, or `custom` (default: `custom`)
+
+#### Behavior
+
+- Creates a request record in DB; logs `task.request-created` event
+- Prints the request ID for use with `approve-request` / `reject-request`
+
+---
+
+### aom task list-requests
+
+#### Purpose
+
+List pending task requests awaiting operator action.
+
+#### Example
+
+```bash
+aom task list-requests
+aom task list-requests --task TASK-001
+```
+
+#### Inputs
+
+- `--task <task-id>` — filter to a specific task
+
+---
+
+### aom task approve-request
+
+#### Purpose
+
+Operator approves a pending task request.
+
+#### Example
+
+```bash
+aom task approve-request REQ-001 --note "Auth spec in docs/auth.md"
+```
+
+#### Inputs
+
+- positional: `request-id`
+- `--note <text>` — optional approval note sent back to the agent
+
+---
+
+### aom task reject-request
+
+#### Purpose
+
+Operator rejects a pending task request.
+
+#### Example
+
+```bash
+aom task reject-request REQ-001 --reason "Out of scope for this milestone"
+```
+
+#### Inputs
+
+- positional: `request-id`
+- `--reason <text>` — optional rejection reason
+
+---
+
+### aom task propose-plan
+
+#### Purpose
+
+Submit a multi-step execution plan for operator approval before starting work.
+
+#### Example
+
+```bash
+aom task propose-plan TASK-001 \
+  --steps "Design schema,Implement endpoint,Write tests"
+```
+
+#### Inputs
+
+- positional: `task-id`
+- `--steps <text>` — comma-separated step descriptions
+
+#### Behavior
+
+- Creates step records in DB
+- Sets task status to Planned, pending operator approval via `plan-approve`
+
+---
+
+### aom task plan-approve
+
+#### Purpose
+
+Operator approves the proposed plan; advances the task to Ready.
+
+#### Example
+
+```bash
+aom task plan-approve TASK-001
+```
+
+---
+
+### aom task plan-reject
+
+#### Purpose
+
+Operator rejects the proposed plan with feedback; agent must revise and re-propose.
+
+#### Example
+
+```bash
+aom task plan-reject TASK-001 --feedback "Too many steps — simplify to 2."
+```
+
+#### Inputs
+
+- positional: `task-id`
+- `--feedback <text>` — rejection reason sent to agent
+
+---
+
+## Session Extended Commands
+
+### aom session watch
+
+#### Purpose
+
+Stream task events from `log.md` as they arrive, optionally exiting when a specific event is detected.
+
+#### Example
+
+```bash
+aom session watch --task TASK-001 --event task.completed --timeout 30m
+aom session watch --auto-spawn --real --timeout 60m
+```
+
+#### Inputs
+
+- `--task <task-id>` — watch a single task (omit to watch all active tasks)
+- `--event <type>` — exit on detection of this event (e.g., `task.completed`)
+- `--timeout <duration>` — max watch duration (default: 30m)
+- `--auto-spawn` — automatically spawn sessions for SPAWN action items
+- `--real` / `--mock` — required with `--auto-spawn`
+- `--interval <duration>` — polling interval (default: 10s)
+
+#### Behavior
+
+- Polls every 10 s; prints new events as they are appended to `log.md`
+- With `--event`: exits 0 when event found; exits 1 on timeout
+- With `--auto-spawn`: parses action items each poll; calls `session spawn` for any SPAWN item
+
+---
+
+### aom session health
+
+#### Purpose
+
+Show checkpoint recency and handoff status across all active sessions.
+
+#### Example
+
+```bash
+aom session health
+```
+
+#### Output
+
+Table: session ID, agent, task, time since last checkpoint, handoff status, overall health. Warns when checkpoint age exceeds 2 hours or no handoff has been written.
+
+---
+
+## Merge Commands
+
+### aom merge check
+
+#### Purpose
+
+Analyze merge readiness: conflicts, file overlap with other active tasks, and any blockers.
+
+#### Example
+
+```bash
+aom merge check TASK-001
+aom merge check TASK-001 --against main
+```
+
+#### Inputs
+
+- positional: `task-id`
+- `--against <branch>` — comparison target (default: project default branch)
+
+#### Behavior
+
+- Diffs the task branch against the target
+- Reports changed files, overlap score with other active worktrees, and add/add conflict risk
+- Suggests `aom merge prepare` when safe to proceed
+
+---
+
+### aom merge prepare
+
+#### Purpose
+
+Generate the merge plan document and create an integration step in the task.
+
+#### Example
+
+```bash
+aom merge prepare TASK-001
+aom merge prepare TASK-001 --into main
+```
+
+#### Inputs
+
+- positional: `task-id`
+- `--into <branch>` — target branch (default: project default branch)
+
+#### Behavior
+
+- Runs full merge check; writes results to `.aom/merge-plan.md`
+- Creates an integration step in the task if it is still active
+- Syncs plan to the task artifact directory
+
+---
+
+### aom merge commit
+
+#### Purpose
+
+Execute the git merge, auto-resolve safe conflicts, and finalize the commit.
+
+#### Example
+
+```bash
+aom merge commit TASK-001
+aom merge commit TASK-001 --into main --prefer-branch
+```
+
+#### Inputs
+
+- positional: `task-id`
+- `--into <branch>` — target branch (default: project default branch)
+- `--prefer-branch` — auto-resolve add/add conflicts by keeping the task-branch version
+
+#### Behavior
+
+- Requires task status Done
+- Auto-resolves `.agent/`, `AGENTS.md`, `CLAUDE.md` conflicts (AOM identity files)
+- Strips `.agent/` and `.aom/` artifacts from the merge commit
+- If conflicts remain: pauses with instructions for `aom merge continue` or `aom merge abort`
+
+---
+
+### aom merge continue
+
+#### Purpose
+
+Complete a merge paused by conflicts after the operator has resolved them.
+
+#### Example
+
+```bash
+aom merge continue TASK-001
+```
+
+#### Inputs
+
+- positional: `task-id`
+
+#### Behavior
+
+- Verifies a merge is in progress (`MERGE_HEAD` present)
+- Operator must have resolved conflicts and staged files with `git add`
+- Runs `git merge --continue` and finalizes the commit
+
+---
+
+### aom merge abort
+
+#### Purpose
+
+Abort a merge in progress and restore the working tree.
+
+#### Example
+
+```bash
+aom merge abort TASK-001
+```
+
+#### Inputs
+
+- positional: `task-id`
+
+#### Behavior
+
+- Requires a merge to be in progress
+- Runs `git merge --abort`
+
+---
+
+## Messaging Commands
+
+### aom message send
+
+#### Purpose
+
+Send a direct message to an agent's inbox.
+
+#### Example
+
+```bash
+aom message send backend-main "please review the auth endpoint spec"
+aom message send frontend-main "design docs at docs/ui-spec.md" --from orchestrator-main
+```
+
+#### Inputs
+
+- positional: `agent-name`
+- positional: `<message>`
+- `--from <sender>` — override sender identity (default: `AOM_AGENT_NAME` → `AOM_ACTOR` → `operator`)
+
+#### Behavior
+
+- In agent sandbox mode: stages to `.aom/outbox/<agent>.md`; operator flushes with `aom outbox flush`
+- Otherwise: writes directly to `.aom/mailbox/<agent>.md`
+- Sends a tmux notification to the agent's live pane if one is active
+
+---
+
+### aom message read
+
+#### Purpose
+
+Print messages from an agent's inbox since the last read.
+
+#### Example
+
+```bash
+aom message read backend-main
+```
+
+#### Inputs
+
+- positional: `agent-name`
+
+#### Behavior
+
+- Reads `.aom/mailbox/<agent>.md` from the current cursor offset
+- Advances the cursor after reading
+- Prints "no messages" if mailbox is empty or fully read
+
+---
+
+### aom message clear
+
+#### Purpose
+
+Archive the mailbox contents and reset it to empty.
+
+#### Example
+
+```bash
+aom message clear backend-main
+```
+
+#### Inputs
+
+- positional: `agent-name`
+
+#### Behavior
+
+- Moves existing messages to `.aom/mailbox/<agent>.archive.md`
+- Resets active mailbox to empty; resets cursor
+
+---
+
+## Team Commands
+
+### aom team view
+
+#### Purpose
+
+Join all active agent panes into the shared team tmux window and attach for real-time monitoring.
+
+#### Example
+
+```bash
+aom team view
+aom team view --layout tiled
+```
+
+#### Inputs
+
+- `--layout <mode>` — `tiled`, `even-horizontal`, `even-vertical` (default: `tiled`)
+
+#### Behavior
+
+- Creates the team tmux window if it does not exist
+- Prunes stale panes; adds missing live panes
+- Applies the layout; attaches the operator
+
+---
+
+### aom team status
+
+#### Purpose
+
+Show how each agent session is currently arranged (team window, dedicated, or solo).
+
+#### Example
+
+```bash
+aom team status
+```
+
+#### Output
+
+Table: agent, session state, pane placement. Includes quick-action commands.
+
+---
+
+### aom team brief
+
+#### Purpose
+
+Generate a shared team briefing: active tasks, pending requests, recent channel messages, agent roster.
+
+#### Example
+
+```bash
+aom team brief
+```
+
+#### Behavior
+
+- Collects active tasks and dependencies
+- Appends the last 5 channel messages
+- Lists all agents with session status
+- Writes briefing to `.aom/shared/team-brief.md` and pushes to active worktrees
+
+---
+
+### aom team roster
+
+#### Purpose
+
+Refresh the worktree-local team roster snapshot used by agents to orient themselves.
+
+#### Example
+
+```bash
+aom team roster --agent backend-main
+```
+
+#### Inputs
+
+- `--agent <name>` — agent whose worktree receives the update (falls back to `AOM_ACTOR` env var)
+
+#### Behavior
+
+- Generates a snapshot: all agents, sessions, task dependency graph
+- Writes to `.agent/team-roster.md` in the agent's worktree
+
+---
+
+## Orchestration Commands
+
+### aom orchestrate
+
+#### Purpose
+
+Spawn all enabled agents into a shared team tmux grid simultaneously.
+
+#### Example
+
+```bash
+aom orchestrate --real
+aom orchestrate --real --layout even-horizontal
+```
+
+#### Inputs
+
+- `--real` / `--mock` (required)
+- `--layout <mode>` — `tiled`, `even-horizontal`, `even-vertical` (default: `tiled`)
+- `--allow-collision` — bypass the single-writer guard
+
+#### Behavior
+
+- Iterates all enabled agents; skips those already live in the team window
+- Auto-provisions workspaces for agents that lack one
+- Applies layout; attaches the operator to the team window
+
+---
+
+### aom orchestrator start
+
+#### Purpose
+
+Spawn the designated orchestrator agent and hand it the current project goal.
+
+#### Example
+
+```bash
+aom orchestrator start --real
+aom orchestrator start --goal "Deploy v2 API" --real
+```
+
+#### Inputs
+
+- `--goal "<text>"` — write goal before spawning (optional; uses existing goal if omitted)
+- `--real` / `--mock` — default: `--real`
+- `--no-grid` — spawn in a dedicated window instead of the shared team grid
+
+#### Behavior
+
+- Finds the first enabled agent whose role class is `orchestrator`
+- Writes `.aom/goal.json` if `--goal` is provided
+- Spawns the agent with full profile and team context
+
+---
+
+### aom orchestrator view
+
+#### Purpose
+
+Attach to the team grid showing the orchestrator and workers side-by-side.
+
+#### Example
+
+```bash
+aom orchestrator view
+aom orchestrator view --layout even-horizontal
+```
+
+#### Inputs
+
+- `--layout <mode>` — (default: `tiled`)
+
+---
+
+### aom orchestrator status
+
+#### Purpose
+
+Show the orchestrator goal, sessions, and recent channel activity.
+
+#### Example
+
+```bash
+aom orchestrator status
+```
+
+#### Output
+
+- Current goal (text, status, set date)
+- All orchestrator-class sessions and their states
+- Last 10 channel messages
+
+---
+
+## Operator UX Commands
+
+### aom switch
+
+#### Purpose
+
+Jump directly into an agent's live tmux pane by name, logging an `operator.intervention` event.
+
+#### Example
+
+```bash
+aom switch backend-main
+```
+
+#### Inputs
+
+- positional: `agent-name`
+
+#### Behavior
+
+- Finds the most recently created live session for the agent
+- Requires an active tmux pane
+- Logs `operator.intervention` to the task artifact log
+
+---
+
+### aom dashboard
+
+#### Purpose
+
+Display a live-refreshing ANSI terminal dashboard: sessions, action items, recent channel messages. Press Ctrl+C to exit.
+
+#### Example
+
+```bash
+aom dashboard
+aom dashboard --interval 10s
+```
+
+#### Inputs
+
+- `--interval <duration>` — refresh interval (default: 5s)
+
+#### Output
+
+- Sessions table: agent, status, task, pane health
+- Action items: APPROVAL / ACCEPT / SPAWN items with exact commands
+- Last 6 channel messages
+
+---
+
+### aom next
+
+#### Purpose
+
+List unblocked tasks ready to start and blocked tasks waiting on dependencies.
+
+#### Example
+
+```bash
+aom next
+aom next --format json
+```
+
+#### Inputs
+
+- `--format json` — output as JSON
+
+#### Output
+
+Two sections: **Ready** (can be started now) and **Blocked** (waiting on prerequisite tasks), each with ID, title, priority, preferred role/agent, and blocker list.
+
+---
+
+### aom pause-all
+
+#### Purpose
+
+Pause all currently Working sessions by transitioning them to WaitingApproval.
+
+#### Example
+
+```bash
+aom pause-all
+aom pause-all --reason "deployment freeze"
+```
+
+#### Inputs
+
+- `--reason <text>` — optional reason appended to the pause notification
+
+#### Behavior
+
+- Transitions all Working sessions to WaitingApproval
+- Sends a notification to each session's tmux pane
+- Logs `approval.pause` to task artifacts
+
+---
+
+### aom resume-all
+
+#### Purpose
+
+Resume all paused sessions by transitioning them from WaitingApproval back to Idle.
+
+#### Example
+
+```bash
+aom resume-all
+```
+
+#### Behavior
+
+- Transitions all WaitingApproval sessions to Idle
+- Logs `approval.resume` event
+
+---
+
+## Project Extended Commands
+
+### aom project layout
+
+#### Purpose
+
+Generate a `repo-layout.md` snapshot from the git tree and push it to all active agent worktrees.
+
+#### Example
+
+```bash
+aom project layout
+```
+
+#### Behavior
+
+- Extracts top-level structure via `git ls-tree`
+- Writes to `.aom/shared/repo-layout.md`
+- Copies to `.agent/shared/` in every active worktree
+
+---
+
+### aom project share
+
+#### Purpose
+
+Copy a file to the shared directory and push it to all active agent worktrees.
+
+#### Example
+
+```bash
+aom project share docs/api-spec.md
+```
+
+#### Inputs
+
+- positional: `<file-path>`
+
+#### Behavior
+
+- Copies file to `.aom/shared/<filename>`
+- Pushes to `.agent/shared/<filename>` in every active worktree
+
+---
+
+## Worktree Extended Commands
+
+### aom worktree read-file
+
+#### Purpose
+
+Read a file from a specific task's worktree without switching into it.
+
+#### Example
+
+```bash
+aom worktree read-file TASK-001 src/handler.go
+```
+
+#### Inputs
+
+- positional: `task-id`
+- positional: `relative-path` — relative to the worktree root
+
+#### Behavior
+
+- Path-traversal guard: rejects paths that escape the worktree root
+- Requires worktree status Ready or Active
+- Logs a `worktree.read` audit event
+
+---
+
+### aom worktree prune
+
+#### Purpose
+
+Remove archived and orphaned worktrees from git and the filesystem.
+
+#### Example
+
+```bash
+aom worktree prune
+aom worktree prune --dry-run
+```
+
+#### Inputs
+
+- `--dry-run` — list worktrees that would be removed without modifying anything
+
+#### Behavior
+
+- Finds worktrees in Archived status or missing a DB record
+- Runs `git worktree remove --force` for each
+- Runs `git worktree prune` to clean up stale git references
+
+---
+
+## Pipeline Command
+
+### aom run-pipeline
+
+#### Purpose
+
+Run the full task lifecycle in sequence: spawn → wait(task.completed) → verify → accept → [merge].
+
+#### Example
+
+```bash
+aom run-pipeline TASK-001 --agent backend-main --real
+aom run-pipeline TASK-001 --real --timeout 120m --skip-merge
+```
+
+#### Inputs
+
+- positional: `task-id`
+- `--agent <name>` — override the task's preferred agent
+- `--timeout <duration>` — total time budget for all stages (default: 60m)
+- `--real` / `--mock` (required)
+- `--skip-merge` — stop after accept; do not run merge
+
+#### Behavior
+
+Five sequential stages with shared timeout tracking:
+1. **spawn** — run `session spawn`
+2. **wait** — poll `log.md` for `task.completed` event
+3. **verify** — run `task verify` checks
+4. **accept** — run `task accept`
+5. **merge** — run `merge commit` (skipped with `--skip-merge`)
+
+On timeout: prints per-stage escalation hints and the exact command to resume.
+
+---
+
+## Metrics and Observability
+
+### aom metrics
+
+#### Purpose
+
+Show team velocity metrics: completed tasks, average duration, blocked events, and bottleneck analysis.
+
+#### Example
+
+```bash
+aom metrics
+aom metrics --days 14
+aom metrics --task TASK-001
+```
+
+#### Inputs
+
+- `--days <number>` — look-back window in days (default: 7)
+- `--task <task-id>` — filter to a single task
+
+#### Output
+
+- Tasks completed in window with duration
+- Per-agent completion counts
+- Tasks blocked for more than 1 hour
+- Suggested bottleneck agent
+
+---
+
+### aom policy list
+
+#### Purpose
+
+Display the project's policy: blocked commands, approval-gated commands, and per-task enforcement.
+
+#### Example
+
+```bash
+aom policy list
+aom policy list --task TASK-001
+```
+
+#### Inputs
+
+- `--task <task-id>` — include the task's assigned agent and enforcement level
+
+#### Output
+
+- `deny_commands` list
+- `require_approval` list
+- `yolo_mode` and approval scope defaults
+- With `--task`: agent assignment and active enforcement level
+
+---
+
+## Outbox Commands
+
+### aom outbox flush
+
+#### Purpose
+
+Publish all pending outbox messages from agent worktrees to the shared channel or agent mailboxes.
+
+#### Example
+
+```bash
+aom outbox flush
+```
+
+#### Behavior
+
+- Scans `.aom/worktrees/*/outbox.md` and `.aom/agents/*/workspace/.aom/outbox.md`
+- Publishes channel messages to `.aom/channel.md`
+- Publishes mailbox messages to `.aom/mailbox/<agent>.md`
+- Sends tmux notifications to live recipient sessions
+- Empties each outbox after publishing
+
+---
+
+### aom outbox list
+
+#### Purpose
+
+Show pending outbox messages without publishing them.
+
+#### Example
+
+```bash
+aom outbox list
+```
+
+#### Output
+
+Table grouped by worktree: destination (channel or `mailbox:<agent>`), message preview.
+
+---
+
+## Goal Commands
+
+### aom goal set
+
+#### Purpose
+
+Set the project goal for the orchestrator agent.
+
+#### Example
+
+```bash
+aom goal set "Implement a REST API with full CRUD for users and products"
+```
+
+#### Inputs
+
+- positional: `<goal-text>`
+
+#### Behavior
+
+- Writes to `.aom/goal.json`; overwrites any existing goal
+
+---
+
+### aom goal show
+
+#### Purpose
+
+Print the current project goal and its status.
+
+#### Example
+
+```bash
+aom goal show
+```
+
+#### Output
+
+Goal text, status (`Active` / `Complete`), and the date it was set.
+
+---
+
+### aom goal complete
+
+#### Purpose
+
+Mark the current project goal as complete.
+
+#### Example
+
+```bash
+aom goal complete
+```
+
+---
+
+## Memory Commands
+
+### aom memory append
+
+#### Purpose
+
+Append a timestamped note to `project-memory.md`. Memory entries are injected into every agent session at spawn.
+
+#### Example
+
+```bash
+aom memory append "Frontend uses Tailwind CSS 3.x, not Bootstrap"
+```
+
+#### Inputs
+
+- positional: `<note>`
+
+#### Behavior
+
+- Creates `project-memory.md` with a header on first use
+- Appends `[YYYY-MM-DD] <actor>: <note>`
+- Actor resolved from `AOM_ACTOR` env var (fallback: `operator`)
+
+---
+
+### aom memory show
+
+#### Purpose
+
+Print all entries in `project-memory.md`.
+
+#### Example
+
+```bash
+aom memory show
+```
+
+---
+
+### aom memory clear
+
+#### Purpose
+
+Erase all entries from `project-memory.md`.
+
+#### Example
+
+```bash
+aom memory clear --confirm
+```
+
+#### Inputs
+
+- `--confirm` — required safety flag
+
+#### Behavior
+
+- Resets `project-memory.md` to the header only
+
+---
+
+## Claim Commands
+
+File claims prevent multiple agents from unknowingly editing the same paths simultaneously.
+
+### aom claim
+
+#### Purpose
+
+Claim one or more file paths for an agent, warning if overlap with an existing claim is detected.
+
+#### Example
+
+```bash
+aom claim src/core.py src/config.py --agent backend-main --task TASK-001
+```
+
+#### Inputs
+
+- positional: `<paths...>` — one or more relative file paths
+- `--agent <name>` — claiming agent (default: resolved from `AOM_ACTOR`)
+- `--task <id>` — optional task context
+
+#### Behavior
+
+- Saves claim to `.aom/claims/<agent>.json`
+- Warns if overlap detected with another agent's existing claim
+
+---
+
+### aom claim release
+
+#### Purpose
+
+Release all file claims for an agent.
+
+#### Example
+
+```bash
+aom claim release --agent backend-main
+```
+
+#### Inputs
+
+- `--agent <name>` — agent whose claims to release
+
+---
+
+### aom claim list
+
+#### Purpose
+
+List all active file claims across all agents.
+
+#### Example
+
+```bash
+aom claim list
+```
+
+#### Output
+
+Table: agent, claimed paths, task context, claim timestamp.
+
+---
+
+## Miscellaneous Commands
+
+### aom token-usage
+
+#### Purpose
+
+Display provider-specific instructions for checking token usage.
+
+#### Example
+
+```bash
+aom token-usage
+```
+
+#### Output
+
+- **Claude**: claude.ai dashboard → Usage tab
+- **Codex**: platform.openai.com → Usage
+
+Automatic token tracking is not yet implemented.
+
+---
+
 ## Recommended MVP Command Set
 
 The minimum recommended implementation set is:
@@ -1411,12 +3108,39 @@ The minimum recommended implementation set is:
 - `aom runtime list`
 - `aom runtime inspect`
 
+### Roles and classes
+
+- `aom role list`
+- `aom role show`
+- `aom role create`
+- `aom role update`
+- `aom role delete`
+- `aom role preview`
+- `aom class list`
+- `aom class show`
+- `aom class create`
+- `aom class edit`
+- `aom class override`
+- `aom class delete`
+- `aom class preview`
+- `aom system-template show`
+
 ### Task and step
 
 - `aom task create`
 - `aom task show`
+- `aom task list`
 - `aom task update`
 - `aom task close`
+- `aom task accept`
+- `aom task verify`
+- `aom task signal`
+- `aom task ready`
+- `aom task cancel`
+- `aom task link` / `aom task unlink`
+- `aom task record-result`
+- `aom task request` / `aom task list-requests` / `aom task approve-request` / `aom task reject-request`
+- `aom task propose-plan` / `aom task plan-approve` / `aom task plan-reject`
 - `aom task reanalyze`
 - `aom step list`
 - `aom step update`
@@ -1427,20 +3151,44 @@ The minimum recommended implementation set is:
 - `aom session spawn`
 - `aom session send`
 - `aom session wait`
+- `aom session watch`
 - `aom session list`
 - `aom session show`
+- `aom session health`
 - `aom session set-agent-id`
 - `aom session resume`
 - `aom session replace`
+- `aom session recover`
+- `aom session rebind`
 - `aom session stop`
 - `aom session archive`
 
+### Merge workflow
+
+- `aom merge check`
+- `aom merge prepare`
+- `aom merge commit`
+- `aom merge continue`
+- `aom merge abort`
+
 ### Monitoring and orchestration
 
+- `aom status`
+- `aom dashboard`
+- `aom next`
+- `aom switch`
 - `aom watch`
+- `aom metrics`
+- `aom team view` / `aom team status` / `aom team brief` / `aom team roster`
+- `aom orchestrate`
+- `aom orchestrator start` / `aom orchestrator view` / `aom orchestrator status`
+- `aom run-pipeline`
 - `aom broadcast`
-- `aom channel append`
-- `aom channel read`
+- `aom channel append` / `aom channel read`
+- `aom message send` / `aom message read` / `aom message clear` / `aom message watch` / `aom message reply`
+- `aom outbox flush` / `aom outbox list`
+- `aom policy list`
+- `aom pause-all` / `aom resume-all`
 - `aom approve`
 - `aom deny`
 
@@ -1454,7 +3202,179 @@ The minimum recommended implementation set is:
 - `aom reanalyze`
 - `aom events tail`
 
-Approval commands may be implemented shortly after if the first coding slice does not yet enforce approvals end to end.
+### Project tools
+
+- `aom project layout`
+- `aom project share`
+- `aom worktree read-file`
+- `aom worktree prune`
+- `aom goal set` / `aom goal show` / `aom goal complete`
+- `aom memory append` / `aom memory show` / `aom memory clear`
+- `aom claim` / `aom claim release` / `aom claim list`
+- `aom token-usage`
+
+## aom serve
+
+### Purpose
+
+Starts the AOM web UI server. Serves a React-based dashboard embedded in the binary for monitoring and managing projects, sessions, tasks, and agents from a browser.
+
+### Command
+
+```
+aom serve [--port <port>] [--host <host>]   # start server
+aom serve stop                               # stop running server
+aom serve restart [--port <port>] [--host <host>]  # stop then restart
+```
+
+### Flags
+
+- `--port` — HTTP port to listen on (default: `7777`)
+- `--host` — bind address (default: `localhost`)
+
+### Behaviour
+
+- Serves the embedded React frontend from `web/dist/` (built at compile time via `embed.FS`)
+- Exposes the full REST API at `/api/v1/`
+- Exposes three WebSocket endpoints: terminal streaming, event log, and per-agent mailbox
+- No authentication — intended for local use only
+- Cleans up stale aom-ws-* tmux sessions on startup
+- Writes PID and bind address to `~/.aom/serve.pid`; `stop` and `restart` read this file to locate the process
+
+### Example
+
+```
+aom serve
+# → AOM Web Server listening on http://localhost:7777
+
+aom serve stop
+# → Server stopped (pid 12345)
+
+aom serve restart --port 8080
+# → AOM Web Server listening on http://localhost:8080
+```
+
+### REST API surface
+
+All endpoints are prefixed `/api/v1/`.
+
+**Projects**
+```
+GET    /projects                              list registered projects
+POST   /projects                              add project  { path }
+DELETE /projects/{id}                         remove project
+POST   /projects/init                         init new project  { name, path, repo, agents[] }
+```
+
+**Agents**
+```
+GET    /projects/{id}/agents                  list agents
+POST   /projects/{id}/agents                  add agent
+PUT    /projects/{id}/agents/{name}           update agent (model, enabled)
+DELETE /projects/{id}/agents/{name}           remove agent
+POST   /projects/{id}/agents/{name}/provision provision workspace
+```
+
+**Sessions**
+```
+GET    /projects/{id}/sessions                list sessions
+POST   /projects/{id}/sessions                spawn session  { agent, task_id, mode, persistent }
+GET    /projects/{id}/sessions/{sid}          get session
+DELETE /projects/{id}/sessions/{sid}          stop session
+POST   /projects/{id}/sessions/{sid}/send     send message  { message, from }
+POST   /projects/{id}/sessions/{sid}/resume
+POST   /projects/{id}/sessions/{sid}/approve
+POST   /projects/{id}/sessions/{sid}/deny
+POST   /projects/{id}/sessions/{sid}/recover
+POST   /projects/{id}/sessions/{sid}/archive
+```
+
+**Tasks**
+```
+GET    /projects/{id}/tasks                   list tasks
+POST   /projects/{id}/tasks                   create task
+GET    /projects/{id}/tasks/{tid}             get task
+POST   /projects/{id}/tasks/{tid}/signal      send signal  { type, summary }
+POST   /projects/{id}/tasks/{tid}/accept      accept task  { force }
+POST   /projects/{id}/tasks/{tid}/close
+POST   /projects/{id}/tasks/{tid}/cancel
+GET    /projects/{id}/tasks/{tid}/artifact    read task.md / handoff.md / state.md
+```
+
+**Status & Communication**
+```
+GET    /projects/{id}/status                  dashboard summary (agents, counts, project_path)
+GET    /projects/{id}/channel                 channel history
+POST   /projects/{id}/channel                 post to channel
+GET    /projects/{id}/mailbox/{agent}         agent mailbox history
+POST   /projects/{id}/broadcast              broadcast to all sessions
+POST   /projects/{id}/pause-all
+POST   /projects/{id}/resume-all
+```
+
+**Roles & Classes**
+```
+GET    /projects/{id}/roles                   list roles
+POST   /projects/{id}/roles                   create role  { name, class, worktree_mode, ... }
+GET    /projects/{id}/roles/{name}            get role
+PUT    /projects/{id}/roles/{name}            update role
+DELETE /projects/{id}/roles/{name}            delete role (409 if agents using it)
+GET    /projects/{id}/roles/{name}/preview    rendered profile preview (Zone A + Zone B)
+GET    /projects/{id}/classes                 list classes with source (builtin/custom/overridden)
+GET    /projects/{id}/classes/{name}          get class template content
+PUT    /projects/{id}/classes/{name}          set/override class template  { content }
+DELETE /projects/{id}/classes/{name}          delete custom class or revert builtin override
+GET    /projects/{id}/classes/{name}/preview  rendered profile preview for this class
+GET    /system-template                       AOM Workflow Protocol (Zone A, read-only)
+```
+
+**Extras**
+```
+GET    /projects/{id}/requests                list agent task requests
+POST   /projects/{id}/requests/{rid}/approve
+POST   /projects/{id}/requests/{rid}/reject
+GET    /projects/{id}/metrics                 velocity report
+POST   /projects/{id}/doctor                  run health checks
+GET    /projects/{id}/team-brief              read .aom/team-brief.md
+PUT    /projects/{id}/team-brief              write .aom/team-brief.md
+POST   /projects/{id}/merge/check             { task_id }
+POST   /projects/{id}/merge/prepare           { task_id }
+POST   /projects/{id}/merge/commit            { task_id }
+```
+
+**Filesystem**
+```
+GET    /fs/browse                             browse directory  ?path=<dir>
+POST   /fs/mkdir                              create directory  { path }
+```
+
+**Terminal**
+```
+GET    /terminal/{pane}/history               last N lines of pane output
+```
+
+### WebSocket API
+
+```
+WS /ws/terminal/{pane}
+  Client → Server: raw keystroke bytes
+  Server → Client: ANSI terminal output stream
+
+WS /ws/events/{project}
+  Server → Client: { type, timestamp, level, message }
+
+WS /ws/mailbox/{project}/{agent}
+  Server → Client: { type: "message", from, text, timestamp }
+```
+
+### Build Note
+
+The frontend must be built before the Go binary is compiled — the React bundle is embedded at Go compile time:
+
+```bash
+cd web && npm run build
+go build -o aom cmd/aom/main.go
+```
 
 ## Output Style Rules
 

@@ -19,9 +19,14 @@ The recommended repository layout is:
   sessions.db
   logs/
   templates/
+    profiles/
+      <class>.md.tmpl   ← project-level class template overrides (Zone B)
+  shared/
+    repo-layout.md      ← injected into every agent at spawn
   agents/
     <agent-name>/
-      profile.md
+      profile.md        ← composed: Zone A + Zone B + Zone C
+      workspace/        ← present only if agent is provisioned (free-roam mode)
   worktrees/
     <task-slug>/
 ```
@@ -290,19 +295,21 @@ Two sessions of the same agent on the same task worktree are subject to the one-
 
 #### class
 
-Recommended built-in values for MVP:
+Built-in classes (embedded in the binary, always available):
 
-- `orchestrator`
-- `builder`
-- `reviewer`
-- `qa`
-- `architect`
-- `docs`
-- `release`
+- `orchestrator` — task dispatch, coordination, delegation
+- `builder` — implementation, coding, commits
+- `frontend` — frontend/UI implementation
+- `reviewer` — code review, quality checks
+- `generic` — non-coding tasks (research, writing, analysis)
 
-This is a recommended built-in vocabulary, not a closed set.
+This is the default built-in vocabulary. Projects may define any number of custom classes.
 
-Projects may define custom role classes when they need more specialized agent behavior.
+**Custom classes** are stored as `.md.tmpl` files under `.aom/templates/profiles/<name>.md.tmpl`. Use `aom class create <name>` to scaffold a new one.
+
+**Overriding a built-in class** creates a project-level copy at `.aom/templates/profiles/<name>.md.tmpl` that takes precedence over the embedded default. Use `aom class override <name>` to create the override. The class source becomes `builtin-overridden` and can be reverted with `aom class delete <name>`.
+
+**Template lookup order**: `.aom/templates/profiles/<class>.md.tmpl` → embedded binary default → `default.md.tmpl` fallback.
 
 #### worktree_mode
 

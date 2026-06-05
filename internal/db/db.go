@@ -20,8 +20,9 @@ const (
 	migrationSchemaV5 = "schema-v5"
 	migrationSchemaV6 = "schema-v6"
 	migrationSchemaV7 = "schema-v7"
-	migrationSchemaV8 = "schema-v8"
-	migrationSchemaV9 = "schema-v9"
+	migrationSchemaV8  = "schema-v8"
+	migrationSchemaV9  = "schema-v9"
+	migrationSchemaV10 = "schema-v10"
 
 	// defaultBusyTimeoutMS is the time (ms) SQLite will retry a write before
 	// returning SQLITE_BUSY. 30 s gives ample headroom for concurrent CLI
@@ -398,6 +399,28 @@ func Migrate(db *sql.DB) error {
 		}
 	}
 
+	applied, err = hasMigration(db, migrationSchemaV10)
+	if err != nil {
+		return fmt.Errorf("check migration %q: %w", migrationSchemaV10, err)
+	}
+	if !applied {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin migration transaction: %w", err)
+		}
+		if err := applySchemaV10(tx); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("apply schema v10: %w", err)
+		}
+		if _, err := tx.Exec(`INSERT INTO migrations (id) VALUES (?)`, migrationSchemaV10); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("record migration %q: %w", migrationSchemaV10, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration transaction: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -594,5 +617,10 @@ CREATE TABLE worktrees (
 
 func applySchemaV9(tx *sql.Tx) error {
 	_, err := tx.Exec(`ALTER TABLE agents ADD COLUMN workspace_path TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+func applySchemaV10(tx *sql.Tx) error {
+	_, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN persistent INTEGER NOT NULL DEFAULT 0`)
 	return err
 }

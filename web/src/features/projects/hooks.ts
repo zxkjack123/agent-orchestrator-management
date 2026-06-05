@@ -44,3 +44,15 @@ export function useRemoveProject() {
     onSuccess: () => qc.invalidateQueries({ queryKey: PROJECTS_KEY }),
   })
 }
+
+export function useIsolateSession(projectId: string | null) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ agent, mode }: { agent: string; mode: string }) =>
+      projectsApi.isolateSession(projectId!, agent, mode),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['projects', projectId, 'agents'] })
+      qc.invalidateQueries({ queryKey: ['projects', projectId, 'sessions'] })
+    },
+  })
+}

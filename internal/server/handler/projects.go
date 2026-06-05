@@ -1,8 +1,14 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/server/dto"
 )
@@ -54,4 +60,51 @@ func (h *ProjectsHandler) Remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// InitProject handles POST /api/v1/projects/init
+// Runs `aom project init <name> --repo .` in the given directory (non-interactive).
+func (h *ProjectsHandler) InitProject(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if !filepath.IsAbs(req.Path) {
+		writeError(w, http.StatusBadRequest, "path must be absolute")
+		return
+	}
+
+	// Derive project name from the last path component.
+	name := filepath.Base(req.Path)
+	if name == "." || name == "/" {
+		name = "project"
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "aom"
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, exe, "project", "init", name, "--repo", ".")
+	cmd.Dir = req.Path
+	cmd.Stdin = nil // non-interactive: skips agent selection prompt
+
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	if err != nil {
+		writeJSON(w, map[string]string{"status": "error", "output": output})
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok", "output": output})
 }

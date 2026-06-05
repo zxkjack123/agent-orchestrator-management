@@ -11,6 +11,9 @@ aom-fresh
 aom-*
 docs/dev/
 
+# Test artifacts
+test-results/
+
 # Frontend
 web/node_modules/
 web/dist/*

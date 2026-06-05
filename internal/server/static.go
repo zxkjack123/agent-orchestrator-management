@@ -39,11 +39,22 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f, err := h.fs.Open(p)
 	if err != nil {
 		// Not a real file → serve index.html for SPA client-side routing.
+		// no-store so browsers always fetch the latest index.html (and thus the
+		// latest content-hashed JS/CSS bundles).
+		w.Header().Set("Cache-Control", "no-store")
 		r2 := r.Clone(r.Context())
 		r2.URL.Path = "/"
 		http.FileServer(h.fs).ServeHTTP(w, r2)
 		return
 	}
 	f.Close()
+
+	// Hashed assets (/assets/index-XYZ.js) are immutable — cache forever.
+	// index.html itself must never be cached.
+	if strings.HasPrefix(p, "/assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	http.FileServer(h.fs).ServeHTTP(w, r)
 }

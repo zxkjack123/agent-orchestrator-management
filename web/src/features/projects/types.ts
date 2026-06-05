@@ -12,6 +12,7 @@ export type Agent = {
   enabled: boolean
   tmux_pane?: string
   status?: string
+  is_shared_session?: boolean
 }
 
 export type ProjectStatus = {

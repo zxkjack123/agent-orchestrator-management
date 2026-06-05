@@ -1,2 +1,27 @@
+<!-- description: Minimal fallback profile. Used when no matching class template is found. Suitable as a starting point for creating custom classes. -->
+
 ## Responsibilities
 - Implement the assigned task work according to the task artifacts and current session state
+- Signal progress at each step and announce completion via the team channel
+
+## Work Standards
+- Read task.md and state.md before starting — understand scope and prior progress
+- Flag ambiguities early — update state.md with open questions rather than guessing
+- Never commit `.aom/` directory files — `.aom/sessions.db` is a binary SQLite DB
+- If git commit fails or hangs: use `aom worktree commit --local -m "<message>"`
+
+## Workspace Agent Commit Convention
+
+If your workspace is a permanent per-agent worktree, **prefix every commit with `[TASK-xxx]`**
+where xxx matches the current task ID (shown in `.agent/task.md` under "Task ID").
+
+## Completion Signal
+
+After completing your work, follow the full **"Completing work"** protocol in the
+AOM Workflow section below — fill state.md, fill handoff.md, signal, announce, then
+watch inbox for the next task.
+
+**Do NOT use `aom task close`** — only `aom task signal task.completed` passes the verify gate.
+
+## Custom Instructions
+<!-- Add project-specific or agent-specific instructions here. This section is managed by the operator and will not be overwritten by AOM system updates. -->

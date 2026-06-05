@@ -43,10 +43,16 @@ func (h *StatusHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	paneByAgent := make(map[string]string)
 	statusByAgent := make(map[string]string)
+	persistentByAgent := make(map[string]bool)
 	for _, s := range sessions {
+		// Always track the most recent status (sessions ordered ASC so last wins = newest).
+		// Skip archived sessions so they don't overwrite a live session's status.
+		if s.Status != "Archived" {
+			statusByAgent[s.AgentName] = s.Status
+			persistentByAgent[s.AgentName] = s.Persistent
+		}
 		if s.TmuxPane != "" {
 			paneByAgent[s.AgentName] = s.TmuxPane
-			statusByAgent[s.AgentName] = s.Status
 		}
 	}
 
@@ -55,12 +61,13 @@ func (h *StatusHandler) Get(w http.ResponseWriter, r *http.Request) {
 	for _, a := range result.Agents {
 		st := statusByAgent[a.Name]
 		agents = append(agents, dto.Agent{
-			Name:     a.Name,
-			Role:     a.Role,
-			Runtime:  a.Runtime,
-			Enabled:  a.Enabled,
-			TmuxPane: paneByAgent[a.Name],
-			Status:   st,
+			Name:       a.Name,
+			Role:       a.Role,
+			Runtime:    a.Runtime,
+			Enabled:    a.Enabled,
+			TmuxPane:   paneByAgent[a.Name],
+			Status:     st,
+			Persistent: persistentByAgent[a.Name],
 		})
 		switch st {
 		case "Working", "WaitingApproval", "WaitingHandoff", "Booting":
@@ -73,6 +80,7 @@ func (h *StatusHandler) Get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, dto.ProjectStatus{
 		ProjectID:   result.Project.ID,
 		ProjectName: result.Project.Name,
+		ProjectPath: proj.Path,
 		Agents:      agents,
 		ActiveCount: activeCount,
 		IdleCount:   idleCount,

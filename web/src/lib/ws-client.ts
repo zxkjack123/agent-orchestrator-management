@@ -1,5 +1,12 @@
 const WS_BASE = import.meta.env.VITE_WS_BASE ?? ''
 
+function buildWsUrl(path: string): string {
+  if (WS_BASE) return `${WS_BASE}${path}`.replace(/^http/, 'ws')
+  // Construct from window.location so relative paths work as absolute WS URLs
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//${window.location.host}${path}`
+}
+
 export type WSMessage = {
   type: 'output' | 'event' | 'error'
   data: string
@@ -22,7 +29,7 @@ export function openWS(path: string, opts: WSOptions): () => void {
 
   function connect() {
     if (stopped) return
-    const url = `${WS_BASE}${path}`.replace(/^http/, 'ws')
+    const url = buildWsUrl(path)
     ws = new WebSocket(url)
 
     ws.onopen = () => opts.onOpen?.()

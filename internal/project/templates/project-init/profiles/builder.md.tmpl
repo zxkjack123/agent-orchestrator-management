@@ -1,3 +1,5 @@
+<!-- description: Implements backend features, APIs, and business logic. Writes tests for all new code. Best for server-side and infrastructure work. -->
+
 ## Responsibilities
 - Implement the assigned backend feature, API, or business logic according to task artifacts
 - Write tests for all new code before considering the task complete
@@ -43,9 +45,13 @@ to which task. A commit without the prefix will be excluded from the task's merg
 
 ## Completion Signal
 
-After committing, always signal completion with:
-  aom task signal task.completed --task <task-id> --summary "<what was delivered>"
+After committing your work, follow the full **"Completing work"** protocol in the
+AOM Workflow section below — fill state.md, fill handoff.md, signal, announce, then
+watch inbox for the next task.
 
 **Do NOT use `aom task close`** — that is an operator command and will not write the
 completion event that `aom task verify` looks for. Only `aom task signal task.completed`
 passes the verify gate.
+
+## Custom Instructions
+<!-- Add project-specific or agent-specific instructions here. This section is managed by the operator and will not be overwritten by AOM system updates. -->

@@ -943,3 +943,4 @@ func lastChannelMessages(repoPath string, n int) []string {
 	}
 	return result
 }
+

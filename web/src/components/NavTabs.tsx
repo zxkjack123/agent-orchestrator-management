@@ -2,11 +2,19 @@ import { NavLink } from 'react-router-dom'
 import { useProjectContext } from '@/app/ProjectContext'
 
 const TABS = [
-  { label: 'War Room', path: 'war-room' },
-  { label: 'Sessions', path: 'sessions' },
-  { label: 'Tasks',    path: 'tasks' },
-  { label: 'Mailbox',  path: 'mailbox' },
-  { label: 'Events',   path: 'events' },
+  { label: 'Dashboard',   path: 'dashboard' },
+  { label: 'Agents',      path: 'agents' },
+  { label: 'Roles',       path: 'roles' },
+  { label: 'War Room',    path: 'war-room' },
+  { label: 'Sessions',    path: 'sessions' },
+  { label: 'Tasks',       path: 'tasks' },
+  { label: 'Mailbox',     path: 'mailbox' },
+  { label: 'Channel',     path: 'events' },
+  { label: 'Requests',    path: 'requests' },
+  { label: 'Team Brief',  path: 'team-brief' },
+  { label: 'Merge',       path: 'merge' },
+  { label: 'Metrics',     path: 'metrics' },
+  { label: 'Doctor',      path: 'doctor' },
 ] as const
 
 export function NavTabs() {
