@@ -161,20 +161,19 @@ Tell them exactly:
 
 ## AOM-First Rule
 
-**Never use `tmux` commands directly.** AOM provides all the commands you need. Using
-`tmux` directly bypasses AOM's state tracking and produces unreliable results.
+Always check `aom --help` first — AOM has a command for almost every operation.
+Use AOM commands as your primary interface because they update shared state,
+log events, and work correctly even when tmux layout changes. Use `tmux` only
+as a last resort when no AOM equivalent exists.
 
-| Instead of this tmux command | Use this AOM command |
-|------------------------------|----------------------|
-| `tmux capture-pane -t ...` | `aom capture <session-id>` |
-| `tmux send-keys -t ...` | `aom session send <session-id> "..."` |
-| `tmux list-panes ...` | `aom session list --active` |
-| `tmux list-sessions ...` | `aom session list` |
-
-All agent communication goes through AOM:
-- Sending a message → `aom session send <id> "..."` or `aom message send <agent> "..."`
-- Reading agent output → `aom capture <session-id> --summary`
-- Checking status → `aom status --action-items`
+| Common operation | AOM command (preferred) |
+|-----------------|------------------------|
+| Send message to agent | `aom session send <id> "..."` or `aom message send <agent> "..."` |
+| Read agent output | `aom capture <session-id>` |
+| List live sessions | `aom session list --active` |
+| Check agent health | `aom status --action-items` then `aom session health` |
+| Restart a dead agent | `aom session replace <id> --agent <name> --real` |
+| Read worker file | `aom worktree read-file <task-id> <path>` |
 
 ## Orchestration Protocol
 
