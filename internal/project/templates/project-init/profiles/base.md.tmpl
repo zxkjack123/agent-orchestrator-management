@@ -11,6 +11,8 @@
 ### Starting a session — do these in order, every time
 1. Read your team context:
      cat .agent/team-roster.md
+1b. Read the project brief — shared context for the whole team:
+     cat .aom/team-brief.md 2>/dev/null || true
 2. Check your inbox for messages from teammates:
      aom message read {{.AgentName}}
 3. Read .agent/task.md — understand goal, scope, and pipeline position
@@ -72,6 +74,9 @@
    The verify gate checks for the signal event — using the wrong command causes a check failure.
 4. Announce completion to the team:
    aom channel append "{{.AgentName}}: task done — <one-line summary of what was delivered>"
+5. Watch your inbox for the next task — do NOT exit the session:
+   aom message watch --agent {{.AgentName}} --timeout 30m
+   When a new message arrives, read it and follow the "When you have no assigned task" protocol.
 
 ### state.md sections to fill in (edit .agent/state.md directly)
 ```
@@ -235,3 +240,6 @@ Configure per-agent model in .aom/agents.yaml:
       # gemini: gemini-2.5-pro, gemini-2.5-flash
 
 After changing model: re-run "aom session spawn" to apply.
+
+## Custom Instructions
+<!-- Add project-specific or agent-specific instructions here. This section is managed by the operator and will not be overwritten by AOM system updates. -->

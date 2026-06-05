@@ -266,6 +266,8 @@ func (m *Manager) CapturePane(paneID string) (string, error) {
 		availability.BinaryPath,
 		"capture-pane",
 		"-p",
+		"-e",
+		"-J", // join soft-wrapped lines so browser terminal wraps at its own width
 		"-t",
 		paneID,
 	)
@@ -318,6 +320,84 @@ func (m *Manager) SendKeys(paneID, message string) error {
 		return fmt.Errorf("send enter to tmux pane %q: %w", paneID, err)
 	}
 
+	return nil
+}
+
+// PaneDimensions returns the width and height of the given tmux pane.
+func (m *Manager) PaneDimensions(paneID string) (cols, rows int, err error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return 0, 0, fmt.Errorf("tmux is not available in the current environment")
+	}
+	out, err := m.exec(availability.BinaryPath, "display-message", "-p", "-t", paneID, "#{pane_width} #{pane_height}")
+	if err != nil {
+		return 0, 0, fmt.Errorf("get dimensions of tmux pane %q: %w", paneID, err)
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("unexpected dimensions output %q", strings.TrimSpace(string(out)))
+	}
+	cols, err = strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	rows, err = strconv.Atoi(parts[1])
+	return
+}
+
+// PaneCursorY returns the current cursor row (0-based) of the given tmux pane.
+func (m *Manager) PaneCursorY(paneID string) (int, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return 0, fmt.Errorf("tmux not available")
+	}
+	out, err := m.exec(availability.BinaryPath, "display-message", "-p", "-t", paneID, "#{cursor_y}")
+	if err != nil {
+		return 0, fmt.Errorf("get cursor_y for pane %q: %w", paneID, err)
+	}
+	y, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, err
+	}
+	return y, nil
+}
+
+// ResizePane resizes a tmux pane to the given dimensions.
+// Called when the browser terminal reports a new size so capture-pane output
+// matches what xterm.js renders.
+func (m *Manager) ResizePane(paneID string, cols, rows int) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available in the current environment")
+	}
+	if _, err := m.exec(
+		availability.BinaryPath,
+		"resize-pane", "-t", paneID,
+		"-x", strconv.Itoa(cols),
+		"-y", strconv.Itoa(rows),
+	); err != nil {
+		return fmt.Errorf("resize tmux pane %q: %w", paneID, err)
+	}
+	return nil
+}
+
+// SendRawInput sends raw keystrokes to a tmux pane without appending Enter.
+// Used for interactive terminal input from xterm.js where the data already
+// includes whatever terminator the user typed (Enter = \r, arrows = ESC sequences).
+func (m *Manager) SendRawInput(paneID, data string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available in the current environment")
+	}
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	if data == "" {
+		return nil
+	}
+	if _, err := m.exec(availability.BinaryPath, "send-keys", "-t", paneID, "-l", data); err != nil {
+		return fmt.Errorf("send raw input to tmux pane %q: %w", paneID, err)
+	}
 	return nil
 }
 
@@ -598,6 +678,311 @@ func (m *Manager) KillWindow(windowTarget string) error {
 // insideTmux reports whether the current process is running inside a tmux session.
 func insideTmux() bool {
 	return os.Getenv("TMUX") != ""
+}
+
+// CurrentSessionName returns the tmux session name of the calling process,
+// or empty string if not running inside tmux.
+func (m *Manager) CurrentSessionName() string {
+	if !insideTmux() {
+		return ""
+	}
+	availability := m.Availability()
+	if !availability.Available {
+		return ""
+	}
+	out, err := m.exec(availability.BinaryPath, "display-message", "-p", "#{session_name}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// BinaryPath returns the path to the tmux binary, or empty string if not available.
+func (m *Manager) BinaryPath() string {
+	return m.Availability().BinaryPath
+}
+
+// SanitizeName converts a human name into a tmux-safe identifier (lowercase, hyphens only).
+func SanitizeName(value string) string {
+	return sanitizeName(value)
+}
+
+// CreateDedicatedSession creates a standalone tmux session for one agent.
+// Unlike CreatePane (which adds a window to the shared workspace session), this
+// gives the agent its own session so the web terminal can PTY-attach directly
+// for real-time streaming without affecting other agents.
+// If a session with sessionName already exists it is killed and recreated.
+func (m *Manager) CreateDedicatedSession(sessionName, cwd, command string) (*PaneBinding, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return nil, fmt.Errorf("tmux is not available in the current environment")
+	}
+	// Kill any stale session with the same name so re-spawning starts clean.
+	_, _ = m.exec(availability.BinaryPath, "kill-session", "-t", sessionName)
+
+	output, err := m.exec(
+		availability.BinaryPath,
+		"new-session",
+		"-d",
+		"-P",
+		"-F", "#{window_id} #{pane_id}",
+		"-s", sessionName,
+		"-x", "220",
+		"-y", "50",
+		"-c", cwd,
+		command,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create dedicated session %q: %w", sessionName, err)
+	}
+	return parsePaneBindingOutput(output)
+}
+
+// PaneSessionInfo returns the session name and window ID (e.g. "@6") that contain paneID.
+func (m *Manager) PaneSessionInfo(paneID string) (sessionName, windowID string, err error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return "", "", fmt.Errorf("tmux is not available")
+	}
+	out, err := m.exec(availability.BinaryPath, "display-message", "-p", "-t", paneID, "#{session_name} #{window_id}")
+	if err != nil {
+		return "", "", fmt.Errorf("get session info for pane %q: %w", paneID, err)
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("unexpected session-info output %q", strings.TrimSpace(string(out)))
+	}
+	return parts[0], parts[1], nil
+}
+
+// NewGroupedSession creates a temporary tmux session grouped with sourceSession,
+// sized to cols×rows, and selects windowID as the active window.
+// Returns the temp session name. Caller must call KillSession when done.
+func (m *Manager) NewGroupedSession(sourceSession, windowID string, cols, rows int) (string, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return "", fmt.Errorf("tmux is not available")
+	}
+	tempName := fmt.Sprintf("aom-ws-%d", time.Now().UnixNano())
+	if _, err := m.exec(availability.BinaryPath, "new-session", "-d",
+		"-t", sourceSession,
+		"-s", tempName,
+		"-x", strconv.Itoa(cols),
+		"-y", strconv.Itoa(rows),
+	); err != nil {
+		return "", fmt.Errorf("new grouped session: %w", err)
+	}
+	// Select the specific window so attach lands on the right agent.
+	if _, err := m.exec(availability.BinaryPath, "select-window", "-t", tempName+":"+windowID); err != nil {
+		_ = m.KillSession(tempName)
+		return "", fmt.Errorf("select window %q in temp session: %w", windowID, err)
+	}
+	return tempName, nil
+}
+
+// ResizeWindow resizes a tmux window (session:window target) to cols×rows so that
+// panes inside it get proportional space when viewed via the War Room browser UI.
+func (m *Manager) ResizeWindow(windowTarget string, cols, rows int) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available")
+	}
+	_, err := m.exec(availability.BinaryPath, "resize-window", "-t", windowTarget,
+		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
+	return err
+}
+
+// SwitchClient switches the current tmux client to sessionTarget.
+// When inside tmux it uses exec (no stdio inheritance) so the calling process
+// is not SIGKILL'd by tmux's terminal management. When outside tmux it falls
+// back to a full attach-session.
+func (m *Manager) SwitchClient(sessionTarget string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available")
+	}
+	if insideTmux() {
+		if _, err := m.exec(availability.BinaryPath, "switch-client", "-t", sessionTarget); err != nil {
+			return fmt.Errorf("switch-client to %q: %w", sessionTarget, err)
+		}
+		return nil
+	}
+	return m.run(availability.BinaryPath, "attach-session", "-t", sessionTarget)
+}
+
+// SessionGroup returns the tmux session group name for the given session,
+// or empty string if it is not part of any group.
+func (m *Manager) SessionGroup(sessionName string) string {
+	availability := m.Availability()
+	if !availability.Available {
+		return ""
+	}
+	out, err := m.exec(availability.BinaryPath, "display-message", "-p", "-t", sessionName, "#{session_group}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// SessionsInGroup returns all session names that belong to groupName.
+func (m *Manager) SessionsInGroup(groupName string) ([]string, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return nil, fmt.Errorf("tmux is not available")
+	}
+	out, err := m.exec(availability.BinaryPath, "list-sessions", "-F", "#{session_name} #{session_group}")
+	if err != nil {
+		return nil, nil
+	}
+	var result []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) == 2 && parts[1] == groupName {
+			result = append(result, parts[0])
+		}
+	}
+	return result, nil
+}
+
+// SessionExists reports whether a tmux session with the given name exists.
+func (m *Manager) SessionExists(name string) (bool, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return false, fmt.Errorf("tmux is not available")
+	}
+	_, err := m.exec(availability.BinaryPath, "has-session", "-t", name)
+	return err == nil, nil
+}
+
+// ListSessionsByPrefix returns all tmux session names that start with prefix.
+func (m *Manager) ListSessionsByPrefix(prefix string) ([]string, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return nil, fmt.Errorf("tmux is not available")
+	}
+	out, err := m.exec(availability.BinaryPath, "list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		return nil, nil // no sessions is not an error
+	}
+	var result []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if name := strings.TrimSpace(line); strings.HasPrefix(name, prefix) {
+			result = append(result, name)
+		}
+	}
+	return result, nil
+}
+
+// ListGroupedSessionsForPane returns names of sessions (filtered by namePrefix)
+// that contain the given pane ID — i.e. grouped sessions viewing the same pane.
+func (m *Manager) ListGroupedSessionsForPane(paneID, namePrefix string) ([]string, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return nil, fmt.Errorf("tmux is not available")
+	}
+	out, err := m.exec(availability.BinaryPath, "list-panes", "-a", "-F", "#{pane_id} #{session_name}")
+	if err != nil {
+		return nil, nil
+	}
+	seen := make(map[string]bool)
+	var result []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.Fields(strings.TrimSpace(line))
+		if len(parts) != 2 {
+			continue
+		}
+		pid, sname := parts[0], parts[1]
+		if pid == paneID && strings.HasPrefix(sname, namePrefix) && !seen[sname] {
+			seen[sname] = true
+			result = append(result, sname)
+		}
+	}
+	return result, nil
+}
+
+// NewDetachedSession creates a new detached tmux session with a single shell pane.
+// Returns the session name. Caller is responsible for killing it when no longer needed.
+func (m *Manager) NewDetachedSession(name string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available")
+	}
+	_, err := m.exec(availability.BinaryPath, "new-session", "-d", "-s", name)
+	return err
+}
+
+// LinkWindow links a source window into the target session.
+// sourceWindow is in "session:window" format; destSession is just the session name.
+// tmux appends the linked window to the end of the session's window list.
+func (m *Manager) LinkWindow(sourceWindow, destSession string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available")
+	}
+	_, err := m.exec(availability.BinaryPath, "link-window", "-s", sourceWindow, "-t", destSession)
+	return err
+}
+
+// JoinPane moves a pane from its current window into destWindowTarget.
+// tmux splits the currently focused pane in the destination window.
+// sourcePaneID is the bare pane ID (e.g. "%42"); destWindowTarget is "session:@windowID".
+func (m *Manager) JoinPane(sourcePaneID, destWindowTarget string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available")
+	}
+	out, err := m.exec(availability.BinaryPath, "join-pane", "-s", sourcePaneID, "-t", destWindowTarget)
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+		return err
+	}
+	return nil
+}
+
+// ListPanesInSession returns all pane IDs across all windows in a session.
+func (m *Manager) ListPanesInSession(sessionTarget string) ([]string, error) {
+	availability := m.Availability()
+	if !availability.Available {
+		return nil, fmt.Errorf("tmux is not available")
+	}
+	out, err := m.exec(availability.BinaryPath, "list-panes", "-s", "-t", sessionTarget, "-F", "#{pane_id}")
+	if err != nil {
+		return nil, fmt.Errorf("list panes in session %q: %w", sessionTarget, err)
+	}
+	var panes []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if p := strings.TrimSpace(line); p != "" {
+			panes = append(panes, p)
+		}
+	}
+	return panes, nil
+}
+
+// SessionHasClients returns true when at least one tmux client is attached to sessionName.
+// Used to avoid killing sessions that are actively in use.
+func (m *Manager) SessionHasClients(sessionName string) bool {
+	av := m.Availability()
+	if !av.Available {
+		return false
+	}
+	out, err := m.exec(av.BinaryPath, "list-clients", "-t", sessionName)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
+}
+
+// KillSession removes a tmux session by name (idempotent — ignores not-found errors).
+func (m *Manager) KillSession(sessionName string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available")
+	}
+	_, err := m.exec(availability.BinaryPath, "kill-session", "-t", sessionName)
+	return err
 }
 
 // KillPane intentionally removes a pane from the tmux workspace.

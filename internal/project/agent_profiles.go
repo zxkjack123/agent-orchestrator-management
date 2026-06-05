@@ -31,13 +31,31 @@ func ReadAgentProfile(aomPath, agentName string) (string, error) {
 }
 
 // WriteAgentProfile overwrites an agent's profile.md with new content.
+// Uses a temp-file + os.Rename for an atomic write — the temp file is created
+// in the same directory as the target so Rename stays on the same filesystem.
 func WriteAgentProfile(aomPath, agentName, content string) error {
 	path := AgentProfilePath(aomPath, agentName)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create agent profile dir: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("write agent profile %q: %w", agentName, err)
+	tmp, err := os.CreateTemp(dir, ".profile-*.md.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp profile for agent %q: %w", agentName, err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write temp profile for agent %q: %w", agentName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp profile for agent %q: %w", agentName, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("rename temp profile for agent %q: %w", agentName, err)
 	}
 	return nil
 }
@@ -258,6 +276,58 @@ func modelLineComment(runtime string) string {
 	default:
 		return "# leave empty = provider default"
 	}
+}
+
+const customInstructionsHeading = "Custom Instructions"
+const customInstructionsPlaceholder = "<!-- Add project-specific or agent-specific instructions here. This section is managed by the operator and will not be overwritten by AOM system updates. -->"
+
+// GetCustomInstructions extracts the content of the "## Custom Instructions" section from a profile.
+// Returns empty string if the section is not found, is empty, or contains only the placeholder comment.
+func GetCustomInstructions(profile string) string {
+	heading := "## " + customInstructionsHeading
+	lines := strings.Split(profile, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == heading {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+
+	var body []string
+	for i := start + 1; i < len(lines); i++ {
+		line := lines[i]
+		if strings.HasPrefix(strings.TrimSpace(line), "## ") {
+			break
+		}
+		body = append(body, line)
+	}
+
+	// Filter out the placeholder comment and collect non-empty lines.
+	var result []string
+	for _, line := range body {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || trimmed == customInstructionsPlaceholder {
+			continue
+		}
+		result = append(result, line)
+	}
+	return strings.TrimSpace(strings.Join(result, "\n"))
+}
+
+// SetCustomInstructions replaces (or appends) the "## Custom Instructions" section in a profile.
+// If content is empty, the section is reset to the heading + placeholder comment only.
+func SetCustomInstructions(profile, content string) string {
+	var newContent string
+	if strings.TrimSpace(content) == "" {
+		newContent = customInstructionsPlaceholder
+	} else {
+		newContent = strings.TrimRight(content, "\n")
+	}
+	return UpdateProfileSection(profile, customInstructionsHeading, newContent)
 }
 
 // UpdateProfileSection replaces a named markdown section (## Heading) with new content.

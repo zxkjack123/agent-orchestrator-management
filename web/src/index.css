@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* xterm.js container needs explicit height to fill its parent */
+.xterm {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Hide scrollbar in war-room view — content is rewritten each poll, no user scroll needed */
+.xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+.xterm-viewport {
+  scrollbar-width: none;
+}

@@ -26,6 +26,7 @@ type Record struct {
 	LastSeenAt      *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	Persistent      bool
 }
 
 // Repository persists durable session state.
@@ -57,9 +58,10 @@ INSERT INTO sessions (
 	tmux_window,
 	tmux_pane,
 	vendor_session_id,
-	last_seen_at
+	last_seen_at,
+	persistent
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	project_id = excluded.project_id,
 	agent_id = excluded.agent_id,
@@ -76,6 +78,7 @@ ON CONFLICT(id) DO UPDATE SET
 	tmux_pane = excluded.tmux_pane,
 	vendor_session_id = excluded.vendor_session_id,
 	last_seen_at = excluded.last_seen_at,
+	persistent = excluded.persistent,
 	updated_at = CURRENT_TIMESTAMP
 `,
 		record.ID,
@@ -94,6 +97,7 @@ ON CONFLICT(id) DO UPDATE SET
 		record.TmuxPane,
 		record.VendorSessionID,
 		nullableTime(record.LastSeenAt),
+		boolToInt(record.Persistent),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert session %q: %w", record.ID, err)
@@ -123,7 +127,8 @@ SELECT
 	vendor_session_id,
 	last_seen_at,
 	created_at,
-	updated_at
+	updated_at,
+	persistent
 FROM sessions
 WHERE id = ?
 `,
@@ -162,7 +167,8 @@ SELECT
 	vendor_session_id,
 	last_seen_at,
 	created_at,
-	updated_at
+	updated_at,
+	persistent
 FROM sessions
 WHERE project_id = ?
 ORDER BY created_at, id
@@ -215,7 +221,8 @@ SELECT
 	vendor_session_id,
 	last_seen_at,
 	created_at,
-	updated_at
+	updated_at,
+	persistent
 FROM sessions
 WHERE project_id = ? AND agent_name = ?
   AND status NOT IN ('Stopped', 'Failed', 'Archived', 'Detached')
@@ -289,6 +296,7 @@ type rowScanner interface {
 func scanRecord(scanner rowScanner) (*Record, error) {
 	var record Record
 	var lastSeen sql.NullTime
+	var persistent int
 	if err := scanner.Scan(
 		&record.ID,
 		&record.ProjectID,
@@ -308,6 +316,7 @@ func scanRecord(scanner rowScanner) (*Record, error) {
 		&lastSeen,
 		&record.CreatedAt,
 		&record.UpdatedAt,
+		&persistent,
 	); err != nil {
 		return nil, err
 	}
@@ -315,8 +324,16 @@ func scanRecord(scanner rowScanner) (*Record, error) {
 	if lastSeen.Valid {
 		record.LastSeenAt = &lastSeen.Time
 	}
+	record.Persistent = persistent != 0
 
 	return &record, nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func nullableString(value string) any {

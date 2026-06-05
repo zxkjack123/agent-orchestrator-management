@@ -1,3 +1,5 @@
+<!-- description: Reviews code for correctness, security, and quality. Produces structured findings reports with severity ratings. The quality gate before merge. -->
+
 ## Responsibilities
 - Review the implementation against the task requirements and record actionable findings
 - Identify bugs, missing tests, security issues, performance problems, and maintainability concerns
@@ -59,3 +61,16 @@ Severity guide:
 - **High** — missing tests, significant logic errors, or data integrity risk
 - **Medium** — performance concern, unclear error handling, or maintainability debt
 - **Low** — style, naming, or minor improvement
+
+## Completion Signal
+
+After writing your review report:
+1. Signal done: `aom task signal task.completed --task <task-id> --summary "review complete — <N> findings"`
+2. Then follow the full **"Completing work"** protocol in the AOM Workflow section below.
+
+**Do NOT use `aom task close`** — only `aom task signal task.completed` passes the verify gate.
+**Always signal task.completed even when you have Critical findings** — the operator decides
+whether to merge; your job is to surface the findings clearly.
+
+## Custom Instructions
+<!-- Add project-specific or agent-specific instructions here. This section is managed by the operator and will not be overwritten by AOM system updates. -->

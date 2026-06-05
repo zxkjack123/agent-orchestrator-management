@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/agent"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/project"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/provider"
+	"github.com/lattapon-aek/agent-orchestrator-management/internal/session"
 )
 
 func (r Runner) executeAgent(args []string) error {
@@ -231,13 +233,15 @@ func (r Runner) executeAgentShow(args []string) error {
 
 func (r Runner) executeAgentProfile(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("agent profile subcommand is required: show, update")
+		return fmt.Errorf("agent profile subcommand is required: show, update, set-instructions")
 	}
 	switch args[0] {
 	case "show":
 		return r.executeAgentProfileShow(args[1:])
 	case "update":
 		return r.executeAgentProfileUpdate(args[1:])
+	case "set-instructions":
+		return r.executeAgentProfileSetInstructions(args[1:])
 	default:
 		return fmt.Errorf("unknown agent profile subcommand %q", args[0])
 	}
@@ -341,6 +345,108 @@ func (r Runner) executeAgentProfileUpdate(args []string) error {
 	if constraints != "" {
 		fmt.Fprintln(r.stdout, "Constraints: updated")
 	}
+
+	r.warnIfAgentActive(result.DBPath, result.Project.ID, name)
+	return nil
+}
+
+func (r Runner) executeAgentProfileSetInstructions(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: aom agent profile set-instructions <agent-name> [\"<instructions>\"] [--file <path>] [--clear]")
+	}
+	name := strings.TrimSpace(args[0])
+	if name == "" {
+		return fmt.Errorf("agent name is required")
+	}
+
+	var text string
+	var filePath string
+	var clear bool
+	i := 1
+	for i < len(args) {
+		switch args[i] {
+		case "--file":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--file requires a path (use - for stdin)")
+			}
+			filePath = args[i]
+		case "--clear":
+			clear = true
+		default:
+			if text != "" {
+				return fmt.Errorf("unexpected argument %q — instructions must be a single quoted string", args[i])
+			}
+			text = args[i]
+		}
+		i++
+	}
+
+	// Validate mutually exclusive options.
+	if clear && (text != "" || filePath != "") {
+		return fmt.Errorf("--clear cannot be combined with instruction text or --file")
+	}
+
+	// Read from file / stdin if requested.
+	if filePath != "" {
+		var data []byte
+		var err error
+		if filePath == "-" {
+			data, err = io.ReadAll(r.stdin)
+		} else {
+			data, err = os.ReadFile(filePath)
+		}
+		if err != nil {
+			return fmt.Errorf("read instructions file: %w", err)
+		}
+		text = string(data)
+	}
+
+	result, err := r.app.Projects.Open(".")
+	if err != nil {
+		return err
+	}
+
+	var found bool
+	for _, a := range result.Agents {
+		if a.Name == name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("agent %q not found", name)
+	}
+
+	profile, err := project.ReadAgentProfile(result.AOMPath, name)
+	if err != nil {
+		return err
+	}
+	if profile == "" {
+		return fmt.Errorf("profile not found for agent %q — run: aom open", name)
+	}
+
+	if clear {
+		text = ""
+	}
+
+	updated := project.SetCustomInstructions(profile, text)
+	if err := project.WriteAgentProfile(result.AOMPath, name, updated); err != nil {
+		return err
+	}
+
+	profilePath := project.AgentProfilePath(result.AOMPath, name)
+	fmt.Fprintln(r.stdout, "Custom instructions updated")
+	fmt.Fprintln(r.stdout, "")
+	fmt.Fprintf(r.stdout, "Agent:   %s\n", name)
+	fmt.Fprintf(r.stdout, "Profile: %s\n", profilePath)
+	if clear || strings.TrimSpace(text) == "" {
+		fmt.Fprintln(r.stdout, "Instructions: cleared")
+	} else {
+		fmt.Fprintln(r.stdout, "Instructions: set")
+	}
+
+	r.warnIfAgentActive(result.DBPath, result.Project.ID, name)
 	return nil
 }
 
@@ -447,6 +553,32 @@ func (r Runner) executeAgentProvision(args []string) error {
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintf(r.stdout, "Next: aom session spawn %s --real\n", agentName)
 	return nil
+}
+
+// warnIfAgentActive prints a warning to stderr when the agent has a live session.
+// Errors from the session check are silently ignored — the profile is already saved.
+func (r Runner) warnIfAgentActive(dbPath, projectID, agentName string) {
+	svc, sessDB, err := r.app.OpenSessionService(dbPath)
+	if err != nil {
+		return
+	}
+	defer sessDB.Close()
+	records, err := svc.ActiveByAgent(projectID, agentName)
+	if err != nil {
+		return
+	}
+	for i := len(records) - 1; i >= 0; i-- {
+		s := records[i]
+		if strings.TrimSpace(s.TmuxPane) == "" || !session.IsActiveStatus(s.Status) {
+			continue
+		}
+		if alive, _ := r.app.Tmux.PaneExists(s.TmuxPane); alive {
+			fmt.Fprintln(r.stderr, "")
+			fmt.Fprintf(r.stderr, "Warning: agent %q is currently active — profile changes will take effect after you stop and respawn.\n", agentName)
+			fmt.Fprintf(r.stderr, "         Run: aom session stop %s && aom session spawn %s --real\n", agentName, agentName)
+			return
+		}
+	}
 }
 
 func sortedAgents(agents []agent.Record) []agent.Record {

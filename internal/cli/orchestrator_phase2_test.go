@@ -93,7 +93,7 @@ func TestSpawnBudgetGuardBlocksOverLimit(t *testing.T) {
 				}
 				return nil, nil
 			case "new-session":
-				return nil, nil
+				return []byte("@1 %5\n"), nil
 			case "split-window":
 				return []byte("@1 %5\n"), nil
 			case "set-option":

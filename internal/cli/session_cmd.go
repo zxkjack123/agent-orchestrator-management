@@ -68,6 +68,8 @@ func (r Runner) executeSessionSpawn(args []string) error {
 				return fmt.Errorf("--layout requires a value (tiled, even-horizontal, even-vertical)")
 			}
 			params.gridLayout = strings.TrimSpace(args[i])
+		case "--persistent":
+			params.persistent = true
 		default:
 			return fmt.Errorf("unknown flag %q", args[i])
 		}
@@ -97,12 +99,24 @@ func (r Runner) executeSessionSpawn(args []string) error {
 		}
 	}
 
-	// G1: Same-runtime workspace collision guard.
-	// If this agent has no dedicated workspace AND another enabled agent with the
-	// same runtime exists (also without a workspace), both would write their
-	// identity files (CLAUDE.md / AGENTS.md) to the repo root — overwriting each
-	// other.  Block spawn and require the operator to provision workspaces first.
-	// Pass --allow-collision to bypass (e.g. for legacy setups or debugging).
+	// Auto-provision: give every agent its own workspace so it always spawns in a
+	// dedicated single-pane tmux session.  This is the default path — dedicated
+	// sessions let the War Room use PTY-attach (real-time streaming) rather than
+	// the polling viewer script used for shared multi-pane windows.
+	// Skipped for mock/placeholder/grid/in-team modes and when a workspace already exists.
+	if strings.TrimSpace(agentRecord.WorkspacePath) == "" &&
+		params.launchMode == aomruntime.LaunchModeReal &&
+		!params.allowCollision && !params.gridMode && !params.inTeam {
+		if workspacePath, provErr := r.autoProvisionWorkspace(result, agentRecord.Name); provErr != nil {
+			fmt.Fprintf(r.stderr, "[aom] note: workspace auto-provision skipped for %q: %v\n", agentRecord.Name, provErr)
+		} else {
+			agentRecord.WorkspacePath = workspacePath
+			fmt.Fprintf(r.stderr, "[aom] auto-provisioned workspace for %q: %s\n", agentRecord.Name, workspacePath)
+		}
+	}
+
+	// G1: Same-runtime workspace collision guard — only triggers when auto-provision
+	// failed or was bypassed.  Pass --allow-collision to skip entirely.
 	if !params.allowCollision && strings.TrimSpace(agentRecord.WorkspacePath) == "" {
 		for _, other := range result.Agents {
 			if other.Name != agentRecord.Name &&
@@ -264,6 +278,43 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		}
 	}
 
+	// Rebind path: if agent already has a live persistent session, reuse it rather
+	// than spawning a new one. This keeps the agent's context intact across tasks.
+	if params.taskID != "" {
+		active, activeErr := sessionService.ActiveByAgent(result.Project.ID, agentRecord.Name)
+		if activeErr == nil {
+			for _, s := range active {
+				if !s.Persistent || s.ID == params.ignoreSessionID {
+					continue
+				}
+				if alive, _ := r.app.Tmux.PaneExists(s.TmuxPane); !alive {
+					continue
+				}
+				// Live persistent session found — rebind task and return early.
+				s.TaskID = params.taskID
+				updated, saveErr := sessionService.Save(s)
+				if saveErr != nil {
+					return nil, fmt.Errorf("rebind persistent session: %w", saveErr)
+				}
+				fmt.Fprintf(r.stdout, "↩  reusing persistent session %s (%s) → task %s\n", s.ID, s.AgentName, params.taskID)
+				// Materialize fresh task artifact into the workspace so the agent picks it up.
+				if taskRecord != nil {
+					_ = r.syncTaskArtifactsWithSessionEvents(result, taskRecord.ID, false, updated, artifact.Event{
+						Type:      "session.rebound",
+						Actor:     "aom",
+						SessionID: updated.ID,
+						Summary:   fmt.Sprintf("Persistent session rebound to task %s", params.taskID),
+					})
+					// Notify agent in-pane that a new task has arrived.
+					notice := fmt.Sprintf("\n[AOM] New task assigned: %s — %s\nCheck .agent/tasks/%s/task.md for details.\n",
+						taskRecord.ID, taskRecord.Title, taskRecord.ID)
+					_ = r.app.Tmux.SendKeys(s.TmuxPane, notice)
+				}
+				return updated, nil
+			}
+		}
+	}
+
 	// Budget guard: refuse when max_concurrent_sessions is set and already reached.
 	if cap := result.Policy.Policy.MaxConcurrentSessions; cap > 0 {
 		allSessions, listErr := sessionService.ListByProject(result.Project.ID)
@@ -295,6 +346,7 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		RepoPath:        result.Project.RepoPath,
 		WorktreePath:    executionPath,
 		TmuxSessionName: workspace.Name,
+		Persistent:      params.persistent,
 	})
 	if err != nil {
 		return nil, err
@@ -391,16 +443,23 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 		_ = r.app.Tmux.SetPaneTitle(paneBinding.PaneID, agentRecord.Name)
 		_ = r.app.Tmux.SelectLayout(teamWindowTarget, "tiled")
 	} else {
-		paneBinding, err = r.app.Tmux.CreatePane(workspace.Target, executionPath, launchCommand)
+		// Create a dedicated tmux session for this agent so the web terminal can
+		// PTY-attach directly for real-time streaming (no snapshot polling needed).
+		// The session name is stable across re-spawns so aom switch / aom attach work.
+		dedicatedSession := workspace.Name + "-" + tmuxpkg.SanitizeName(agentRecord.Name)
+		paneBinding, err = r.app.Tmux.CreateDedicatedSession(dedicatedSession, executionPath, launchCommand)
 		if err != nil {
 			return nil, r.failTaskBoundSessionSpawn(result, sessionService, record, taskRecord, params.stepID, "pane creation failed before session became interactive", err)
 		}
+		record.TmuxSessionName = dedicatedSession
 	}
 
 	// Set pane binding on record before any early-exit paths so failure saves include tmux context.
 	record.TmuxWindow = paneBinding.WindowID
 	record.TmuxPane = paneBinding.PaneID
-	record.TmuxSessionName = workspace.Name
+	if params.gridMode || params.inTeam {
+		record.TmuxSessionName = workspace.Name
+	}
 
 	// For real-mode sessions, verify the runtime process didn't exit immediately.
 	// Some runtimes (e.g. codex) silently quit on auth failure or config parse errors,
@@ -692,6 +751,7 @@ type sessionSpawnParams struct {
 	gridMode        bool   // place pane inside team window instead of own window
 	gridLayout      string // tmux layout to apply after pane creation (default: tiled)
 	inTeam          bool   // add pane to the existing team grid window (errors if no team window found)
+	persistent      bool   // session is never auto-stopped on task completion
 }
 
 type sessionReplaceParams struct {
@@ -2269,4 +2329,31 @@ func parseSpawnItemCommand(cmd string) (agentName, taskID string) {
 		}
 	}
 	return agentName, taskID
+}
+
+// autoProvisionWorkspace creates a dedicated git worktree + branch for an agent
+// and persists the workspace path in the DB.  Idempotent: if the branch already
+// exists the worktree creation step is skipped but the DB record is still updated.
+func (r Runner) autoProvisionWorkspace(result *project.OpenResult, agentName string) (string, error) {
+	worktreeService, wtDB, err := r.app.OpenWorktreeService(result.DBPath)
+	if err != nil {
+		return "", err
+	}
+	defer wtDB.Close()
+
+	workspacePath, err := worktreeService.ProvisionAgentWorkspace(result.Project.RepoPath, agentName)
+	if err != nil {
+		return "", err
+	}
+
+	agentRepo, agentDB, err := r.app.OpenAgentRepository(result.DBPath)
+	if err != nil {
+		return "", err
+	}
+	defer agentDB.Close()
+
+	if err := agentRepo.SetWorkspacePath(result.Project.ID, agentName, workspacePath); err != nil {
+		return "", err
+	}
+	return workspacePath, nil
 }

@@ -898,6 +898,9 @@ func (r Runner) autoStopIdleSessionsForTask(result *project.OpenResult, taskID s
 		if s.TaskID != taskID {
 			continue
 		}
+		if s.Persistent {
+			continue
+		}
 		if s.Status != "Idle" && s.Status != "WaitingHandoff" {
 			continue
 		}

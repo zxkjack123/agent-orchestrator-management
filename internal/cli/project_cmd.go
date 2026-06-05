@@ -433,6 +433,36 @@ func (r Runner) executeOpen(args []string) error {
 	return nil
 }
 
+// pushSharedFile copies src data as filename into .aom/shared/ and into
+// .agent/shared/ of every Ready/Active worktree. Returns number of worktrees pushed.
+func pushSharedFile(repoPath, aomPath, filename string) error {
+	data, err := os.ReadFile(filepath.Join(aomPath, filename))
+	if err != nil {
+		return err
+	}
+	sharedDir := filepath.Join(repoPath, ".aom", "shared")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(sharedDir, filename), data, 0o644); err != nil {
+		return err
+	}
+	// Best-effort push to agent workspaces under .aom/agents/*/workspace/.agent/shared/
+	agentsDir := filepath.Join(aomPath, "agents")
+	entries, _ := os.ReadDir(agentsDir)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		wsSharedDir := filepath.Join(agentsDir, e.Name(), "workspace", ".agent", "shared")
+		if err := os.MkdirAll(wsSharedDir, 0o755); err != nil {
+			continue
+		}
+		_ = os.WriteFile(filepath.Join(wsSharedDir, filename), data, 0o644)
+	}
+	return nil
+}
+
 // executeProjectShare copies a file into the operator-owned shared docs directory
 // (.aom/shared/) and also into the .agent/shared/ directory of every active worktree,
 // so all running agents can immediately read it.
@@ -808,6 +838,9 @@ func (r Runner) autoStopCompletedSessions(result *project.OpenResult, sessions [
 	for i, s := range sessions {
 		if s.Status != "Idle" || s.TmuxPane == "" || s.TaskID == "" {
 			continue
+		}
+		if s.Persistent {
+			continue // persistent sessions are never auto-stopped
 		}
 		if alive, _ := r.app.Tmux.PaneExists(s.TmuxPane); !alive {
 			continue

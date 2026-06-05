@@ -85,6 +85,7 @@ type RoleConfig struct {
 	WorktreeMode          string `yaml:"worktree_mode"`
 	CheckpointExpectation string `yaml:"checkpoint_expectation"`
 	DefaultSessionMode    string `yaml:"default_session_mode"`
+	Description           string `yaml:"description,omitempty"`
 }
 
 // AgentConfig defines a concrete project agent.
