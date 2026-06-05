@@ -243,6 +243,24 @@ func (r Runner) executeResolvedSessionSpawn(result *project.OpenResult, agentRec
 	}
 	defer sqlDB.Close()
 
+	// Warn (no-task path): if spawning without a task and the agent already has a live
+	// session, print a warning so the operator knows before a second process starts.
+	// This is a soft warning — not an error — because some workflows intentionally run
+	// an agent in multiple windows (e.g. grid + dedicated for web terminal access).
+	if params.taskID == "" && !params.allowCollision {
+		existing, checkErr := sessionService.ActiveByAgent(result.Project.ID, agentRecord.Name)
+		if checkErr == nil {
+			for _, s := range existing {
+				if s.ID != params.ignoreSessionID && isActiveSessionStatus(s.Status) {
+					fmt.Fprintf(r.stderr, "Warning: agent %q already has an active session %s (status: %s).\n", agentRecord.Name, s.ID, s.Status)
+					fmt.Fprintf(r.stderr, "         A second session will be created. To skip, stop the existing one first:\n")
+					fmt.Fprintf(r.stderr, "         aom session stop %s\n\n", s.ID)
+					break
+				}
+			}
+		}
+	}
+
 	// Guard: refuse if agent already has an active session for the same task to prevent
 	// RAM/process pile-up when operators accidentally spawn twice.
 	// Skip sessions being replaced (ignoreSessionID) — those are intentional handoffs.
