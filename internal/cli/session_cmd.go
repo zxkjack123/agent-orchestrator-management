@@ -1816,6 +1816,23 @@ func (r Runner) executeSessionSetAgentID(args []string) error {
 	return nil
 }
 
+// resolveProcessStatus checks whether the agent runtime is actually running
+// by inspecting the current command of the bound tmux pane.
+func resolveProcessStatus(r Runner, s session.Record) ProcessStatus {
+	if strings.TrimSpace(s.TmuxPane) == "" {
+		return ProcessUnknown
+	}
+	alive, _ := r.app.Tmux.PaneExists(s.TmuxPane)
+	if !alive {
+		return ProcessUnknown
+	}
+	cmd := r.app.Tmux.PaneCurrentCommand(s.TmuxPane)
+	if isShellProcess(cmd) {
+		return ProcessDead
+	}
+	return ProcessAlive
+}
+
 func (r Runner) executeSessionHealth(args []string) error {
 	showAll := false
 	sessionID := ""
@@ -1866,12 +1883,15 @@ func (r Runner) executeSessionHealth(args []string) error {
 			active++
 			logPath := r.resolveTaskLogPath(result, s.TaskID)
 			h := computeSessionHealth(logPath, s.ID, now)
+			h.Process = resolveProcessStatus(r, s)
 			warning := ""
-			if h.CheckpointWarning {
+			if h.Process == ProcessDead {
+				warning += " [DEAD — agent exited, restart: aom session replace " + s.ID + " --agent " + s.AgentName + " --real]"
+			} else if h.CheckpointWarning {
 				warning += " [checkpoint overdue]"
 			}
-			fmt.Fprintf(r.stdout, "  %s  agent=%-20s  status=%-20s  since-checkpoint=%-8s%s\n",
-				s.ID, s.AgentName, s.Status, h.TimeSinceCheckpoint, warning)
+			fmt.Fprintf(r.stdout, "  %s  agent=%-20s  process=%-8s  status=%-20s  since-checkpoint=%-8s%s\n",
+				s.ID, s.AgentName, string(h.Process), s.Status, h.TimeSinceCheckpoint, warning)
 		}
 		if active == 0 {
 			fmt.Fprintln(r.stdout, "No active sessions.")
@@ -1892,13 +1912,26 @@ func (r Runner) executeSessionHealth(args []string) error {
 
 	logPath := r.resolveTaskLogPath(result, targetSession.TaskID)
 	h := computeSessionHealth(logPath, sessionID, now)
+	h.Process = resolveProcessStatus(r, *targetSession)
 
 	fmt.Fprintf(r.stdout, "Session health: %s\n\n", sessionID)
-	fmt.Fprintf(r.stdout, "Agent:               %s\n", emptyFallback(targetSession.AgentName))
-	fmt.Fprintf(r.stdout, "Status:              %s\n", targetSession.Status)
+	fmt.Fprintf(r.stdout, "Agent:                 %s\n", emptyFallback(targetSession.AgentName))
+	fmt.Fprintf(r.stdout, "Process:               %s\n", string(h.Process))
+	fmt.Fprintf(r.stdout, "Status (DB):           %s\n", targetSession.Status)
 	fmt.Fprintf(r.stdout, "Time since checkpoint: %s\n", h.TimeSinceCheckpoint)
-	if h.CheckpointWarning {
-		fmt.Fprintf(r.stdout, "Warning: context may be stale — consider: aom checkpoint %s\n", sessionID)
+
+	switch h.Process {
+	case ProcessDead:
+		fmt.Fprintf(r.stdout, "\n⚠  Agent process has exited — pane is at a bare shell.\n")
+		fmt.Fprintf(r.stdout, "   Messages sent now would be interpreted as shell commands.\n")
+		fmt.Fprintf(r.stdout, "   Restart: aom session replace %s --agent %s --real\n", sessionID, targetSession.AgentName)
+	case ProcessUnknown:
+		fmt.Fprintf(r.stdout, "\n⚠  Pane not found — session may have lost its tmux binding.\n")
+		fmt.Fprintf(r.stdout, "   Respawn: aom session spawn %s --real\n", targetSession.AgentName)
+	default:
+		if h.CheckpointWarning {
+			fmt.Fprintf(r.stdout, "\nℹ  Checkpoint overdue — consider: aom checkpoint %s\n", sessionID)
+		}
 	}
 
 	return nil

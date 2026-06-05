@@ -137,13 +137,23 @@ func unreadMessageCount(repoPath, agentName string) int {
 }
 
 // sessionHealth holds health metrics for a session.
+// ProcessStatus describes whether the agent runtime process is actually running.
+type ProcessStatus string
+
+const (
+	ProcessAlive   ProcessStatus = "ALIVE"   // agent runtime running (not a shell)
+	ProcessDead    ProcessStatus = "DEAD"    // pane at shell — process exited
+	ProcessUnknown ProcessStatus = "UNKNOWN" // pane gone or no binding
+)
+
 type sessionHealth struct {
-	SessionID          string
-	TaskID             string
-	AgentName          string
+	SessionID           string
+	TaskID              string
+	AgentName           string
 	TimeSinceCheckpoint string
-	CheckpointWarning  bool
-	HandoffWarning     bool
+	CheckpointWarning   bool
+	HandoffWarning      bool
+	Process             ProcessStatus
 }
 
 // computeSessionHealth derives health metrics by reading the task log.
