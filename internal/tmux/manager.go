@@ -278,6 +278,23 @@ func (m *Manager) CapturePane(paneID string) (string, error) {
 	return string(output), nil
 }
 
+// SendEscape sends the Escape key to a pane to interrupt the currently running
+// operation (e.g. stop Claude from streaming a response). Unlike SendKeys this
+// does NOT send a literal string or a trailing Enter — it only sends the Escape
+// named key so the TUI receives a clean interrupt signal.
+func (m *Manager) SendEscape(paneID string) error {
+	availability := m.Availability()
+	if !availability.Available {
+		return fmt.Errorf("tmux is not available")
+	}
+	if strings.TrimSpace(paneID) == "" {
+		return fmt.Errorf("pane id is required")
+	}
+	// send-keys without -l sends a named key; "Escape" maps to ^[ (0x1B).
+	_, err := m.exec(availability.BinaryPath, "send-keys", "-t", paneID, "Escape")
+	return err
+}
+
 // SendKeys sends a message followed by Enter into a live tmux pane.
 //
 // Single-line messages are sent using send-keys -l (literal keystroke mode).

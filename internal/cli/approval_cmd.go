@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/artifact"
 	"github.com/lattapon-aek/agent-orchestrator-management/internal/events"
@@ -187,6 +188,10 @@ func (r Runner) executePauseAll(args []string) error {
 			continue
 		}
 
+		// Send Escape first to interrupt any in-progress Claude/Codex operation,
+		// then wait briefly for the TUI to settle before delivering the pause message.
+		_ = r.app.Tmux.SendEscape(s.TmuxPane)
+		time.Sleep(300 * time.Millisecond)
 		_ = r.app.Tmux.SendKeys(s.TmuxPane, pauseMsg)
 
 		if s.TaskID != "" {
