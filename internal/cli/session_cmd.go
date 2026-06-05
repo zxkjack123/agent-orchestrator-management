@@ -1987,11 +1987,22 @@ func (r Runner) executeSessionSend(args []string) error {
 	}
 
 	if cmd := r.app.Tmux.PaneCurrentCommand(sessionRecord.TmuxPane); isShellProcess(cmd) {
-		fmt.Fprintf(r.stdout, "Warning: pane %s is running a shell (%q) — the agent runtime is not active.\n", sessionRecord.TmuxPane, cmd)
-		fmt.Fprintln(r.stdout, "The message will be sent as shell input and may be interpreted as shell commands.")
-		fmt.Fprintf(r.stdout, "Tip: run \"aom session spawn %s --real\" (or \"aom session replace %s --agent %s\") to start the agent first.\n",
-			sessionRecord.AgentName, sessionRecord.ID, sessionRecord.AgentName)
-		fmt.Fprintln(r.stdout)
+		// Agent process has exited — sending to the shell would execute the
+		// message as a shell command (e.g. "[DM] from …" becomes a glob).
+		// Route to the agent's mailbox so the message survives until the next
+		// session start, and broadcast an alert so the team and operator know.
+		repoPath, rpErr := config.FindProjectRoot(".")
+		if rpErr == nil {
+			_ = appendMailboxMessage(repoPath, sessionRecord.AgentName, message, "operator", time.Now())
+			alert := fmt.Sprintf("ALERT: %s pane is at shell — agent exited. Message saved to mailbox. Restart: aom session replace %s --agent %s --real",
+				sessionRecord.AgentName, sessionRecord.ID, sessionRecord.AgentName)
+			_ = appendChannelMessage(repoPath, "aom", alert, time.Now())
+		}
+		fmt.Fprintf(r.stdout, "Warning: pane %s is running a shell (%q) — agent has exited.\n", sessionRecord.TmuxPane, cmd)
+		fmt.Fprintf(r.stdout, "Message saved to %s mailbox (delivered on next session start).\n", sessionRecord.AgentName)
+		fmt.Fprintf(r.stdout, "Alert broadcast to team channel.\n")
+		fmt.Fprintf(r.stdout, "Restart: aom session replace %s --agent %s --real\n", sessionRecord.ID, sessionRecord.AgentName)
+		return nil // do NOT send to shell
 	}
 
 	if err := r.app.Tmux.SendKeys(sessionRecord.TmuxPane, message); err != nil {
