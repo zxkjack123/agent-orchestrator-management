@@ -117,6 +117,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/v1/projects/{id}/broadcast", actions.Broadcast)
 	s.mux.HandleFunc("POST /api/v1/projects/{id}/pause-all", actions.PauseAll)
 	s.mux.HandleFunc("POST /api/v1/projects/{id}/resume-all", actions.ResumeAll)
+	s.mux.HandleFunc("POST /api/v1/projects/{id}/stop-all", actions.StopAll)
 
 	// REST — Extras (task artifact, requests, metrics, doctor, team-brief, merge)
 	extras := handler.NewExtrasHandler(s.registry)

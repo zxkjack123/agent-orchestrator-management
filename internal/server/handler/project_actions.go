@@ -132,6 +132,16 @@ func (h *ProjectActionsHandler) ResumeAll(w http.ResponseWriter, r *http.Request
 	h.runCmd(w, r, proj.Path, 30*time.Second, "resume-all")
 }
 
+// StopAll handles POST /api/v1/projects/{id}/stop-all.
+// Kills every active session immediately — harder than pause.
+func (h *ProjectActionsHandler) StopAll(w http.ResponseWriter, r *http.Request) {
+	proj, ok := resolveProject(h.registry, w, r)
+	if !ok {
+		return
+	}
+	h.runCmd(w, r, proj.Path, 60*time.Second, "session", "stop", "--all")
+}
+
 func (h *ProjectActionsHandler) runCmd(w http.ResponseWriter, r *http.Request, projPath string, timeout time.Duration, args ...string) {
 	exe, err := os.Executable()
 	if err != nil {
