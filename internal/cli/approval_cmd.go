@@ -163,24 +163,22 @@ func (r Runner) executePauseAll(args []string) error {
 	var paused []string
 	for i := range sessions {
 		s := sessions[i]
-		// Pause sessions that are actively occupied: Working, or Idle with a live
-		// agent process and an assigned task. "Idle" in AOM does not mean the agent
-		// is doing nothing — Claude/Codex is typically "Idle" in the DB while
-		// actively processing a prompt.
+		// Pause any session whose agent process is alive — regardless of whether
+		// a task is assigned. An idle agent watching inbox should also receive the
+		// pause signal so it does not accept new work during the pause window.
+		// Skip dead sessions (pane at shell) — nothing to pause there.
 		switch s.Status {
-		case "Working":
-			// always pauseable
-		case "Idle":
-			// pauseable only if a task is assigned AND the process is alive
-			if s.TaskID == "" || strings.TrimSpace(s.TmuxPane) == "" {
-				continue
-			}
-			cmd := r.app.Tmux.PaneCurrentCommand(s.TmuxPane)
-			if isShellProcess(cmd) {
-				continue // dead — nothing to pause
-			}
+		case "Working", "Idle", "WaitingHandoff", "Blocked":
+			// candidate — check process below
 		default:
 			continue
+		}
+		if strings.TrimSpace(s.TmuxPane) == "" {
+			continue
+		}
+		cmd := r.app.Tmux.PaneCurrentCommand(s.TmuxPane)
+		if isShellProcess(cmd) {
+			continue // dead — nothing to pause
 		}
 
 		s.Status = "WaitingApproval"
