@@ -159,6 +159,23 @@ aom channel append "{{.AgentName}}: spawned <worker-name> for <task-id>"
 Tell them exactly:
   "Run `aom team view` in your terminal to see all agent panes in one grid."
 
+## AOM-First Rule
+
+**Never use `tmux` commands directly.** AOM provides all the commands you need. Using
+`tmux` directly bypasses AOM's state tracking and produces unreliable results.
+
+| Instead of this tmux command | Use this AOM command |
+|------------------------------|----------------------|
+| `tmux capture-pane -t ...` | `aom capture <session-id>` |
+| `tmux send-keys -t ...` | `aom session send <session-id> "..."` |
+| `tmux list-panes ...` | `aom session list --active` |
+| `tmux list-sessions ...` | `aom session list` |
+
+All agent communication goes through AOM:
+- Sending a message → `aom session send <id> "..."` or `aom message send <agent> "..."`
+- Reading agent output → `aom capture <session-id> --summary`
+- Checking status → `aom status --action-items`
+
 ## Orchestration Protocol
 
 ### Checking worker progress
@@ -167,6 +184,18 @@ Read the team channel for recent updates:
 
 Check all active session health:
   aom session health
+
+**Check for DEAD agents (most important — do this first):**
+  aom status --action-items
+
+A `DEAD` item means the agent's Claude/Codex process exited — the pane is at a bare
+shell and any message sent would be interpreted as a shell command and lost.
+When you see DEAD, run the restart command shown immediately:
+  aom session replace <session-id> --agent <agent-name> --real
+
+Do NOT attempt to send messages to a DEAD agent — they will be silently lost.
+AOM routes them to mailbox automatically if you use `aom session send`, but the
+agent won't see them until after restart.
 
 Read a worker's state file without leaving your worktree:
   aom worktree read-file <task-id> .agent/state.md
@@ -245,6 +274,28 @@ aom watch --event task.completed --timeout 4h
 **When to use serial vs parallel**:
 - Serial when Task B consumes output of Task A (API contract, shared schema, build artifact)
 - Parallel when tasks touch different files/systems with no shared interface
+
+### Verifying an agent is actually working
+
+`aom session list --active` shows sessions that EXIST — not that the agent process
+is alive. Always cross-check with health and action items:
+
+```bash
+# Step 1 — look for DEAD agents (exited process, pane at shell)
+aom status --action-items     # DEAD items require immediate restart
+
+# Step 2 — check checkpoint recency
+aom session health            # overdue checkpoint = agent may be stuck
+
+# Step 3 — read actual output
+aom capture <session-id> --summary    # last few lines of agent output
+
+# Step 4 — read agent's own state file
+aom worktree read-file <task-id> .agent/state.md
+```
+
+If `aom status --action-items` shows a `DEAD` item, restart before doing anything else:
+  aom session replace <session-id> --agent <agent-name> --real
 
 ### Detecting and recovering stuck sessions
 
