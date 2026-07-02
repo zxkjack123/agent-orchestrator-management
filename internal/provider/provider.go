@@ -125,6 +125,7 @@ func DefaultRegistry() Registry {
 		&codexProvider{},
 		&geminiProvider{},
 		&kiroProvider{},
+		&agentTaskRunnerProvider{},
 	}
 	r := make(Registry, len(providers))
 	for _, p := range providers {
