@@ -140,6 +140,8 @@ func (r Runner) Execute(args []string) (retErr error) {
 		return r.executeWatch(args[1:])
 	case "run-pipeline":
 		return r.executeRunPipeline(args[1:])
+	case "pipeline-loop":
+		return r.executePipelineLoop(args[1:])
 	case "goal":
 		return r.executeGoal(args[1:])
 	case "orchestrate":
@@ -624,6 +626,9 @@ func (r Runner) printHelp() {
 	fmt.Fprintln(r.stdout, "")
 	fmt.Fprintln(r.stdout, "Automation (Phase 5 — Guided Autonomy)")
 	fmt.Fprintln(r.stdout, "aom run-pipeline <task-id> [--agent <name>] [--timeout <dur>] [--real|--mock] [--skip-merge]")
+	fmt.Fprintln(r.stdout, "aom pipeline-loop <task-id> [--timeout <dur>]")
+	fmt.Fprintln(r.stdout, "  Runs the task through agent-task-runner PM->Worker->Reviewer loop")
+	fmt.Fprintln(r.stdout, "  Auto-closes (Done) on approved, or marks Blocked/NeedsAttention on failure")
 	fmt.Fprintln(r.stdout, "  Runs the full pipeline in one command: spawn → wait(task.completed) → verify → accept → merge")
 	fmt.Fprintln(r.stdout, "  --skip-merge : stop after accept; merge manually later with: aom merge commit <task-id>")
 	fmt.Fprintln(r.stdout, "aom task accept --auto <task-id> [--interval 15s] [--timeout 30m] : poll + auto-accept when all verify checks pass")
