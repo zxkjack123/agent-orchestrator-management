@@ -90,6 +90,13 @@ func (r Runner) executeRunPipeline(args []string) error {
 		)
 	}
 
+	// Check if preferred agent uses agent-task-runner — redirect to pipeline-loop.
+	agent, agentErr := findAgent(result.Agents, agentName)
+	if agentErr == nil && agent.Runtime == "agent-task-runner" {
+		fmt.Fprintf(r.stdout, "Agent %q uses agent-task-runner — delegating to pipeline-loop.\n", agentName)
+		return r.executePipelineLoop([]string{taskID})
+	}
+
 	launchFlag := "--mock"
 	if launchMode == aomruntime.LaunchModeReal {
 		launchFlag = "--real"

@@ -99,6 +99,14 @@ func (r Runner) executeSessionSpawn(args []string) error {
 		}
 	}
 
+	// Agent-task-runner: redirect to pipeline-loop instead of tmux spawn.
+	if params.taskID != "" && agentRecord.Runtime == "agent-task-runner" {
+		return r.executePipelineLoop([]string{params.taskID})
+	}
+	if agentRecord.Runtime == "agent-task-runner" {
+		return fmt.Errorf("agent-task-runner requires --task <id>; use aom pipeline-loop <id> directly")
+	}
+
 	// Auto-provision: give every agent its own workspace so it always spawns in a
 	// dedicated single-pane tmux session.  This is the default path — dedicated
 	// sessions let the War Room use PTY-attach (real-time streaming) rather than
