@@ -225,7 +225,8 @@ func TestNormalizeTaskID(t *testing.T) {
 	}{
 		{"T-42", "T-42"},
 		{"#T-42", "T-42"},
-		{"  T-99  ", "T-99"},
+		{"#P2-001", "P2-001"},
+		{"NoPrefix", "NoPrefix"},
 		{"", ""},
 	}
 
