@@ -330,6 +330,47 @@ aom serve --port 8080
 
 Adding a new runtime = one file in `internal/provider/`. See [docs/engineering-guidelines.md](docs/engineering-guidelines.md).
 
+
+### 🤖 Agent Task Runner (Review Loop)
+
+For complex tasks that need quality review, AOM delegates to **agent-task-runner** 
+(`loop_kit`) — a Python package that runs a PM→Worker→Reviewer loop:
+
+```bash
+# Direct invocation
+aom pipeline-loop <task-id>
+
+# Or via session spawn (auto-routes when agent.Runtime == "agent-task-runner")
+aom session spawn my-agent --task <id>
+```
+
+**How it works:**
+
+```
+AOM pipeline-loop
+  → generates task_card.json from AOM task record
+  → provisions git worktree for isolation
+  → invokes: python -m loop_kit run --auto-dispatch --outcome-file ...
+  → Worker (opencode) writes code → Reviewer (opencode) validates
+  → reads outcome.json → maps to AOM task status
+```
+
+**Outcome → Status Mapping:**
+
+| Outcome | AOM Status |
+|---------|-----------|
+| `approved` | Done (task close) |
+| `no_change_success` | Done (task close) |
+| `validation_failure`, `config_error`, `state_error` | NeedsAttention |
+| `timeout`, `interrupted`, `max_rounds_exhausted`, `dirty_worktree`, `lock_failure` | Blocked |
+
+**PM Sync:** After updating AOM's local task status, `pipeline-loop` also calls
+`pm_outcome_handler.py` to sync the outcome back to the Project Management system.
+
+**Files:** `internal/provider/agent_task_runner.go`, `internal/cli/pipeline_loop.go`\
+**Docs:** [agent-task-runner integration spec](https://github.com/zxkjack123/agent-task-runner/blob/master/docs/integration-spec.md)
+
+
 ## Roadmap
 
 ### 🔜 Up Next
