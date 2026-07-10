@@ -164,8 +164,29 @@ func (r Runner) executePipelineLoop(args []string) error {
 	default:
 		fmt.Fprintf(r.stdout, "  action: (unknown outcome %q, no status change)\n", outcome.Outcome)
 	}
+	// Sync outcome to PM system (if pm_outcome_handler is available)
+	_ = syncPMOutcome(outcomePath, taskID)
 	return err
 }
+
+
+// syncPMOutcome calls the PM outcome handler script to update PM task status.
+func syncPMOutcome(outcomePath string, taskID string) error {
+	// Try common locations for the pm_outcome_handler.py script
+	for _, candidate := range []string{
+		filepath.Join(os.Getenv("HOME"), "opt", "project_management", "scripts", "pm_outcome_handler.py"),
+		"/home/gw/opt/project_management/scripts/pm_outcome_handler.py",
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			cmd := exec.Command("python3", candidate, outcomePath, taskID)
+			cmd.Stdout = os.Stderr
+			cmd.Stderr = os.Stderr
+			return cmd.Run()
+		}
+	}
+	return nil
+}
+
 
 // readOutcomeJSON reads the outcome.json file written by agent-task-runner.
 func readOutcomeJSON(path string) (*OutcomeJSON, error) {
